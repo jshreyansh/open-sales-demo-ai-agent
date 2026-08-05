@@ -21,6 +21,7 @@ from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.services.cartesia.tts import CartesiaTTSService
@@ -36,7 +37,6 @@ transport_params = {
     "webrtc": lambda: TransportParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
-        vad_analyzer=SileroVADAnalyzer(),
     ),
 }
 
@@ -47,16 +47,24 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     if isinstance(body, dict) and body.get("visitorId"):
         visitor_id = body["visitorId"]
 
+    # VAD is its own pipeline stage in this Pipecat version — it's what turns
+    # raw audio into VADUserStartedSpeakingFrame/VADUserStoppedSpeakingFrame,
+    # which GroqSTTService (a SegmentedSTTService) needs to know when to
+    # buffer and when to send a segment off for transcription. Without this
+    # stage, audio flows through the pipeline but STT never fires — which is
+    # exactly what happened before this was added.
+    vad = VADProcessor(vad_analyzer=SileroVADAnalyzer())
     stt = GroqSTTService(api_key=os.getenv("GROQ_API_KEY"))
     tts = CartesiaTTSService(
         api_key=os.getenv("CARTESIA_API_KEY"),
-        voice_id=os.getenv("CARTESIA_VOICE_ID"),
+        settings=CartesiaTTSService.Settings(voice=os.getenv("CARTESIA_VOICE_ID")),
     )
     agent = AgentRuntimeProcessor(visitor_id)
 
     pipeline = Pipeline(
         [
             transport.input(),
+            vad,
             stt,
             agent,
             tts,
