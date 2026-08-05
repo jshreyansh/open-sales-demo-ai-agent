@@ -31,6 +31,12 @@ async function getJson<T>(path: string): Promise<T> {
   return res.json();
 }
 
+/** Polled while a voice call is active — returns {} when there's nothing pending. */
+export async function getVoiceAction(visitorId: string): Promise<AgentAction | null> {
+  const result = await getJson<Partial<AgentAction>>(`/api/voice-action/${visitorId}`);
+  return result.page && result.component && result.method ? (result as AgentAction) : null;
+}
+
 export function getDashboard() {
   return getJson<import("./types").DashboardData>("/api/dashboard");
 }

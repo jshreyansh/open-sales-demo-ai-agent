@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
+import { usePipecatClientMicControl, usePipecatClientTransportState } from "@pipecat-ai/client-react";
 import MeetIcon from "./MeetIcons";
 
 interface MeetingShellProps {
   children: React.ReactNode;
   onLeave: () => void;
 }
+
+const MEETING_CODE = "demo-call-pnx";
 
 function useClock() {
   const [now, setNow] = useState(new Date());
@@ -17,8 +20,10 @@ function useClock() {
 
 export default function MeetingShell({ children, onLeave }: MeetingShellProps) {
   const time = useClock();
-  const [micOn, setMicOn] = useState(false);
   const [cameraOn, setCameraOn] = useState(true);
+  const { enableMic, isMicEnabled } = usePipecatClientMicControl();
+  const transportState = usePipecatClientTransportState();
+  const joined = transportState === "connected" || transportState === "ready";
 
   return (
     <div className="meet">
@@ -26,7 +31,7 @@ export default function MeetingShell({ children, onLeave }: MeetingShellProps) {
         <div className="meet__topbar-left">
           <span>{time}</span>
           <span className="meet__dot">|</span>
-          <span>demo-call-pnx</span>
+          <span>{MEETING_CODE}</span>
           <MeetIcon name="info" size={15} />
         </div>
         <div className="meet__topbar-right">
@@ -40,6 +45,10 @@ export default function MeetingShell({ children, onLeave }: MeetingShellProps) {
         </div>
       </div>
 
+      {!joined && (
+        <div className="meet__banner">Our agent is joining {MEETING_CODE}…</div>
+      )}
+
       <div className="meet__body">
         <div className="meet__stage">
           <div className="meet__stage-inner">{children}</div>
@@ -48,7 +57,7 @@ export default function MeetingShell({ children, onLeave }: MeetingShellProps) {
         <div className="meet__rail">
           <div className="meet__tile meet__tile--you">
             <span className="meet__mic-badge">
-              <MeetIcon name={micOn ? "mic" : "mic-off"} size={13} />
+              <MeetIcon name={isMicEnabled ? "mic" : "mic-off"} size={13} />
             </span>
             <div className="meet__avatar meet__avatar--you">Y</div>
             <div className="meet__tile-label">You</div>
@@ -64,8 +73,11 @@ export default function MeetingShell({ children, onLeave }: MeetingShellProps) {
       </div>
 
       <div className="meet__controls">
-        <button className={`meet__ctrl ${!micOn ? "meet__ctrl--off" : ""}`} onClick={() => setMicOn((v) => !v)}>
-          <MeetIcon name={micOn ? "mic" : "mic-off"} />
+        <button
+          className={`meet__ctrl ${!isMicEnabled ? "meet__ctrl--off" : ""}`}
+          onClick={() => enableMic(!isMicEnabled)}
+        >
+          <MeetIcon name={isMicEnabled ? "mic" : "mic-off"} />
         </button>
         <button className={`meet__ctrl ${!cameraOn ? "meet__ctrl--off" : ""}`} onClick={() => setCameraOn((v) => !v)}>
           <MeetIcon name="camera" />

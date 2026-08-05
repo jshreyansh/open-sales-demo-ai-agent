@@ -872,9 +872,68 @@ body {
 }
 
 .chat__header {
-  padding: 12px 16px;
+  padding: 10px 12px 10px 16px;
   font-weight: 600;
   border-bottom: 1px solid #eee;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat__mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat__mode-btn {
+  font-family: var(--font);
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: white;
+  color: var(--text-muted);
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.chat__mode-btn:first-child {
+  border-radius: 6px 0 0 6px;
+  border-right: none;
+}
+
+.chat__mode-btn:last-child {
+  border-radius: 0 6px 6px 0;
+}
+
+.chat__mode-btn--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.chat__mode-btn:disabled {
+  cursor: default;
+}
+
+.chat__mute-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: white;
+  color: var(--text);
+  cursor: pointer;
+  margin-left: 2px;
+}
+
+.chat__mute-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .chat__messages {
@@ -1008,6 +1067,16 @@ body {
   padding: 5px 10px;
   border-radius: 99px;
   font-size: 12px;
+}
+
+.meet__banner {
+  text-align: center;
+  font-size: 12px;
+  color: #cfd2d6;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 6px;
+  margin: 0 20px 10px;
+  border-radius: 6px;
 }
 
 .meet__body {

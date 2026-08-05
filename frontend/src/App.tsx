@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PipecatClientProvider } from "@pipecat-ai/client-react";
 import Sidebar from "./components/Sidebar";
 import MeetingShell from "./components/MeetingShell";
 import ChatWidget from "./components/ChatWidget";
@@ -9,6 +10,7 @@ import BrandKit from "./pages/BrandKit";
 import StubPage from "./pages/StubPage";
 import { NAV_REGISTRY } from "./registry/pages";
 import { executeAction } from "./lib/uiRegistry";
+import { disconnectVoice, pipecatClient } from "./lib/pipecatClient";
 import type { AgentAction } from "./lib/api";
 
 function findLabel(pageId: string): string {
@@ -60,24 +62,31 @@ export default function App() {
     <div className="app-shell">
       <Sidebar activePageId={activePageId} onNavigate={setActivePageId} />
       <div className="app-shell__content">{renderPage()}</div>
-      <ChatWidget currentPage={activePageId} onAction={handleAgentAction} />
+      <ChatWidget
+        currentPage={activePageId}
+        onAction={handleAgentAction}
+        autoConnectVoice={mode === "meeting"}
+      />
     </div>
   );
 
-  if (mode === "meeting") {
-    return (
-      <MeetingShell
-        onLeave={() => {
-          const url = new URL(window.location.href);
-          url.searchParams.delete("mode");
-          window.history.replaceState(null, "", url.toString());
-          setMode("product");
-        }}
-      >
-        {product}
-      </MeetingShell>
-    );
-  }
-
-  return product;
+  return (
+    <PipecatClientProvider client={pipecatClient}>
+      {mode === "meeting" ? (
+        <MeetingShell
+          onLeave={() => {
+            void disconnectVoice();
+            const url = new URL(window.location.href);
+            url.searchParams.delete("mode");
+            window.history.replaceState(null, "", url.toString());
+            setMode("product");
+          }}
+        >
+          {product}
+        </MeetingShell>
+      ) : (
+        product
+      )}
+    </PipecatClientProvider>
+  );
 }
