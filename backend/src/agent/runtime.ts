@@ -36,31 +36,21 @@ export async function runTurn(
 ): Promise<AgentResult> {
   session.history.push({ role: "user", text: message });
 
-  const wantsVideo = /video/i.test(message);
+  const wantsOverview = /dashboard|insight|overview|show me/i.test(message);
 
-  if (session.step === 0 && wantsVideo) {
+  if (session.step === 0 && wantsOverview) {
     session.step = 1;
     const reply = await narrate(
-      `You are Emma, a friendly product demo agent on a live sales call. The prospect just asked about creating a video. In one short sentence, tell them you'll show them how, and mention you're highlighting the "Create Video" button now.`,
-      "Let me show you — I'm highlighting the Create Video button now.",
+      `You are Emma, a friendly product demo agent on a live sales call. The prospect just asked to see the dashboard. In one short sentence, tell them you're highlighting the Insights panel now.`,
+      "Sure — I'm highlighting the Insights panel now, that's your live program performance at a glance.",
     );
     session.history.push({ role: "agent", text: reply });
-    return { reply, action: { component: "create-video", method: "highlight" } };
-  }
-
-  if (session.step === 1) {
-    session.step = 2;
-    const reply = await narrate(
-      `You are Emma, a demo agent on a live sales call. In one short sentence, tell the prospect you're clicking Create Video to open the editor.`,
-      "Clicking it now — this opens straight into the editor.",
-    );
-    session.history.push({ role: "agent", text: reply });
-    return { reply, action: { component: "create-video", method: "click" } };
+    return { reply, action: { component: "insights", method: "highlight" } };
   }
 
   const reply = await narrate(
     `You are Emma, a demo agent on a live sales call. Reply briefly and helpfully to: "${message}"`,
-    "Ask me to show you how to create a video and I'll walk you through it.",
+    "Ask me to show you the dashboard and I'll walk you through it.",
   );
   session.history.push({ role: "agent", text: reply });
   return { reply };

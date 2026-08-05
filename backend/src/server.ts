@@ -3,6 +3,9 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { getSession, saveSession } from "./context/store.js";
 import { runTurn } from "./agent/runtime.js";
+import { dashboardData } from "./data/dashboard.js";
+import { analyticsOverview } from "./data/analytics.js";
+import { brandKitData } from "./data/brandKit.js";
 
 const app = Fastify();
 await app.register(cors, { origin: true });
@@ -22,6 +25,16 @@ app.post("/chat", async (request, reply) => {
 });
 
 app.get("/health", async () => ({ ok: true }));
+
+app.get("/api/dashboard", async () => dashboardData);
+app.get("/api/analytics/overview", async () => analyticsOverview);
+
+let brandKitState = { ...brandKitData };
+app.get("/api/brand-kit", async () => brandKitState);
+app.put("/api/brand-kit", async (request) => {
+  brandKitState = { ...brandKitState, ...(request.body as object) };
+  return brandKitState;
+});
 
 const port = Number(process.env.PORT) || 8787;
 app.listen({ port }, (err, address) => {
