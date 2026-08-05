@@ -12,10 +12,22 @@ For the full concept and system-level architecture, see the root
 [`globalplan.md`](../globalplan.md). This repo's own north star and near-term
 plan live in [`VISION.md`](./VISION.md) and [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
-## Status
+## Stack
 
-Not yet scaffolded — Phase 0 (see `ARCHITECTURE.md`).
+Python + FastAPI. Chosen so the voice layer (Pipecat, which is Python-core)
+can sit in the same runtime as the Agent Runtime instead of needing a
+separate service to bridge them.
 
 ## Run
 
-TBD once the service is scaffolded.
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # add ANTHROPIC_API_KEY to get live Claude narration
+python -m src.server    # http://localhost:8787
+```
+
+Without `ANTHROPIC_API_KEY` set, the agent still works — it falls back to a
+dependency-free keyword matcher against the same registry (`src/agent/registry.py`)
+instead of calling Claude.
