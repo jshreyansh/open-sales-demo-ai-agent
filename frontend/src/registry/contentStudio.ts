@@ -493,6 +493,22 @@ export const MAGIC_ENGINES: MagicEngine[] = [
   },
 ];
 
+/**
+ * Stable id derived from the format's tool name (all 30 are unique) — used
+ * as the uiRegistry component id so the agent can open one specific
+ * format's modal directly, not just switch engine tabs. The backend
+ * registry (backend/src/agent/registry.py) hardcodes these same slugs
+ * since there's no shared code between the two packages — keep them in
+ * sync by hand if a format's tool name ever changes.
+ */
+export function formatSlug(tool: string): string {
+  return tool
+    .toLowerCase()
+    .replace(/[™®]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
+
 export const STAGE_LABELS: Record<Stage, string> = {
   A: "Awareness",
   C: "Consideration",

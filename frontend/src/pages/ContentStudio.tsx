@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { MAGIC_ENGINES, STAGE_LABELS, type ContentFormat, type MagicEngine, type Stage } from "../registry/contentStudio";
-import { useRegisterComponent } from "../lib/uiRegistry";
+import { useEffect, useState } from "react";
+import { formatSlug, MAGIC_ENGINES, STAGE_LABELS, type ContentFormat, type MagicEngine, type Stage } from "../registry/contentStudio";
+import { registerComponent, unregisterComponent, useRegisterComponent } from "../lib/uiRegistry";
 import Icon from "../components/Icon";
 import FormatModal from "../components/FormatModal";
 
@@ -22,6 +22,33 @@ export default function ContentStudio({ initialTab }: ContentStudioProps) {
   useRegisterComponent("content-studio", "mail-tab", { click: () => setTab("Mail") });
   useRegisterComponent("content-studio", "canvas-tab", { click: () => setTab("Canvas") });
   useRegisterComponent("content-studio", "doc-tab", { click: () => setTab("Doc") });
+
+  // Every individual format gets its own registry component (id = its
+  // MagicXxx tool name, slugified — see backend/src/agent/registry.py for
+  // the matching Python-side mirror) so the agent can open one specific
+  // format's modal directly, not just switch tabs. Registered via the raw
+  // functions (not useRegisterComponent) in a single effect, since these
+  // must stay registered regardless of which tab/filter is active —
+  // calling a hook 30 times in a loop would also violate rules of hooks.
+  useEffect(() => {
+    const ids: string[] = [];
+    for (const engine of MAGIC_ENGINES) {
+      for (const format of engine.formats) {
+        const id = formatSlug(format.tool);
+        ids.push(id);
+        registerComponent("content-studio", id, {
+          open: () => {
+            setTab(engine.tabId);
+            setSelected({ format, engine });
+          },
+        });
+      }
+    }
+    return () => {
+      for (const id of ids) unregisterComponent("content-studio", id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const engines = tab === "All" ? MAGIC_ENGINES : MAGIC_ENGINES.filter((e) => e.tabId === tab);
 
