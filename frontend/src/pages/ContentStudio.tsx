@@ -1,6 +1,8 @@
 import { useState } from "react";
-import { MAGIC_ENGINES, STAGE_LABELS, type Stage } from "../registry/contentStudio";
+import { MAGIC_ENGINES, STAGE_LABELS, type ContentFormat, type MagicEngine, type Stage } from "../registry/contentStudio";
 import { useRegisterComponent } from "../lib/uiRegistry";
+import Icon from "../components/Icon";
+import FormatModal from "../components/FormatModal";
 
 interface ContentStudioProps {
   initialTab?: string;
@@ -13,6 +15,7 @@ export default function ContentStudio({ initialTab }: ContentStudioProps) {
   const [tab, setTab] = useState(initialTab ?? "All");
   const [objective, setObjective] = useState<Stage | null>(null);
   const [audience, setAudience] = useState<string | null>(null);
+  const [selected, setSelected] = useState<{ format: ContentFormat; engine: MagicEngine } | null>(null);
 
   useRegisterComponent("content-studio", "video-tab", { click: () => setTab("Video") });
   useRegisterComponent("content-studio", "aid-tab", { click: () => setTab("Aid") });
@@ -98,13 +101,16 @@ export default function ContentStudio({ initialTab }: ContentStudioProps) {
         return (
           <div key={engine.id} className="engine-section">
             <div className="engine-section__head">
+              <span className="engine-section__icon">
+                <Icon name={engine.icon} size={15} />
+              </span>
               <h3 className="engine-section__title">{engine.label}</h3>
               <span className="engine-section__desc">{engine.description}</span>
               {soonCount > 0 && <span className="engine-section__soon">{soonCount} coming soon</span>}
             </div>
             <div className="format-grid">
               {formats.map((f) => (
-                <div key={f.title} className="format-card">
+                <button key={f.title} className="format-card" onClick={() => setSelected({ format: f, engine })}>
                   <div className="format-card__head">
                     <h4 className="format-card__title">{f.title}</h4>
                     {f.soon && <span className="format-card__soon-badge">SOON</span>}
@@ -119,12 +125,21 @@ export default function ContentStudio({ initialTab }: ContentStudioProps) {
                     ))}
                     <span>{f.audience}</span>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </div>
         );
       })}
+
+      {selected && (
+        <FormatModal
+          format={selected.format}
+          engineLabel={selected.engine.label}
+          engineIcon={selected.engine.icon}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </div>
   );
 }

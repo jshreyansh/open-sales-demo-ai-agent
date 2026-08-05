@@ -34,6 +34,10 @@ const PATHS: Record<string, string> = {
   bell: "M6 10a6 6 0 1 1 12 0c0 4 1.5 5.5 2 6H4c.5-.5 2-2 2-6zM9 20a3 3 0 0 0 6 0",
   moon: "M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5 7 7 0 0 0 20.5 14.5z",
   "chevron-down": "M6 9l6 6 6-6",
+  x: "M18 6 6 18M6 6l12 12",
+  "check-circle": "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM8 12l3 3 5-6",
+  clock: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 7v5l3.5 2",
+  minus: "M5 12h14",
 };
 
 export default function Icon({ name, size = 16 }: IconProps) {
