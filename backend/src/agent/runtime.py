@@ -27,6 +27,8 @@ else:
     _client = None
     _model = None
 
+logger.info(f"agent runtime LLM: {_model or 'none (keyword-matcher fallback only — no API key found)'}")
+
 FLAT_ACTIONS = flatten_registry(UI_REGISTRY)
 TOOL_NAME = "demo_action"
 

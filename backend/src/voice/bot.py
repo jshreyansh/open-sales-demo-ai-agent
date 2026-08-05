@@ -17,6 +17,16 @@ Then open the URL it prints (defaults to http://localhost:7860).
 import os
 
 from dotenv import load_dotenv
+
+# Must run before importing anything that transitively touches agent.runtime —
+# that module reads ANTHROPIC_API_KEY/DEEPSEEK_API_KEY from os.environ at
+# module import time (top-level code, not inside a function), so it only gets
+# one chance to see them. Importing agent_processor (which imports
+# agent.runtime) before this line silently bakes in _client = None for the
+# lifetime of the process — no exception, no error, just the dumb keyword
+# fallback forever. This exact bug shipped once already; don't reorder these.
+load_dotenv()
+
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -31,8 +41,6 @@ from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.workers.runner import WorkerRunner
 
 from .agent_processor import AgentRuntimeProcessor
-
-load_dotenv()
 
 transport_params = {
     "webrtc": lambda: TransportParams(
