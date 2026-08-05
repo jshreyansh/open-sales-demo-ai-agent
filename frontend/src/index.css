@@ -132,6 +132,13 @@ body {
   color: var(--accent);
 }
 
+.sidebar__logo {
+  height: 34px;
+  width: auto;
+  display: block;
+  margin-left: 4px;
+}
+
 .sidebar__nav {
   flex: 1;
   overflow-y: auto;
@@ -141,15 +148,6 @@ body {
 .sidebar__group {
   margin-bottom: 4px;
   width: 100%;
-}
-
-.sidebar__divider {
-  border-top: 1px solid var(--border);
-  margin: 8px 6px 8px;
-}
-
-.sidebar__group:first-child .sidebar__divider {
-  display: none;
 }
 
 .sidebar__group-label {
@@ -182,6 +180,10 @@ body {
 .sidebar--collapsed .sidebar__item {
   justify-content: center;
   padding: 8px;
+}
+
+.sidebar__item--indent {
+  padding-left: 30px;
 }
 
 .sidebar__item-label {

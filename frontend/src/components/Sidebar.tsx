@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { NAV_REGISTRY } from "../registry/pages";
 import { getApprovals } from "../lib/api";
 import Icon from "./Icon";
+import logo from "../assets/contentiq-lockup-light.png";
 
 interface SidebarProps {
   activePageId: string;
@@ -26,15 +27,7 @@ export default function Sidebar({ activePageId, onNavigate }: SidebarProps) {
             X<Icon name="sparkles" size={9} />
           </span>
         ) : (
-          <div className="sidebar__brand">
-            <span className="sidebar__brand-name">
-              Content<span className="sidebar__brand-iq">IQ</span>
-              <Icon name="sparkles" size={11} />
-            </span>
-            <span className="sidebar__brand-sub">
-              by swish<span className="sidebar__brand-x">x</span>
-            </span>
-          </div>
+          <img src={logo} alt="ContentIQ by swishx" className="sidebar__logo" />
         )}
         <button
           className="sidebar__collapse-btn"
@@ -49,13 +42,13 @@ export default function Sidebar({ activePageId, onNavigate }: SidebarProps) {
         {NAV_REGISTRY.map((group) => (
           <div key={group.id} className="sidebar__group">
             {group.label && !collapsed && <div className="sidebar__group-label">{group.label}</div>}
-            {group.id !== "overview" && <div className="sidebar__divider" />}
             {group.items.map((item) => {
               const count = item.id === "mlr-review" ? pendingApprovals : 0;
+              const indent = item.indent && !collapsed;
               return (
                 <button
                   key={item.id}
-                  className={`sidebar__item ${activePageId === item.id ? "sidebar__item--active" : ""}`}
+                  className={`sidebar__item ${activePageId === item.id ? "sidebar__item--active" : ""} ${indent ? "sidebar__item--indent" : ""}`}
                   disabled={item.status === "soon"}
                   onClick={() => onNavigate(item.id)}
                   title={collapsed ? item.label : undefined}

@@ -4,6 +4,7 @@ export interface NavItem {
   route: string;
   status: "available" | "soon";
   icon: string;
+  indent?: boolean;
 }
 
 export interface NavGroup {
@@ -34,11 +35,11 @@ export const NAV_REGISTRY: NavGroup[] = [
     label: "Create",
     items: [
       { id: "content-studio", label: "Content Studio", route: "/studio", status: "available", icon: "sparkles" },
-      { id: "magic-video", label: "Magic Video", route: "/studio?e=video", status: "available", icon: "play" },
-      { id: "magic-aid", label: "Magic Aid", route: "/studio?e=aid", status: "soon", icon: "layers" },
-      { id: "magic-mail", label: "Magic Mail", route: "/studio?e=mail", status: "soon", icon: "mail" },
-      { id: "magic-canvas", label: "Magic Canvas", route: "/studio?e=canvas", status: "available", icon: "image" },
-      { id: "magic-doc", label: "Magic Doc", route: "/studio?e=doc", status: "soon", icon: "file-text" },
+      { id: "magic-video", label: "Magic Video", route: "/studio?e=video", status: "available", icon: "play", indent: true },
+      { id: "magic-aid", label: "Magic Aid", route: "/studio?e=aid", status: "soon", icon: "layers", indent: true },
+      { id: "magic-mail", label: "Magic Mail", route: "/studio?e=mail", status: "soon", icon: "mail", indent: true },
+      { id: "magic-canvas", label: "Magic Canvas", route: "/studio?e=canvas", status: "available", icon: "image", indent: true },
+      { id: "magic-doc", label: "Magic Doc", route: "/studio?e=doc", status: "soon", icon: "file-text", indent: true },
     ],
   },
   {
