@@ -1,10 +1,10 @@
 import os
+from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
 
 load_dotenv()
 
@@ -23,6 +23,12 @@ app.add_middleware(
 )
 
 brand_kit_state = dict(brand_kit_data)
+
+# Pending UI actions reported by the voice pipeline (a separate process,
+# src/voice/bot.py), keyed by visitor_id. The frontend polls this while a
+# voice call is active — same {page, component, method} shape the chat's
+# /chat response already uses.
+_pending_voice_actions: Dict[str, dict] = {}
 
 
 class ChatRequest(BaseModel):
@@ -65,6 +71,26 @@ def get_brand_kit():
 def put_brand_kit(body: dict):
     brand_kit_state.update(body)
     return brand_kit_state
+
+
+class VoiceActionReport(BaseModel):
+    visitorId: str
+    action: Dict[str, Any]
+
+
+@app.post("/internal/voice-action")
+def report_voice_action(body: VoiceActionReport):
+    """Called by the voice process (src/voice/bot.py) to hand off a UI
+    action for the frontend to pick up on its next poll."""
+    _pending_voice_actions[body.visitorId] = body.action
+    return {"ok": True}
+
+
+@app.get("/api/voice-action/{visitor_id}")
+def get_voice_action(visitor_id: str):
+    """Polled by the frontend during an active voice call. Returns and
+    clears the pending action, or {} if there isn't one."""
+    return _pending_voice_actions.pop(visitor_id, {})
 
 
 if __name__ == "__main__":

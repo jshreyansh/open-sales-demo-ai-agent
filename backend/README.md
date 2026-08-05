@@ -16,18 +16,38 @@ plan live in [`VISION.md`](./VISION.md) and [`ARCHITECTURE.md`](./ARCHITECTURE.m
 
 Python + FastAPI. Chosen so the voice layer (Pipecat, which is Python-core)
 can sit in the same runtime as the Agent Runtime instead of needing a
-separate service to bridge them.
+separate service to bridge them. **Requires Python 3.11+** (Pipecat's
+requirement) — on macOS, `brew install python@3.11` if your system Python is
+older.
 
 ## Run
 
 ```bash
-python3 -m venv .venv
+/opt/homebrew/bin/python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # add ANTHROPIC_API_KEY to get live Claude narration
-python -m src.server    # http://localhost:8787
+cp .env.example .env   # fill in keys — see below
+python -m src.server    # REST API: http://localhost:8787
 ```
 
-Without `ANTHROPIC_API_KEY` set, the agent still works — it falls back to a
-dependency-free keyword matcher against the same registry (`src/agent/registry.py`)
-instead of calling Claude.
+Keys needed in `.env`:
+
+- `ANTHROPIC_API_KEY` — optional. Without it, the agent still works, falling
+  back to a dependency-free keyword matcher against the registry
+  (`src/agent/registry.py`) instead of calling Claude.
+- `GROQ_API_KEY` — for voice (STT). Free tier, no card required:
+  [groq.com](https://groq.com) → Start Building → API Keys.
+- `CARTESIA_API_KEY` / `CARTESIA_VOICE_ID` — for voice (TTS).
+
+### Voice
+
+Voice runs as a **separate process** from the REST API (see `ARCHITECTURE.md`
+for why):
+
+```bash
+python -m src.voice.bot    # prints a URL, default http://localhost:7860/client/
+```
+
+That URL opens Pipecat's own prebuilt WebRTC test page — talk to it directly
+to verify STT → Agent Runtime → TTS works before it's wired into the actual
+product frontend.

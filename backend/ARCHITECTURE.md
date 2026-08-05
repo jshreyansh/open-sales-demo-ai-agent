@@ -28,6 +28,9 @@ backend/
                               # with a keyword-matcher fallback when no API key
     data/
       dashboard.py, analytics.py, brand_kit.py   # dummy backend data
+    voice/
+      bot.py                 # Pipecat entrypoint — separate process/port
+      agent_processor.py       # bridges Pipecat's pipeline to run_turn()
 ```
 
 ## What's built (past Phase 0/1)
@@ -44,6 +47,24 @@ backend/
   Phase 4).
 - **Dummy Backend** (`data/*.py`): static demo data for Dashboard, Analytics,
   Brand Kit, served as plain JSON.
+- **Voice** (`voice/bot.py`, `voice/agent_processor.py`): Pipecat pipeline —
+  Groq (STT) → `AgentRuntimeProcessor` → Cartesia (TTS). Runs as its **own
+  process on its own port** (Pipecat's dev runner defaults to :7860), not
+  merged into `server.py` — Pipecat's runner owns its own FastAPI/uvicorn
+  server, so this stays a separate service by design.
+  `AgentRuntimeProcessor` doesn't reimplement anything: it calls the exact
+  same `run_turn()` the text chat calls (same registry, same session store,
+  same Claude tool-use + keyword fallback), so voice and text share one
+  brain. When a turn produces a UI action, the voice process reports it to
+  the REST API via `POST /internal/voice-action` (main process, :8787),
+  which the frontend polls via `GET /api/voice-action/{visitor_id}` — kept
+  as a simple polling handoff rather than reaching into Pipecat's own
+  client-message wire protocol, so this doesn't get coupled to Pipecat
+  internals that change across versions.
+  Run it with `python -m src.voice.bot` — prints a URL (default
+  `http://localhost:7860/client/`) serving Pipecat's own prebuilt WebRTC
+  test page, useful for verifying the voice loop before wiring it into the
+  actual product frontend.
 
 ## Not yet built
 
@@ -51,10 +72,11 @@ backend/
   today the agent picks one action per message, no sense of a longer arc.
 - **Knowledge Base / RAG**: off-script questions (pricing, compliance, etc.)
   fall back to a generic reply instead of being grounded in real product docs.
-- **Voice** (Pipecat): STT/TTS/turn-taking layer in front of `run_turn()`.
-  `run_turn(message, session) -> {reply, action?}` is already the exact seam
-  a voice layer needs — it doesn't require changing the Agent Runtime, just
-  wrapping it.
+- **Voice UI Kit in the actual frontend**: today voice only works via
+  Pipecat's own standalone test page. Embedding `@pipecat-ai/voice-ui-kit`
+  (ConnectButton, VoiceVisualizer, UserAudioControl) into the real React
+  frontend, and passing the real `visitor_id` through the `/start` request's
+  `body`, is the next step once the standalone loop is confirmed working.
 - **Ack/error/fallback protocol** for UI actions (retry → narrate-only → log)
   per root `globalplan.md` §2.4 — a failed action currently just queues
   indefinitely rather than degrading gracefully.
