@@ -19,6 +19,7 @@ import os
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.audio.vad_processor import VADProcessor
@@ -53,7 +54,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     # buffer and when to send a segment off for transcription. Without this
     # stage, audio flows through the pipeline but STT never fires — which is
     # exactly what happened before this was added.
-    vad = VADProcessor(vad_analyzer=SileroVADAnalyzer())
+    #
+    # stop_secs defaults to 0.2 — short enough that a normal mid-sentence
+    # pause reads as "stopped speaking," chopping one utterance into several
+    # segments each sent to the agent as an independent message. 0.8 gives
+    # room for a natural breath without making replies feel sluggish.
+    vad = VADProcessor(vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.8)))
     stt = GroqSTTService(api_key=os.getenv("GROQ_API_KEY"))
     tts = CartesiaTTSService(
         api_key=os.getenv("CARTESIA_API_KEY"),

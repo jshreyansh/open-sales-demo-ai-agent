@@ -1,15 +1,13 @@
 import asyncio
-import logging
 
 import aiohttp
+from loguru import logger
 
 from pipecat.frames.frames import Frame, TextFrame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from ..agent.runtime import run_turn
 from ..context.store import get_session
-
-logger = logging.getLogger(__name__)
 
 REST_API_URL = "http://localhost:8787"
 
@@ -35,12 +33,15 @@ class AgentRuntimeProcessor(FrameProcessor):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
+            logger.info(f"[{self._visitor_id}] heard: {frame.text!r}")
             session = get_session(self._visitor_id)
             try:
                 result = await asyncio.to_thread(run_turn, frame.text, session)
             except Exception:
-                logger.exception("run_turn failed for visitor %s", self._visitor_id)
+                logger.exception(f"run_turn failed for visitor {self._visitor_id}")
                 result = {"reply": "Sorry, I lost my train of thought — could you say that again?"}
+
+            logger.info(f"[{self._visitor_id}] replying: {result!r}")
 
             action = result.get("action")
             if action:
