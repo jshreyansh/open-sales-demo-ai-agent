@@ -9,6 +9,89 @@ body {
   color: #1a1a1a;
 }
 
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.app-shell__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: white;
+  border-right: 1px solid #e2e2e2;
+  padding: 16px 12px;
+}
+
+.sidebar__brand {
+  font-weight: 700;
+  font-size: 18px;
+  padding: 8px 10px 16px;
+}
+
+.sidebar__group {
+  margin-bottom: 12px;
+}
+
+.sidebar__group-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #9a9a9a;
+  padding: 6px 10px;
+}
+
+.sidebar__item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  font-size: 14px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #1a1a1a;
+}
+
+.sidebar__item:hover:not(:disabled) {
+  background: #f5f6f8;
+}
+
+.sidebar__item--active {
+  background: #fff1ea;
+  color: #e8590c;
+  font-weight: 600;
+}
+
+.sidebar__item:disabled {
+  color: #b8b8b8;
+  cursor: default;
+}
+
+.sidebar__badge {
+  font-size: 10px;
+  background: #f0f0f0;
+  color: #888;
+  padding: 2px 6px;
+  border-radius: 10px;
+}
+
+.stub-page {
+  padding: 24px;
+}
+
+.stub-page__note {
+  color: #888;
+}
+
 .dashboard {
   padding: 24px;
 }
