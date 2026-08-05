@@ -954,3 +954,224 @@ body {
   padding: 8px 14px;
   cursor: pointer;
 }
+
+/* ---- Meeting Mode ---- */
+
+.meet {
+  height: 100vh;
+  width: 100vw;
+  background: #202124;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font);
+  color: #e8eaed;
+}
+
+.meet__topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  font-size: 13px;
+  color: #cfd2d6;
+  flex-shrink: 0;
+}
+
+.meet__topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.meet__dot {
+  opacity: 0.5;
+}
+
+.meet__topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.meet__presenting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.meet__people {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 5px 10px;
+  border-radius: 99px;
+  font-size: 12px;
+}
+
+.meet__body {
+  flex: 1;
+  display: flex;
+  gap: 14px;
+  padding: 0 20px 14px;
+  min-height: 0;
+}
+
+.meet__stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.meet__stage-inner {
+  width: 100%;
+  height: 100%;
+  background: white;
+  color: var(--text);
+  overflow-y: auto;
+  border-radius: 8px;
+  /* establishes a containing block so the chat widget's position:fixed
+     stays pinned to this stage instead of the full browser viewport */
+  transform: translateZ(0);
+}
+
+.meet__stage-inner .app-shell {
+  min-height: 100%;
+}
+
+.meet__rail {
+  width: 220px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.meet__tile {
+  position: relative;
+  flex: 1;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.meet__tile--you {
+  background: linear-gradient(160deg, #2b3a42, #1c262b);
+}
+
+.meet__tile--agent {
+  background: linear-gradient(160deg, #3a2a1c, #1c1712);
+}
+
+.meet__mic-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #f28b82;
+}
+
+.meet__tile-label {
+  position: absolute;
+  bottom: 8px;
+  left: 10px;
+  font-size: 12px;
+  color: #e8eaed;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.meet__avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 24px;
+  color: white;
+}
+
+.meet__avatar--you {
+  background: #5f7d8c;
+}
+
+.meet__avatar--agent {
+  background: var(--accent);
+}
+
+.meet__avatar--tiny {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #5f7d8c;
+  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+}
+
+.meet__controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 0 22px;
+  flex-shrink: 0;
+}
+
+.meet__ctrl {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: #e8eaed;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.meet__ctrl:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.meet__ctrl--off {
+  background: #e8eaed;
+  color: #202124;
+}
+
+.meet__ctrl--off:hover {
+  background: #cfd2d6;
+}
+
+.meet__ctrl--active {
+  background: var(--accent);
+  color: white;
+}
+
+.meet__ctrl--hangup {
+  background: #ea4335;
+  width: 56px;
+  border-radius: 24px;
+}
+
+.meet__ctrl--hangup:hover {
+  background: #d33426;
+}

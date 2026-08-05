@@ -1,6 +1,6 @@
 export const brandKitData = {
-  workspaceName: "Acme Pharma Demo",
-  logoInitials: "AP",
+  workspaceName: "PharmaNext Demo",
+  logoInitials: "PN",
   palette: {
     primary: "#111827",
     accent: "#6B7280",
@@ -12,8 +12,8 @@ export const brandKitData = {
     bodyFont: "Default (system)",
   },
   preview: {
-    title: "Acme Pharma Demo",
-    subtitle: "Acme",
+    title: "PharmaNext Demo - Alex",
+    subtitle: "PharmaNext",
     heading: "Key highlights",
     body: "Efficacy and safety, summarised for the medical audience — styled with your brand colours and typography.",
     calloutLabel: "Callout",
