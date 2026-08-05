@@ -24,6 +24,23 @@ class RegistryPage:
     components: List[RegistryComponent]
 
 
+# General product knowledge, not tied to any one page/component — the
+# agent's equivalent of "what the company actually does." Grounded in real
+# copy already written for the product (the Content Studio hero banner,
+# Brand Kit's subtitle, etc.) rather than invented, so the agent doesn't
+# improvise claims that aren't backed by anything in the actual UI.
+PRODUCT_OVERVIEW = """ContentIQ (by SwishX) is an AI content platform for pharma marketing teams. \
+Its core differentiator: medical-grade, MLR-ready content in minutes, not weeks. MLR readiness — \
+on-label claims, references, fair balance, ISI — is built in at generation time, not a downstream \
+compliance check, so content enters review clean instead of bouncing back and forth with legal/medical \
+review. It covers 30 content formats across 5 Magic Engines (Video, Aid, Mail, Canvas, Doc) — everything \
+from short videos and AI digital-twin presenter avatars, to HCP detailing aids and approved emails, to \
+banners/infographics and long-form documents like payer dossiers — all generated from a single Brand Kit \
+so every asset stays on-brand automatically. It also has campaign analytics (WhatsApp/SMS/Email \
+performance, HCP reach, engagement funnels) and an "Agentic IQ" layer tracking how many manhours \
+autonomous agents have saved the team."""
+
+
 # Describes what the agent can point at and do, in terms the LLM (or the
 # keyword fallback) can reason over. `page` + component `id` must match the
 # ids the frontend registers under (frontend/src/lib/uiRegistry.ts) — same
@@ -70,31 +87,50 @@ UI_REGISTRY: List[RegistryPage] = [
             RegistryComponent(
                 id="video-tab",
                 label="Magic Video",
-                description="Video content formats — short videos, digital twin avatars, broadcast ads.",
+                description=(
+                    "Video content formats — short videos, digital twin avatars, broadcast ads. Like every "
+                    "format in Content Studio, each is MLR-ready the moment it's generated (on-label claims, "
+                    "references, fair balance, ISI already included), not something that gets checked and "
+                    "bounced back afterward — this is usually the single biggest time-saver for teams whose "
+                    "review/approval cycle is the bottleneck."
+                ),
                 actions=[RegistryAction(id="click", description="Switch Content Studio to the Video tab")],
             ),
             RegistryComponent(
                 id="aid-tab",
                 label="Magic Aid",
-                description="HCP detailing and field-rep enablement formats.",
+                description=(
+                    "HCP detailing and field-rep enablement formats (interactive visual aids, e-detail decks, "
+                    "leave-behinds). Same MLR-ready-at-generation guarantee as the rest of Content Studio."
+                ),
                 actions=[RegistryAction(id="click", description="Switch Content Studio to the Aid tab")],
             ),
             RegistryComponent(
                 id="mail-tab",
                 label="Magic Mail",
-                description="Email and CRM messaging formats.",
+                description=(
+                    "Email and CRM messaging formats — approved sends, multi-touch sequences, newsletters. "
+                    "Same MLR-ready-at-generation guarantee as the rest of Content Studio."
+                ),
                 actions=[RegistryAction(id="click", description="Switch Content Studio to the Mail tab")],
             ),
             RegistryComponent(
                 id="canvas-tab",
                 label="Magic Canvas",
-                description="Static, display and web creative formats — infographics, banners, social posts.",
+                description=(
+                    "Static, display and web creative formats — infographics, banners, social posts, "
+                    "co-pay cards. Same MLR-ready-at-generation guarantee as the rest of Content Studio."
+                ),
                 actions=[RegistryAction(id="click", description="Switch Content Studio to the Canvas tab")],
             ),
             RegistryComponent(
                 id="doc-tab",
                 label="Magic Doc",
-                description="Long-form documents — monographs, brochures, payer dossiers.",
+                description=(
+                    "Long-form documents — monographs, brochures, payer/AMCP dossiers, MSL and KOL decks. "
+                    "Same MLR-ready-at-generation guarantee as the rest of Content Studio — this is usually "
+                    "the format category with the longest normal review cycle, so the time saved is biggest here."
+                ),
                 actions=[RegistryAction(id="click", description="Switch Content Studio to the Doc tab")],
             ),
         ],
