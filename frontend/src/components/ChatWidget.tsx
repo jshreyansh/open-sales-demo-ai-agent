@@ -1,20 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  usePipecatClientMicControl,
-  usePipecatClientTransportState,
-  usePipecatConversation,
-} from "@pipecat-ai/client-react";
+import { usePipecatConversation } from "@pipecat-ai/client-react";
 import type { ConversationMessagePart } from "@pipecat-ai/client-react";
-import { getVoiceAction, sendMessage, type AgentAction } from "../lib/api";
+import { sendMessage, type AgentAction } from "../lib/api";
 import { getVisitorId } from "../lib/session";
-import { connectVoice } from "../lib/pipecatClient";
+import { useVoiceSession } from "../lib/useVoiceSession";
 import MeetIcon from "./MeetIcons";
 
 interface ChatWidgetProps {
   currentPage: string;
   onAction: (action: AgentAction) => void;
-  /** Meeting Mode: connect voice immediately on mount, no manual toggle. */
-  autoConnectVoice?: boolean;
 }
 
 const visitorId = getVisitorId();
@@ -28,21 +22,15 @@ function partText(part: ConversationMessagePart): string {
   return "";
 }
 
-export default function ChatWidget({ currentPage, onAction, autoConnectVoice }: ChatWidgetProps) {
+export default function ChatWidget({ currentPage, onAction }: ChatWidgetProps) {
   const { messages, injectMessage } = usePipecatConversation();
-  const { enableMic, isMicEnabled } = usePipecatClientMicControl();
-  const transportState = usePipecatClientTransportState();
+  const { transportState, connecting, isMicEnabled, enableMic, connect, mute } = useVoiceSession(onAction);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [talkMode, setTalkMode] = useState(false);
 
-  const connecting = transportState === "connecting" || transportState === "authenticating" || transportState === "initializing";
-  const voiceConnected = transportState === "connected" || transportState === "ready";
-
   const currentPageRef = useRef(currentPage);
   currentPageRef.current = currentPage;
-  const onActionRef = useRef(onAction);
-  onActionRef.current = onAction;
 
   const welcomeSent = useRef(false);
   useEffect(() => {
@@ -57,47 +45,23 @@ export default function ChatWidget({ currentPage, onAction, autoConnectVoice }: 
 
   async function startTalk() {
     setTalkMode(true);
-    // Connect only once — reconnecting fires the client library's own
-    // "Connected" handler, which wipes the whole conversation history as a
-    // side effect. After the first connection, switching modes is just a
-    // mute/unmute so the shared transcript survives toggling back and forth.
-    if (transportState === "disconnected") {
-      try {
-        await connectVoice(visitorId);
-      } catch {
-        setTalkMode(false);
-        return;
-      }
+    try {
+      await connect();
+    } catch {
+      setTalkMode(false);
     }
-    enableMic(true);
   }
 
   function stopTalk() {
     setTalkMode(false);
-    enableMic(false);
+    mute();
   }
-
-  useEffect(() => {
-    if (autoConnectVoice) startTalk();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoConnectVoice]);
 
   // Keep in sync if voice was disconnected from elsewhere (e.g. the Meeting
   // Mode hangup button), not just via this widget's own Chat toggle.
   useEffect(() => {
     if (talkMode && transportState === "disconnected") setTalkMode(false);
   }, [talkMode, transportState]);
-
-  // Voice-triggered UI actions arrive out-of-band (the voice process is a
-  // separate service from this REST API) — poll while a call is active.
-  useEffect(() => {
-    if (!voiceConnected) return;
-    const id = setInterval(async () => {
-      const action = await getVoiceAction(visitorId).catch(() => null);
-      if (action) onActionRef.current(action);
-    }, 800);
-    return () => clearInterval(id);
-  }, [voiceConnected]);
 
   async function handleSend() {
     const text = input.trim();

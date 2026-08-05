@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { PipecatClientProvider } from "@pipecat-ai/client-react";
+import { PipecatClientAudio, PipecatClientProvider } from "@pipecat-ai/client-react";
 import Sidebar from "./components/Sidebar";
 import MeetingShell from "./components/MeetingShell";
 import ChatWidget from "./components/ChatWidget";
@@ -58,22 +58,21 @@ export default function App() {
     return <StubPage label={findLabel(activePageId)} />;
   }
 
-  const product = (
+  const productShell = (
     <div className="app-shell">
       <Sidebar activePageId={activePageId} onNavigate={setActivePageId} />
       <div className="app-shell__content">{renderPage()}</div>
-      <ChatWidget
-        currentPage={activePageId}
-        onAction={handleAgentAction}
-        autoConnectVoice={mode === "meeting"}
-      />
     </div>
   );
 
   return (
     <PipecatClientProvider client={pipecatClient}>
+      {/* Renders the actual <audio> element that plays the bot's TTS speech —
+          without this, voice replies are received but never played back. */}
+      <PipecatClientAudio />
       {mode === "meeting" ? (
         <MeetingShell
+          onAction={handleAgentAction}
           onLeave={() => {
             void disconnectVoice();
             const url = new URL(window.location.href);
@@ -82,10 +81,13 @@ export default function App() {
             setMode("product");
           }}
         >
-          {product}
+          {productShell}
         </MeetingShell>
       ) : (
-        product
+        <>
+          {productShell}
+          <ChatWidget currentPage={activePageId} onAction={handleAgentAction} />
+        </>
       )}
     </PipecatClientProvider>
   );

@@ -1105,9 +1105,12 @@ body {
   color: var(--text);
   overflow-y: auto;
   border-radius: 8px;
-  /* establishes a containing block so the chat widget's position:fixed
-     stays pinned to this stage instead of the full browser viewport */
-  transform: translateZ(0);
+  /* This is a screen share, not an interactive window — the viewer watches
+     it the way they'd watch a real presenter's shared screen. Only the
+     agent (via direct JS calls in uiRegistry.ts, not real click/scroll
+     events) drives it, so pointer-events here is safe: it blocks the
+     human's mouse without affecting programmatic DOM calls. */
+  pointer-events: none;
 }
 
 .meet__stage-inner .app-shell {

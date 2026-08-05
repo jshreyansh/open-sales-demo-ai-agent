@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
-import { usePipecatClientMicControl, usePipecatClientTransportState } from "@pipecat-ai/client-react";
+import { useEffect, useRef, useState } from "react";
+import { useVoiceSession } from "../lib/useVoiceSession";
+import type { AgentAction } from "../lib/api";
 import MeetIcon from "./MeetIcons";
 
 interface MeetingShellProps {
   children: React.ReactNode;
   onLeave: () => void;
+  onAction: (action: AgentAction) => void;
 }
 
 const MEETING_CODE = "demo-call-pnx";
@@ -18,12 +20,20 @@ function useClock() {
   return now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-export default function MeetingShell({ children, onLeave }: MeetingShellProps) {
+export default function MeetingShell({ children, onLeave, onAction }: MeetingShellProps) {
   const time = useClock();
   const [cameraOn, setCameraOn] = useState(true);
-  const { enableMic, isMicEnabled } = usePipecatClientMicControl();
-  const transportState = usePipecatClientTransportState();
-  const joined = transportState === "connected" || transportState === "ready";
+  const { voiceConnected, isMicEnabled, enableMic, connect } = useVoiceSession(onAction);
+
+  // This is the only place that triggers the voice connection in Meeting
+  // Mode — a real call auto-joins, it isn't a button the visitor clicks.
+  const connectStarted = useRef(false);
+  useEffect(() => {
+    if (connectStarted.current) return;
+    connectStarted.current = true;
+    void connect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="meet">
@@ -45,7 +55,7 @@ export default function MeetingShell({ children, onLeave }: MeetingShellProps) {
         </div>
       </div>
 
-      {!joined && (
+      {!voiceConnected && (
         <div className="meet__banner">Our agent is joining {MEETING_CODE}…</div>
       )}
 
