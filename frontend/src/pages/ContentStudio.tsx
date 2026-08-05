@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { MAGIC_ENGINES, STAGE_LABELS, type Stage } from "../registry/contentStudio";
+import { useRegisterComponent } from "../lib/uiRegistry";
 
 interface ContentStudioProps {
   initialTab?: string;
@@ -12,6 +13,12 @@ export default function ContentStudio({ initialTab }: ContentStudioProps) {
   const [tab, setTab] = useState(initialTab ?? "All");
   const [objective, setObjective] = useState<Stage | null>(null);
   const [audience, setAudience] = useState<string | null>(null);
+
+  useRegisterComponent("content-studio", "video-tab", { click: () => setTab("Video") });
+  useRegisterComponent("content-studio", "aid-tab", { click: () => setTab("Aid") });
+  useRegisterComponent("content-studio", "mail-tab", { click: () => setTab("Mail") });
+  useRegisterComponent("content-studio", "canvas-tab", { click: () => setTab("Canvas") });
+  useRegisterComponent("content-studio", "doc-tab", { click: () => setTab("Doc") });
 
   const engines = tab === "All" ? MAGIC_ENGINES : MAGIC_ENGINES.filter((e) => e.tabId === tab);
 

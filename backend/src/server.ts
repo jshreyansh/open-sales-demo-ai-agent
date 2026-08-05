@@ -11,14 +11,16 @@ const app = Fastify();
 await app.register(cors, { origin: true });
 
 app.post("/chat", async (request, reply) => {
-  const { visitorId, message } = request.body as {
+  const { visitorId, message, currentPage } = request.body as {
     visitorId?: string;
     message?: string;
+    currentPage?: string;
   };
   if (!visitorId || !message) {
     return reply.code(400).send({ error: "visitorId and message are required" });
   }
   const session = getSession(visitorId);
+  if (currentPage) session.currentPage = currentPage;
   const result = await runTurn(message, session);
   saveSession(visitorId, session);
   return result;

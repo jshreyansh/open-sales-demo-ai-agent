@@ -1,6 +1,7 @@
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8787";
 
 export interface AgentAction {
+  page: string;
   component: string;
   method: string;
 }
@@ -13,11 +14,12 @@ export interface ChatResponse {
 export async function sendMessage(
   visitorId: string,
   message: string,
+  currentPage: string,
 ): Promise<ChatResponse> {
   const res = await fetch(`${API_URL}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ visitorId, message }),
+    body: JSON.stringify({ visitorId, message, currentPage }),
   });
   if (!res.ok) throw new Error(`chat request failed: ${res.status}`);
   return res.json();

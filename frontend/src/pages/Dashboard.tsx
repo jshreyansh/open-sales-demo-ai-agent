@@ -1,56 +1,25 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Icon from "../components/Icon";
 import Sparkline from "../components/Sparkline";
-import { getDashboard, sendMessage, type AgentAction } from "../lib/api";
-import { getVisitorId } from "../lib/session";
+import { getDashboard } from "../lib/api";
+import { useRegisterComponent } from "../lib/uiRegistry";
+import { useHighlight } from "../lib/useHighlight";
 import type { DashboardData } from "../lib/types";
 
-interface ChatMessage {
-  role: "user" | "agent";
-  text: string;
-}
-
-const visitorId = getVisitorId();
 const RANGES = ["7D", "30D", "90D", "Custom"];
 
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [range, setRange] = useState("30D");
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: "agent", text: "Hi, I'm Emma. Ask me to show you around the dashboard." },
-  ]);
-  const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
-  const insightsRef = useRef<HTMLDivElement>(null);
+  const insights = useHighlight();
+  const activeCampaigns = useHighlight();
 
   useEffect(() => {
     getDashboard().then(setData).catch(() => setData(null));
   }, []);
 
-  function executeAction(action?: AgentAction) {
-    if (!action || !insightsRef.current) return;
-    if (action.method === "highlight") {
-      insightsRef.current.classList.add("panel--highlighted");
-      setTimeout(() => insightsRef.current?.classList.remove("panel--highlighted"), 1500);
-    }
-  }
-
-  async function handleSend() {
-    const text = input.trim();
-    if (!text || sending) return;
-    setMessages((prev) => [...prev, { role: "user", text }]);
-    setInput("");
-    setSending(true);
-    try {
-      const { reply, action } = await sendMessage(visitorId, text);
-      setMessages((prev) => [...prev, { role: "agent", text: reply }]);
-      executeAction(action);
-    } catch {
-      setMessages((prev) => [...prev, { role: "agent", text: "Sorry, I couldn't reach the demo backend." }]);
-    } finally {
-      setSending(false);
-    }
-  }
+  useRegisterComponent("dashboard", "insights", { highlight: insights.highlight });
+  useRegisterComponent("dashboard", "active-campaigns", { highlight: activeCampaigns.highlight });
 
   if (!data) {
     return (
@@ -82,7 +51,7 @@ export default function Dashboard() {
         <span className="section__subtitle">Last 30 days</span>
       </div>
 
-      <div className="insights-grid card" ref={insightsRef}>
+      <div className="insights-grid card" ref={insights.ref}>
         {data.insights.map((card) => (
           <div key={card.id} className="insight-card" style={{ ["--accent-color" as string]: card.accent }}>
             <div className="insight-card__head">
@@ -108,7 +77,7 @@ export default function Dashboard() {
         ))}
       </div>
 
-      <div className="section card">
+      <div className="section card" ref={activeCampaigns.ref}>
         <div className="section__header">
           <div>
             <h2 className="section__title">Active Campaigns</h2>
@@ -182,29 +151,6 @@ export default function Dashboard() {
             <span className="content-row__views">{c.views.toLocaleString()}</span>
           </div>
         ))}
-      </div>
-
-      <div className="chat">
-        <div className="chat__header">Emma</div>
-        <div className="chat__messages">
-          {messages.map((m, i) => (
-            <div key={i} className={`chat__message chat__message--${m.role}`}>
-              {m.text}
-            </div>
-          ))}
-        </div>
-        <div className="chat__input">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSend()}
-            placeholder="Ask anything..."
-            disabled={sending}
-          />
-          <button onClick={handleSend} disabled={sending}>
-            Send
-          </button>
-        </div>
       </div>
     </div>
   );

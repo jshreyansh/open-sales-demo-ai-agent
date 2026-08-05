@@ -1,12 +1,15 @@
 import { useState } from "react";
 import Sidebar from "./components/Sidebar";
 import MeetingShell from "./components/MeetingShell";
+import ChatWidget from "./components/ChatWidget";
 import Dashboard from "./pages/Dashboard";
 import Analytics from "./pages/Analytics";
 import ContentStudio from "./pages/ContentStudio";
 import BrandKit from "./pages/BrandKit";
 import StubPage from "./pages/StubPage";
 import { NAV_REGISTRY } from "./registry/pages";
+import { executeAction } from "./lib/uiRegistry";
+import type { AgentAction } from "./lib/api";
 
 function findLabel(pageId: string): string {
   for (const group of NAV_REGISTRY) {
@@ -34,6 +37,15 @@ export default function App() {
   const [activePageId, setActivePageId] = useState("dashboard");
   const [mode, setMode] = useState<"product" | "meeting">(getInitialMode);
 
+  function handleAgentAction(action: AgentAction) {
+    if (action.page !== activePageId) {
+      // Navigating remounts the target page, which registers its
+      // components — executeAction queues until that registration lands.
+      setActivePageId(action.page);
+    }
+    executeAction(action.page, action.component, action.method);
+  }
+
   function renderPage() {
     if (activePageId === "dashboard") return <Dashboard />;
     if (activePageId === "analytics") return <Analytics />;
@@ -48,6 +60,7 @@ export default function App() {
     <div className="app-shell">
       <Sidebar activePageId={activePageId} onNavigate={setActivePageId} />
       <div className="app-shell__content">{renderPage()}</div>
+      <ChatWidget currentPage={activePageId} onAction={handleAgentAction} />
     </div>
   );
 
