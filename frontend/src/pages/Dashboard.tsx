@@ -33,16 +33,19 @@ export default function Dashboard() {
     <div className="page">
       <div className="page__header">
         <h1 className="page__title">Dashboard</h1>
-        <div className="pill-toggle-group">
-          {RANGES.map((r) => (
-            <button
-              key={r}
-              className={`pill-toggle ${range === r ? "pill-toggle--active" : ""}`}
-              onClick={() => setRange(r)}
-            >
-              {r}
-            </button>
-          ))}
+        <div>
+          <div className="page__header-label">Date Range</div>
+          <div className="pill-toggle-group">
+            {RANGES.map((r) => (
+              <button
+                key={r}
+                className={`pill-toggle ${range === r ? "pill-toggle--active" : ""}`}
+                onClick={() => setRange(r)}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

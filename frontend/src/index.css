@@ -339,7 +339,7 @@ body {
   align-items: center;
   gap: 8px;
   flex: 1;
-  max-width: 420px;
+  max-width: 640px;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 7px 10px;
@@ -471,6 +471,16 @@ body {
   margin: 0;
 }
 
+.page__header-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  text-align: right;
+  margin-bottom: 6px;
+}
+
 .card {
   background: #fff;
   border: 1px solid var(--border);
@@ -506,13 +516,14 @@ body {
 .insights-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 14px;
+  gap: 28px;
   margin-top: 14px;
 }
 
 .insight-card {
   border-left: 3px solid var(--accent-color, var(--accent));
-  padding-left: 12px;
+  padding-left: 16px;
+  padding-right: 12px;
   padding-top: 4px;
   padding-bottom: 4px;
 }
