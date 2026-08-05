@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { PipecatClientAudio, PipecatClientProvider } from "@pipecat-ai/client-react";
 import Sidebar from "./components/Sidebar";
+import TopBar from "./components/TopBar";
 import MeetingShell from "./components/MeetingShell";
 import ChatWidget from "./components/ChatWidget";
 import Dashboard from "./pages/Dashboard";
@@ -63,7 +64,10 @@ export default function App() {
   const productShell = (
     <div className="app-shell">
       <Sidebar activePageId={activePageId} onNavigate={setActivePageId} />
-      <div className="app-shell__content">{renderPage()}</div>
+      <div className="app-shell__content">
+        {mode === "product" && <TopBar />}
+        {renderPage()}
+      </div>
     </div>
   );
 

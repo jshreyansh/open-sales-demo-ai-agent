@@ -29,17 +29,27 @@ body {
 
 .app-shell {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
 }
 
 .app-shell__content {
   flex: 1;
   min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+}
+
+/* Inside Meeting Mode's shared screen, the app shell is nested inside
+   .meet__stage-inner (itself sized to the stage, not the viewport) — 100vh
+   there would blow past the available space, so it needs its own height. */
+.meet__stage-inner .app-shell {
+  height: 100%;
 }
 
 .sidebar {
   width: 220px;
   flex-shrink: 0;
+  height: 100%;
   background: rgba(255, 255, 255, 0.88);
   border-right: 1px solid var(--border);
   padding: 12px 10px 10px;
@@ -309,6 +319,124 @@ body {
   white-space: nowrap;
 }
 
+/* ---- Top bar (Product Mode only) ---- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.9);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.topbar__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  max-width: 420px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  color: var(--text-muted);
+}
+
+.topbar__search input {
+  border: none;
+  outline: none;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font);
+  font-size: 13px;
+  background: none;
+  color: var(--text);
+}
+
+.topbar__search input::placeholder {
+  color: var(--text-faint);
+}
+
+.topbar__kbd {
+  font-size: 11px;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
+.topbar__right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.topbar__demo-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--soon-text);
+  background: var(--accent-tint-10);
+  padding: 5px 10px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+
+.topbar__demo-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.topbar__org {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: white;
+  cursor: pointer;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.topbar__org-user {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.topbar__icon-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.topbar__icon-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
 .stub-page {
   padding: 24px;
 }
@@ -421,8 +549,14 @@ body {
   margin: 2px 0 0;
 }
 
+.insight-card__metrics-row {
+  display: flex;
+  gap: 24px;
+}
+
 .insight-card__metric {
-  margin-bottom: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 .insight-card__metric-label {
@@ -1314,6 +1448,12 @@ body {
      events) drives it, so pointer-events here is safe: it blocks the
      human's mouse without affecting programmatic DOM calls. */
   pointer-events: none;
+  /* The shared-screen stage is narrower than the product's native viewport,
+     which crams fixed-width elements (tables, grids) into too little room.
+     zoom (not transform:scale) actually recomputes layout at this factor —
+     the same effect as pressing Cmd+- to 90% in Chrome — so the page lays
+     itself out as if it had ~11% more width to work with. */
+  zoom: 0.9;
 }
 
 .meet__stage-inner .app-shell {

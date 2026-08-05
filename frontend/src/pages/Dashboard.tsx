@@ -63,16 +63,18 @@ export default function Dashboard() {
                 <p className="insight-card__desc">{card.description}</p>
               </div>
             </div>
-            {card.metrics.map((m, i) => (
-              <div key={m.label} className="insight-card__metric">
-                <div className="insight-card__metric-label">{m.label}</div>
-                <div className="insight-card__metric-value">
-                  {m.value}
-                  {m.sub && <span className="insight-card__metric-sub">{m.sub}</span>}
+            <div className="insight-card__metrics-row">
+              {card.metrics.map((m, i) => (
+                <div key={m.label} className="insight-card__metric">
+                  <div className="insight-card__metric-label">{m.label}</div>
+                  <div className="insight-card__metric-value">
+                    {m.value}
+                    {m.sub && <span className="insight-card__metric-sub">{m.sub}</span>}
+                  </div>
+                  {i === 0 && <Sparkline values={card.sparkline} color={card.accent} />}
                 </div>
-                {i === 0 && <Sparkline values={card.sparkline} color={card.accent} />}
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         ))}
       </div>
