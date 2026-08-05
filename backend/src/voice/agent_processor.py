@@ -3,7 +3,13 @@ import asyncio
 import aiohttp
 from loguru import logger
 
-from pipecat.frames.frames import Frame, TextFrame, TranscriptionFrame
+from pipecat.frames.frames import (
+    Frame,
+    LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
+    TextFrame,
+    TranscriptionFrame,
+)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from ..agent.runtime import run_turn
@@ -47,7 +53,15 @@ class AgentRuntimeProcessor(FrameProcessor):
             if action:
                 asyncio.create_task(self._report_action(action))
 
+            # TTSService only flushes its sentence-aggregation buffer on an
+            # LLMFullResponseEndFrame (or EndFrame) — a bare TextFrame gets
+            # buffered and never actually synthesized. Bracketing the reply
+            # this way is what a real LLM service's streaming output would
+            # normally do; we just do it in one shot since run_turn() already
+            # returns the complete reply.
+            await self.push_frame(LLMFullResponseStartFrame(), direction)
             await self.push_frame(TextFrame(result["reply"]), direction)
+            await self.push_frame(LLMFullResponseEndFrame(), direction)
             return
 
         await self.push_frame(frame, direction)
@@ -61,4 +75,4 @@ class AgentRuntimeProcessor(FrameProcessor):
                     timeout=aiohttp.ClientTimeout(total=3),
                 )
         except Exception:
-            logger.exception("Failed to report voice action for visitor %s", self._visitor_id)
+            logger.exception(f"Failed to report voice action for visitor {self._visitor_id}")
