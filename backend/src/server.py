@@ -13,6 +13,7 @@ from .context.store import get_session
 from .data.dashboard import dashboard_data
 from .data.analytics import analytics_overview
 from .data.brand_kit import brand_kit_data
+from .data.approvals import approvals_data
 
 app = FastAPI()
 app.add_middleware(
@@ -71,6 +72,11 @@ def get_brand_kit():
 def put_brand_kit(body: dict):
     brand_kit_state.update(body)
     return brand_kit_state
+
+
+@app.get("/api/approvals")
+def get_approvals():
+    return approvals_data
 
 
 class VoiceActionReport(BaseModel):

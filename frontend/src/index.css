@@ -1247,3 +1247,131 @@ body {
 .meet__ctrl--hangup:hover {
   background: #d33426;
 }
+
+/* ---- Approvals (MLR Review) ---- */
+
+.approvals-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 6px;
+  border-radius: 99px;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-muted);
+}
+
+.tab-item--active .approvals-tab-count {
+  background: var(--accent-tint-14);
+  color: var(--accent);
+}
+
+.approvals-search {
+  flex: 1;
+  max-width: 280px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--text);
+  outline: none;
+}
+
+.approvals-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.approvals-table thead {
+  background: rgba(0, 0, 0, 0.02);
+  border-bottom: 1px solid var(--border);
+}
+
+.approvals-table th {
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.approvals-table td {
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.approvals-table tbody tr:hover {
+  background: rgba(0, 0, 0, 0.015);
+}
+
+.approvals-table__primary {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.approvals-table__meta {
+  font-size: 11px;
+  color: #888;
+}
+
+.approvals-type-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: rgba(0, 0, 0, 0.05);
+  color: #666;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.approvals-stage-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.08);
+  color: #2563eb;
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.approvals-state-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.approvals-submitter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.approvals-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-tint-08);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}

@@ -70,6 +70,28 @@ export interface AnalyticsOverview {
   engagementFunnel: FunnelStage[];
 }
 
+export type ApprovalState = "pending" | "approved" | "rejected" | "withdrawn";
+export type ApprovalEntityKind = "asset" | "campaign";
+
+export interface ApprovalRow {
+  id: string;
+  submissionNumber: number;
+  entityKind: ApprovalEntityKind;
+  entity: { name: string; type: string; therapy: string };
+  currentStage: string;
+  stageIndex: number;
+  stageTotal: number;
+  state: ApprovalState;
+  submittedBy: { name: string; email: string };
+  submittedAt: string;
+  canDecide: boolean;
+}
+
+export interface ApprovalsData {
+  rows: ApprovalRow[];
+  stages: string[];
+}
+
 export interface BrandKitData {
   workspaceName: string;
   logoInitials: string;

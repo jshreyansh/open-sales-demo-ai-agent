@@ -49,6 +49,10 @@ export function getBrandKit() {
   return getJson<import("./types").BrandKitData>("/api/brand-kit");
 }
 
+export function getApprovals() {
+  return getJson<import("./types").ApprovalsData>("/api/approvals");
+}
+
 export async function saveBrandKit(data: import("./types").BrandKitData) {
   const res = await fetch(`${API_URL}/api/brand-kit`, {
     method: "PUT",

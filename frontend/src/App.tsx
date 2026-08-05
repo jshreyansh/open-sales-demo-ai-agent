@@ -7,6 +7,7 @@ import Dashboard from "./pages/Dashboard";
 import Analytics from "./pages/Analytics";
 import ContentStudio from "./pages/ContentStudio";
 import BrandKit from "./pages/BrandKit";
+import Approvals from "./pages/Approvals";
 import StubPage from "./pages/StubPage";
 import { NAV_REGISTRY } from "./registry/pages";
 import { executeAction } from "./lib/uiRegistry";
@@ -52,6 +53,7 @@ export default function App() {
     if (activePageId === "dashboard") return <Dashboard />;
     if (activePageId === "analytics") return <Analytics />;
     if (activePageId === "brand-kit") return <BrandKit />;
+    if (activePageId === "mlr-review") return <Approvals />;
     if (activePageId in CONTENT_STUDIO_TABS) {
       return <ContentStudio key={activePageId} initialTab={CONTENT_STUDIO_TABS[activePageId]} />;
     }

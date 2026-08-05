@@ -69,6 +69,25 @@ UI_REGISTRY: List[RegistryPage] = [
         ],
     ),
     RegistryPage(
+        id="mlr-review",
+        label="MLR Review",
+        components=[
+            RegistryComponent(
+                id="queue",
+                label="Approvals queue",
+                description=(
+                    "The multi-stage MLR approval queue — every submission moves through Brand Review, "
+                    "Medical Review, Legal Review, then Compliance Sign-off, with a full audit trail of who "
+                    "approved/rejected each stage and when. This is what 'MLR-ready at generation' feeds "
+                    "into: content still goes through this same review queue, it just arrives already "
+                    "carrying its claims/references/fair-balance/ISI, so it moves through faster and with "
+                    "fewer rejections than content built by hand."
+                ),
+                actions=[RegistryAction(id="highlight", description="Draw attention to the approvals queue")],
+            ),
+        ],
+    ),
+    RegistryPage(
         id="analytics",
         label="Analytics",
         components=[
