@@ -18,7 +18,6 @@ const PHASES = ["Preparing", "Directing visuals", "Assembling scenes", "Adding s
  */
 export default function GenerationScreen({ subjectLabel, sourceLabel, onDone }: GenerationScreenProps) {
   const [progress, setProgress] = useState(0);
-  const [done, setDone] = useState(false);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -26,33 +25,16 @@ export default function GenerationScreen({ subjectLabel, sourceLabel, onDone }: 
         const next = Math.min(100, p + Math.random() * 10 + 4);
         if (next >= 100) {
           window.clearInterval(id);
-          setTimeout(() => setDone(true), 500);
+          setTimeout(onDone, 500);
         }
         return next;
       });
     }, 450);
     return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const phaseIndex = Math.min(PHASES.length - 1, Math.floor((progress / 100) * PHASES.length));
-
-  if (done) {
-    return (
-      <div className="gen-screen gen-screen--done">
-        <div className="gen-screen__done-icon">
-          <Icon name="check-circle" size={36} />
-        </div>
-        <h2>Your {subjectLabel} is ready</h2>
-        <p className="gen-screen__sub">Generated and saved to your Content Library.</p>
-        <div className="gen-screen__thumb">
-          <Icon name="play" size={22} />
-        </div>
-        <button className="btn-primary" onClick={onDone}>
-          Back to Content Studio
-        </button>
-      </div>
-    );
-  }
 
   return (
     <div className="gen-screen">

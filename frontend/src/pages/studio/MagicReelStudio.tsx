@@ -2,8 +2,9 @@ import { useState } from "react";
 import Icon from "../../components/Icon";
 import StepBar from "../../components/studio/StepBar";
 import TeamDock from "../../components/studio/TeamDock";
-import SceneList from "../../components/studio/SceneList";
+import ScenesWorkspace from "../../components/studio/ScenesWorkspace";
 import GenerationScreen from "../../components/studio/GenerationScreen";
+import ReelResult from "../../components/studio/ReelResult";
 import {
   AUDIENCES,
   DOSSIERS,
@@ -23,10 +24,11 @@ type Lane = "dossier" | "news" | "custom";
 const LOGO_POSITIONS = ["Top left", "Top right", "Bottom left", "Bottom right"];
 
 interface MagicReelStudioProps {
-  onExit: () => void;
+  onNavigate: (pageId: string) => void;
 }
 
-export default function MagicReelStudio({ onExit }: MagicReelStudioProps) {
+export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
+  const [view, setView] = useState<"wizard" | "result" | "edit-scenes">("wizard");
   const [step, setStep] = useState(0);
   const [briefSub, setBriefSub] = useState(0);
 
@@ -82,10 +84,55 @@ export default function MagicReelStudio({ onExit }: MagicReelStudioProps) {
     return "I'll draft the script; the MLR Reviewer clears each scene as it lands.";
   }
 
+  if (view === "result") {
+    return (
+      <div className="page studio">
+        <div className="studio__header">
+          <button className="studio__back" onClick={() => onNavigate("content-studio")}>
+            <Icon name="chevron-down" size={14} /> Content Studio
+          </button>
+          <h1 className="page__title">MagicReel™ Studio</h1>
+        </div>
+        <ReelResult
+          name={`${brandName} — ${topics[0] ?? "intro"}`}
+          brand={brandName}
+          audience={AUDIENCES.find((a) => a.id === audience)?.label ?? audience}
+          topic={topics[0] ?? ""}
+          language={language}
+          onEditScenes={() => setView("edit-scenes")}
+          onBackToAssets={() => onNavigate("content-studio")}
+          onSubmitForReview={() => onNavigate("mlr-review")}
+        />
+      </div>
+    );
+  }
+
+  if (view === "edit-scenes") {
+    return (
+      <div className="page studio">
+        <button className="studio__back" onClick={() => setView("result")}>
+          <Icon name="chevron-down" size={14} /> Back to result
+        </button>
+        <h1 className="page__title">
+          {brandName} — {topics[0] ?? "intro"}
+        </h1>
+        <p className="page__subtitle">Edit narration, visual prompts, or images per scene. Save to regenerate only the changed scenes.</p>
+        <div className="studio-card" style={{ maxWidth: 900 }}>
+          <ScenesWorkspace scenes={scenes} onChange={setScenes} brandName={brandName} subtitle={topics[0] ?? ""} />
+          <div className="studio__footer">
+            <button className="btn-primary" onClick={() => setView("result")}>
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page studio">
       <div className="studio__header">
-        <button className="studio__back" onClick={onExit}>
+        <button className="studio__back" onClick={() => onNavigate("content-studio")}>
           <Icon name="chevron-down" size={14} /> Content Studio
         </button>
         <h1 className="page__title">MagicReel™ Studio</h1>
@@ -371,9 +418,9 @@ export default function MagicReelStudio({ onExit }: MagicReelStudioProps) {
         )}
 
         {step === 3 && (
-          <div className="studio-card">
+          <div className="studio-card" style={{ maxWidth: 900 }}>
             <TeamDock activeRole="Creative Producer" message="I've directed each scene to read photoreal and clinical, with a negative prompt that blocks cartoon/CGI looks." />
-            <SceneList scenes={scenes} onChange={setScenes} />
+            <ScenesWorkspace scenes={scenes} onChange={setScenes} brandName={brandName} subtitle={topics[0] ?? ""} />
             <div className="chip-row" style={{ marginTop: 14 }}>
               <label className="studio-toggle-row studio-toggle-row--inline">
                 <input type="checkbox" checked={addIntro} onChange={(e) => setAddIntro(e.target.checked)} /> Add intro card
@@ -393,7 +440,7 @@ export default function MagicReelStudio({ onExit }: MagicReelStudioProps) {
         {step === 4 &&
           (generating ? (
             <div className="studio-card">
-              <GenerationScreen subjectLabel="reel" sourceLabel={`${brandName} · ${topics[0] ?? ""}`} onDone={onExit} />
+              <GenerationScreen subjectLabel="reel" sourceLabel={`${brandName} · ${topics[0] ?? ""}`} onDone={() => setView("result")} />
             </div>
           ) : (
             <div className="studio-card">

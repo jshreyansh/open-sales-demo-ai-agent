@@ -57,7 +57,7 @@ export default function App() {
     if (activePageId === "analytics") return <Analytics />;
     if (activePageId === "brand-kit") return <BrandKit />;
     if (activePageId === "mlr-review") return <Approvals />;
-    if (activePageId === "magicreel-studio") return <MagicReelStudio onExit={() => setActivePageId("content-studio")} />;
+    if (activePageId === "magicreel-studio") return <MagicReelStudio onNavigate={setActivePageId} />;
     if (activePageId === "magicavatar-studio") return <MagicAvatarStudio onExit={() => setActivePageId("content-studio")} />;
     if (activePageId in CONTENT_STUDIO_TABS) {
       return (

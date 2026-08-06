@@ -11,6 +11,9 @@ export interface Scene {
   id: string;
   narration: string;
   visual: string;
+  negativePrompt: string;
+  onScreenText: string;
+  hasCitation: boolean;
 }
 
 export const AUDIENCES = [
@@ -63,22 +66,35 @@ export const MUSIC_TRACKS = [
   { id: "m3", title: "Forward Motion", mood: "Energetic", duration: "1:30" },
 ];
 
+const DEFAULT_NEGATIVE_PROMPT =
+  "cartoon, animated character, 3D render, CGI, illustration, sparkling eyes, waxy skin, on-screen text, packaging label";
+
 export function generateDummyScenes(topic: string, brand: string): Scene[] {
   return [
     {
       id: "s1",
       narration: `${brand} addresses a clear gap in ${topic.toLowerCase()} — one your peers are already asking about.`,
-      visual: "Clinician in consultation, photoreal, warm lighting",
+      visual:
+        "A modern consultation room, deep navy-to-white gradient walls, large clinical window casting soft daylight. A clinician in a white coat sits at a polished desk, sharp but unhurried expression, discussing with a patient.",
+      negativePrompt: DEFAULT_NEGATIVE_PROMPT,
+      onScreenText: topic,
+      hasCitation: true,
     },
     {
       id: "s2",
       narration: `Backed by clinical evidence, ${brand} delivers consistent results across patient profiles.`,
-      visual: "Data visualization overlay, clean clinical setting",
+      visual: "Clean clinical setting, a data visualization overlay showing efficacy trends across a neutral, photoreal background.",
+      negativePrompt: DEFAULT_NEGATIVE_PROMPT,
+      onScreenText: "Clinical evidence",
+      hasCitation: true,
     },
     {
       id: "s3",
       narration: `${brand} is available now — ask your rep for the full prescribing information.`,
-      visual: "Product pack shot, brand color background",
+      visual: "A product pack shot centered against a brand-color gradient background, soft studio lighting.",
+      negativePrompt: DEFAULT_NEGATIVE_PROMPT,
+      onScreenText: "",
+      hasCitation: false,
     },
   ];
 }
