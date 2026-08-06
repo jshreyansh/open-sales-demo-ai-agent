@@ -397,6 +397,72 @@ UI_REGISTRY: List[RegistryPage] = [
             *_content_studio_components(),
         ],
     ),
+    # The two Content Studio formats with a real, walkable studio behind
+    # them (BUILT_STUDIOS on the frontend) — everything else stops at the
+    # format's detail modal. These pages let the agent actually enter the
+    # studio and narrate its way through it step by step, rather than only
+    # being able to describe it from the modal.
+    RegistryPage(
+        id="magicreel-studio",
+        label="MagicReel Studio",
+        components=[
+            RegistryComponent(
+                id="wizard",
+                label="MagicReel wizard",
+                description=(
+                    "The MagicReel™ video-creation wizard — 5 steps in order: Source (brand dossier / news "
+                    "article / custom brief), Brief (audience, topics, goal, voice, language, logo), Script "
+                    "(structure + length, then generate/review the draft script), Scenes (review and edit each "
+                    "scene's narration/visual direction), Generate (pick HD or Cinematic 4K and render). Jumping "
+                    "ahead to Scenes or Generate before a script exists auto-drafts a placeholder script so the "
+                    "screen isn't empty."
+                ),
+                actions=[
+                    RegistryAction(id="step-source", description="Open MagicReel at the Source step (pick brand dossier / news / custom brief)"),
+                    RegistryAction(id="step-brief", description="Jump to the Brief step (audience, topics, goal, voice, language, logo)"),
+                    RegistryAction(id="step-script", description="Jump to the Script step (structure, length, generate the draft script)"),
+                    RegistryAction(id="step-scenes", description="Jump to the Scenes step (review/edit each scene)"),
+                    RegistryAction(id="step-generate", description="Jump to the Generate step (video quality tier, render)"),
+                ],
+            ),
+        ],
+    ),
+    RegistryPage(
+        id="magicavatar-studio",
+        label="MagicAvatar Studio",
+        components=[
+            RegistryComponent(
+                id="launchpad",
+                label="MagicAvatar Launchpad",
+                description=(
+                    "The MagicAvatar front door — explains the 3-stage flow (1: create a silent Master video "
+                    "here, 2: package it into a campaign, 3: reps generate a personalized per-doctor twin in "
+                    "the field). Steps 2 and 3 are a separate mobile rep-portal app, out of scope for this "
+                    "workspace, and stay visibly locked."
+                ),
+                actions=[
+                    RegistryAction(id="open", description="Open the MagicAvatar Launchpad (the front door before the Master wizard)"),
+                    RegistryAction(id="create-master", description="Start creating a Digital Twin Master Video (enters the Master wizard at Brief)"),
+                ],
+            ),
+            RegistryComponent(
+                id="wizard",
+                label="MagicAvatar Master wizard",
+                description=(
+                    "The Digital Twin Master Video wizard — 4 steps in order: Brief (script/notes, persona, "
+                    "aesthetic), Scenes (the team's scene breakdown + visual direction), Options (HD/Cinematic "
+                    "4K, background music), Generate (render the silent master). Jumping ahead before scenes "
+                    "exist auto-drafts a placeholder breakdown so the screen isn't empty."
+                ),
+                actions=[
+                    RegistryAction(id="step-brief", description="Jump to the Brief step (script/notes, persona, aesthetic)"),
+                    RegistryAction(id="step-scenes", description="Jump to the Scenes step (scene breakdown + visual direction)"),
+                    RegistryAction(id="step-options", description="Jump to the Options step (video quality tier, music)"),
+                    RegistryAction(id="step-generate", description="Jump to the Generate step (render the master)"),
+                ],
+            ),
+        ],
+    ),
     RegistryPage(
         id="brand-kit",
         label="Brand Kit",

@@ -10,6 +10,10 @@ const STEPS = ["Brief", "Scenes", "Options", "Generate"];
 type MusicTab = "none" | "library" | "upload";
 
 interface MagicAvatarMasterWizardProps {
+  step: number;
+  onStepChange: (step: number) => void;
+  scenes: Scene[];
+  onScenesChange: (scenes: Scene[]) => void;
   onBack: () => void;
   onDone: () => void;
 }
@@ -20,16 +24,18 @@ interface MagicAvatarMasterWizardProps {
  * entirely — this wizard mirrors the Master-video creation flow reached from
  * the Launchpad's step 1: a silent, reusable presenter video, personalized
  * per-doctor later, outside this flow.
+ *
+ * `step`/`scenes` are controlled by the parent (MagicAvatarStudio) rather
+ * than local state, so the agent's registered step actions — which live on
+ * the always-mounted parent — can jump here even before this component
+ * exists yet.
  */
-export default function MagicAvatarMasterWizard({ onBack, onDone }: MagicAvatarMasterWizardProps) {
-  const [step, setStep] = useState(0);
-
+export default function MagicAvatarMasterWizard({ step, onStepChange: setStep, scenes, onScenesChange: setScenes, onBack, onDone }: MagicAvatarMasterWizardProps) {
   const [name, setName] = useState("");
   const [script, setScript] = useState("");
   const [persona, setPersona] = useState("");
   const [aesthetic, setAesthetic] = useState("");
   const [segmenting, setSegmenting] = useState(false);
-  const [scenes, setScenes] = useState<Scene[]>([]);
   const [addIntro, setAddIntro] = useState(true);
   const [addOutro, setAddOutro] = useState(true);
 

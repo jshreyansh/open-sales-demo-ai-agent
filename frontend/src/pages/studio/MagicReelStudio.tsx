@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useRegisterComponent } from "../../lib/uiRegistry";
 import Icon from "../../components/Icon";
 import StepBar from "../../components/studio/StepBar";
 import TeamDock from "../../components/studio/TeamDock";
@@ -65,6 +66,31 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
   const brandName = lane === "dossier" ? dossier.brand : lane === "custom" ? customTitle || "Your brand" : "This story";
   const grounded = lane === "dossier";
   const topicChoices = TOPICS_BY_AUDIENCE[audience] ?? [];
+
+  // Read via a ref (not the closed-over state) so the agent-registered
+  // actions below — captured once at mount — always see current values.
+  const latest = useRef({ scenes, topics, brandName });
+  latest.current = { scenes, topics, brandName };
+
+  function goToStep(target: number) {
+    setView("wizard");
+    // Skipping straight to Scenes/Generate before ever hitting "Generate
+    // script" would otherwise land on an empty scene list — auto-fill it,
+    // same as clicking through normally would have.
+    if (target >= 3 && latest.current.scenes.length === 0) {
+      const { topics, brandName } = latest.current;
+      setScenes(generateDummyScenes(topics[0] ?? "this product", brandName));
+    }
+    setStep(target);
+  }
+
+  useRegisterComponent("magicreel-studio", "wizard", {
+    "step-source": () => goToStep(0),
+    "step-brief": () => goToStep(1),
+    "step-script": () => goToStep(2),
+    "step-scenes": () => goToStep(3),
+    "step-generate": () => goToStep(4),
+  });
 
   function toggleTopic(t: string) {
     setTopics((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
@@ -138,7 +164,7 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
         <h1 className="page__title">MagicReel™ Studio</h1>
       </div>
 
-      <StepBar steps={STEPS} currentIndex={step} onStepClick={setStep} locked={generating} />
+      <StepBar steps={STEPS} currentIndex={step} onStepClick={goToStep} locked={generating} />
 
       <div className="studio__body">
         {step === 0 && (
