@@ -1641,6 +1641,12 @@ body {
      the same effect as pressing Cmd+- to 90% in Chrome — so the page lays
      itself out as if it had ~11% more width to work with. */
   zoom: 0.9;
+  /* A transformed ancestor becomes the containing block for any
+     position:fixed descendant (e.g. FormatModal's overlay) — so a modal
+     opened while presenting fills just this shared-screen pane instead of
+     covering the real Meeting Mode chrome (topbar, rail, controls). This is
+     a no-op visually; translateZ(0) exists purely to establish that. */
+  transform: translateZ(0);
 }
 
 .meet__stage-inner .app-shell {
