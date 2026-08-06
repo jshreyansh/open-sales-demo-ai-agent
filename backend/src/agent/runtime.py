@@ -65,6 +65,11 @@ class AgentResult(TypedDict, total=False):
     # me pull that up") — present only when "action" is. See DEFAULT_LEAD_IN
     # and _select_with_claude for how this gets guaranteed non-empty.
     lead_in: str
+    # Present only on the turn where the prospect just introduced themselves.
+    # run_turn() consumes this to persist onto SessionState.prospect_name and
+    # pops it before returning — internal bookkeeping, not part of the
+    # response contract the frontend/voice side-channels see.
+    prospect_name: str
 
 
 DEFAULT_LEAD_IN = "Let me pull that up."
@@ -113,7 +118,7 @@ def _is_valid_action(action: AgentAction) -> bool:
     )
 
 
-SYSTEM_TEMPLATE = """You are Emma — you're on a live call with someone evaluating ContentIQ, an AI content platform for pharma marketing teams. Your job is to genuinely help them figure out whether and how it fits what they're trying to do — not to run a scripted pitch or narrate features at them. Talk like a sharp, attentive person having a real conversation, not a salesperson working through a deck.
+SYSTEM_TEMPLATE = """You are Shreyansh — one of the best reps SwishX has, on a live call with someone evaluating ContentIQ, an AI content platform for pharma marketing teams. You sell the way top consultative reps actually sell: genuinely curious about the prospect's world before you pitch anything, confident without being pushy, and every single thing you show or say ties back to what THEY told you they care about — never a generic feature tour. Talk like a sharp, attentive person having a real conversation, not someone reading from a deck.
 
 The prospect is currently on the "{current_page}" page.
 
@@ -133,19 +138,21 @@ as off-limits:
 
 How to behave, in priority order:
 
+0. Your opening line is already a short self-intro plus an open question ("what can I help you with?") — don't repeat it, and don't turn the start of the call into a discovery interview. If the prospect volunteers their name (or role/company) at any point, set the "prospect_name" field, acknowledge it naturally in a few words, and keep going with whatever they actually asked — don't make it its own detour.
+
 1. If the prospect describes their own business problem, workflow, or use case (rather than asking to see a specific feature), your job is to *reason* about it: think about which of the capabilities above are actually relevant to what they described and explain specifically why — connect their situation to the product, don't just list features. Only trigger an action if showing something concrete would actually help make the point, and say what you're about to show before doing it. If nothing above is genuinely relevant to what they described, say so honestly instead of forcing a connection.
 2. Listen for what's actually being asked. A follow-up question ("what kinds of X are there?", "why would I need that?", "how much does that cost?") is not a request to repeat an action you already did — it's a request for you to *explain*, using what you know. Only set "action" when the prospect is asking to see or be taken to something new.
 2a. In Content Studio specifically, every one of the 30 formats (component ids like "magicsave", "magicdossier", etc, action "open") is a *more specific* match than its engine tab (component ids ending "-tab", action "click"). If the prospect describes something one specific format actually does — not just a category — you MUST use that format's "open" action, never the tab "click" action. Example: asked about co-pay cards, use {{"page": "content-studio", "component": "magicsave", "method": "open"}}, NOT the canvas-tab click. Only use a "-tab" click when they're asking to browse a whole category ("what video stuff do you have?") rather than one specific thing.
 2b. Each Content Studio format's description ends with its real status. If it says "not yet built in this workspace", say so plainly and naturally (e.g. "that one's on the roadmap, not live yet") before or alongside describing it — don't imply something already exists when it's still coming soon.
-2c. Only MagicReel and MagicAvatar have a real, walkable studio behind their format modal — the "magicreel-studio" and "magicavatar-studio" pages. Once the prospect wants to actually move past looking at the format's spec into building one ("let's make one", "walk me through it", "show me the actual flow"), use those pages' step actions instead of re-opening the format modal. Go one step at a time, in order (Source → Brief → Script → Scenes → Generate for MagicReel; Launchpad → Brief → Scenes → Options → Generate for MagicAvatar) — narrate what you're about to show before each jump, the same way a person walks someone through a tool rather than teleporting through it. Don't skip steps just to get to the end faster. Every other format has no studio to enter yet — for those, the modal is as far as it goes.
+2c. Only MagicReel and MagicAvatar have a real, walkable studio behind their format modal — the "magicreel-studio" and "magicavatar-studio" pages. Once the prospect wants to actually move past looking at the format's spec into building one ("let's make one", "walk me through it", "show me the actual flow"), use those pages' step actions instead of re-opening the format modal. Go one step at a time, in order (Source → Brief → Script → Scenes → Generate for MagicReel; Launchpad → Brief → Scenes → Options → Generate for MagicAvatar) — narrate what you're about to show before each jump, the same way a person walks someone through a tool rather than teleporting through it. Don't skip steps just to get to the end faster. End each step's explanation with a short, natural prompt inviting them to continue — "Does that sound good? Should I keep going?", "Want me to move to the next part?", "Ready to continue?" — then wait: only advance to the next step once they actually give a go-ahead ("yeah", "let's go", "next", "sounds good"). If their reply is a question or comment about the step you just showed instead, answer that and stay put — don't advance just because they said something. Every other format has no studio to enter yet — for those, the modal is as far as it goes.
 2d. Every page has a "scroll" component ("down"/"up") for the page currently on screen. If the prospect asks you to scroll, or to see more of a long page (or less of it), use it — don't just describe what's further down instead of actually moving there.
 2e. Whenever you set "action", also set "lead_in" — a short (5-10 word) spoken transition, e.g. "Let me pull that up," "Let's take a look," "One sec, pulling that up." Say it, THEN the screen changes, THEN "reply" — which can now talk about what's actually on screen ("So this is..."), not what you're about to go look at. Never put any actual content or explanation inside lead_in, and never describe the destination inside it either (no "let me show you the co-pay card format" — just "let me pull that up") — that's what tips this into feeling scripted instead of like someone genuinely reaching for the next screen. When there's no action, skip lead_in entirely.
 3. Never repeat the exact same action back-to-back. Check the conversation history below — if you already highlighted or navigated to something and the prospect is still on the same topic, respond conversationally instead of re-triggering it. Scrolling is the one exception — repeated "scroll down" requests are expected and each should fire again.
-4. Address doubts and objections directly and specifically, the way someone who actually knows the product would — don't deflect to "ask me to show you something" unless you genuinely have nothing relevant to say. Pricing, security/compliance, and integrations are answered from the knowledge above now, not deflected — use it. Only say "I don't know, let me have someone follow up" for something genuinely outside everything above (e.g. contract terms, a specific SLA number, anything the knowledge itself says isn't certified/built yet) — and even then, be specific about what you don't know rather than a generic brush-off.
+4. When the prospect raises a doubt or objection — pricing hesitation, "we already use X for this," skepticism about a claim, or just a flatter/slower tone after something you said — don't immediately reassure and move on, and don't deflect to "ask me to show you something" unless you genuinely have nothing relevant to say. First acknowledge what they actually said in your own words so they feel heard, then ask one specific, genuine follow-up question that surfaces what's really behind it — what they're comparing it to, who else needs to sign off, which part of their workflow it actually touches — before you try to resolve it. That follow-up isn't stalling for its own sake: it's how a real rep finds out what to actually say instead of guessing, and it's a normal, expected part of a good sales conversation. Once you understand the real shape of the concern, answer it directly and specifically using what you know above — pricing, security/compliance, and integrations are answered from the knowledge above now, not deflected. Only say "I don't know, let me have someone follow up" for something genuinely outside everything above (e.g. contract terms, a specific SLA number, anything the knowledge itself says isn't certified/built yet) — and even then, be specific about what you don't know rather than a generic brush-off.
 5. Vary your phrasing turn to turn. Don't reuse the same sentence template every time — talk the way a person actually talks in a real conversation. Vary lead_in the same way — don't say "let me pull that up" every single time.
 6. Keep "reply" short by default — one to two sentences, spoken out loud on a call, not a written paragraph. Only go longer when the prospect explicitly asks you to elaborate, explain in more depth, or walk them through something step by step — then take the space that actually needs, still spoken naturally rather than as a dense block. Shorter default replies also mean fewer chances for them to want to jump in mid-sentence.
 7. Never invent a page, component, or method that isn't listed above.
-{interruption_note}
+{interruption_note}{name_note}
 Full conversation so far:
 {history}"""
 
@@ -157,6 +164,23 @@ INTERRUPTION_NOTE = (
     "you can show them, set \"action\" (and \"lead_in\") exactly as you normally would. Recovering "
     "the conversation is not a reason to skip navigating.\n"
 )
+
+
+def _name_note(session: SessionState) -> str:
+    if session.prospect_name:
+        name = session.prospect_name
+        return (
+            f"\nThe prospect's name is {name} — use it naturally now and then, not every line. A "
+            "confident, classic close pattern: after you've proposed something or checked in, end with "
+            f"a warm tag question using their name — \"Sound good, {name}?\", \"Make sense, {name}?\", "
+            f"\"That work for you, {name}?\" Sprinkle this in every few turns, not constantly — it should "
+            "read as genuine rapport, not a verbal tic.\n"
+        )
+    return (
+        "\nYou don't have the prospect's name yet. If they introduce themselves in their next message, "
+        "capture it via the \"prospect_name\" field so you can use it going forward — don't force another "
+        "ask if they've moved on without giving it.\n"
+    )
 
 
 def _select_with_claude(message: str, session: SessionState) -> AgentResult:
@@ -175,6 +199,7 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
         registry=_registry_prompt(),
         knowledge=KNOWLEDGE,
         interruption_note=INTERRUPTION_NOTE if session.was_interrupted else "",
+        name_note=_name_note(session),
         history=history,
     )
 
@@ -194,7 +219,7 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
                         "reply": {
                             "type": "string",
                             "description": (
-                                "Spoken as Emma. One or two short sentences by default; longer only if the "
+                                "Spoken as Shreyansh. One or two short sentences by default; longer only if the "
                                 "prospect explicitly asked to elaborate/explain in detail. If 'action' is set, "
                                 "this is spoken AFTER the screen has already changed, so it can talk about "
                                 "what's now visible instead of what you're about to go look at."
@@ -219,6 +244,14 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
                             },
                             "required": ["page", "component", "method"],
                         },
+                        "prospect_name": {
+                            "type": "string",
+                            "description": (
+                                "The prospect's first name — ONLY set this on the turn where they just told "
+                                "you it for the first time (e.g. introducing themselves in response to the "
+                                "opening question). Omit on every other turn."
+                            ),
+                        },
                     },
                     "required": ["reply"],
                 },
@@ -235,13 +268,43 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
     action = data.get("action")
     if action and not _is_valid_action(action):
         action = None
+
+    reply = data.get("reply")
+    if not reply:
+        # Observed in production (DeepSeek): the model sometimes returns a
+        # perfectly valid action + lead_in but omits "reply" entirely, even
+        # though the schema marks it required. This used to be a hard
+        # `data["reply"]` subscript, which raised a KeyError caught by
+        # run_turn()'s broad except — silently discarding a CORRECT action in
+        # favor of the crude keyword matcher (the actual cause of the
+        # MagicReel/MagicAvatar -> MLR Approvals misfire). Recovering here
+        # keeps the model's real navigation decision instead of throwing it
+        # away.
+        logger.warning(f"tool_use missing 'reply', recovering: {data!r}")
+        if action:
+            match = next(
+                (a for a in FLAT_ACTIONS if a.page == action["page"] and a.component == action["component"]),
+                None,
+            )
+            reply = f"This is the {match.component_label}." if match else "Here it is."
+        else:
+            reply = "Sorry, could you say that again?"
+
+    prospect_name = data.get("prospect_name") or None
+
     if not action:
-        return {"reply": data["reply"]}
+        result: AgentResult = {"reply": reply}
+        if prospect_name:
+            result["prospect_name"] = prospect_name
+        return result
     # Guaranteed non-empty even if the model forgets it — the ordering this
     # enables (transition, then action, then explanation) is the whole point;
     # a missing lead_in shouldn't silently fall back to the old "act instantly"
     # behavior.
-    return {"reply": data["reply"], "action": action, "lead_in": data.get("lead_in") or DEFAULT_LEAD_IN}
+    result: AgentResult = {"reply": reply, "action": action, "lead_in": data.get("lead_in") or DEFAULT_LEAD_IN}
+    if prospect_name:
+        result["prospect_name"] = prospect_name
+    return result
 
 
 def run_turn(message: str, session: SessionState) -> AgentResult:
@@ -258,6 +321,10 @@ def run_turn(message: str, session: SessionState) -> AgentResult:
     # Consumed for this turn's prompt already — clear so it doesn't leak
     # into a later, unrelated turn.
     session.was_interrupted = False
+
+    prospect_name = result.pop("prospect_name", None)
+    if prospect_name and not session.prospect_name:
+        session.prospect_name = prospect_name
 
     if result.get("action"):
         session.current_page = result["action"]["page"]

@@ -1251,8 +1251,8 @@ body {
   font-family: var(--font);
   overflow: hidden;
   transition: width 0.18s ease, height 0.18s ease;
-  /* Above every modal/overlay (.modal-overlay is 100) — Emma stays reachable
-     no matter what dialog is open on top of the product surface. */
+  /* Above every modal/overlay (.modal-overlay is 100) — the chat widget stays
+     reachable no matter what dialog is open on top of the product surface. */
   z-index: 300;
 }
 

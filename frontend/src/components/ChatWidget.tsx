@@ -19,7 +19,11 @@ interface ChatMessage {
 }
 
 const visitorId = getVisitorId();
-const WELCOME = "Hi, I'm Emma. Ask me to show you around — the dashboard, content studio, or brand kit.";
+// Kept in sync by hand with backend/src/context/store.py's OPENING_GREETING —
+// the voice pipeline speaks that exact text as its first utterance (see
+// AgentRuntimeProcessor._greet), so this chat bubble matches what a prospect
+// would hear if they switched to Talk mode instead.
+const WELCOME = "Hi, I'm Shreyansh, sales rep at SwishX — here to walk you through the demo. What can I help you with?";
 
 let msgSeq = 0;
 function nextId() {
@@ -58,8 +62,8 @@ export default function ChatWidget({ currentPage, onAction }: ChatWidgetProps) {
   // (interim + final chunks, only the final one is a complete utterance).
   // The agent's side doesn't use RTVIEvent.BotTranscript — pipecat only fires
   // that for a streaming LLMTextFrame, and the voice pipeline pushes one
-  // complete plain TextFrame instead, so that event never fires here. Emma's
-  // reply text arrives via the same voice-reply polling useVoiceSession
+  // complete plain TextFrame instead, so that event never fires here. The
+  // agent's reply text arrives via the same voice-reply polling useVoiceSession
   // already does for actions (see the onReply argument below).
   useRTVIClientEvent(
     RTVIEvent.UserTranscript,
@@ -135,8 +139,8 @@ export default function ChatWidget({ currentPage, onAction }: ChatWidgetProps) {
 
   if (!open) {
     return (
-      <button className="chat-launcher" onClick={() => setOpen(true)} aria-label="Open chat with Emma">
-        <span className="chat-launcher__avatar">E</span>
+      <button className="chat-launcher" onClick={() => setOpen(true)} aria-label="Open chat with Shreyansh">
+        <span className="chat-launcher__avatar">S</span>
       </button>
     );
   }
@@ -145,8 +149,8 @@ export default function ChatWidget({ currentPage, onAction }: ChatWidgetProps) {
     <div className={`chat ${expanded ? "chat--expanded" : ""}`}>
       <div className="chat__header">
         <div className="chat__header-title">
-          <span className="chat__header-avatar">E</span>
-          Emma
+          <span className="chat__header-avatar">S</span>
+          Shreyansh
         </div>
         <div className="chat__header-actions">
           <div className="chat__mode-toggle">

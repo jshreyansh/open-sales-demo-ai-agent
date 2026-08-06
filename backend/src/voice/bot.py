@@ -73,10 +73,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         api_key=os.getenv("CARTESIA_API_KEY"),
         settings=CartesiaTTSService.Settings(
             voice=os.getenv("CARTESIA_VOICE_ID"),
-            # Default pace read as sluggish on a live call — 1.3 is a
-            # noticeable pickup without tipping into unnatural. Valid range
-            # per Cartesia is [0.6, 1.5].
-            generation_config=GenerationConfig(speed=1.3),
+            # Default pace read as sluggish on a live call; 1.3 then read as
+            # too rushed. 1.15 is a middle ground — a noticeable pickup over
+            # default without tipping into unnatural. Valid range per
+            # Cartesia is [0.6, 1.5].
+            generation_config=GenerationConfig(speed=1.15),
         ),
     )
     agent = AgentRuntimeProcessor(visitor_id)

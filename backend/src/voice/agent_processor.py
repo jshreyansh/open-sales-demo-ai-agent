@@ -1,5 +1,11 @@
 import asyncio
+import contextlib
+import os
+import random
+import re
+import subprocess
 import time
+from typing import Dict
 
 import aiohttp
 from loguru import logger
@@ -8,6 +14,8 @@ from pipecat.frames.frames import (
     Frame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
+    OutputAudioRawFrame,
+    StartFrame,
     TextFrame,
     TranscriptionFrame,
     VADUserStartedSpeakingFrame,
@@ -15,19 +23,93 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from ..agent.runtime import run_turn
-from ..context.store import get_session
+from ..context.store import OPENING_GREETING, get_session
 
 REST_API_URL = "http://localhost:8787"
+
+# One of two alternative ways to fill the "thinking" gap while run_turn()
+# resolves — a spoken filler word, or this typing sound, chosen per turn
+# (see TYPING_SOUND_PROBABILITY), never both layered together. The sound of
+# "still working on it," the same way a support agent typing notes mid-call
+# fills a silence naturally instead of leaving dead air.
+TYPING_SOUND_PATH = os.path.join(os.path.dirname(__file__), "assets", "typing.mp3")
+TYPING_SOUND_PROBABILITY = 0.5
+TYPING_SOUND_VOLUME = 0.4
+_CHUNK_MS = 20
+
+_typing_pcm_cache: Dict[int, bytes] = {}
+
+
+def _decode_typing_pcm(sample_rate: int) -> bytes:
+    """Decode the typing sound effect to raw 16-bit mono PCM at the pipeline's
+    actual output sample rate, once per rate (cheap after the first call —
+    cached in-process). Shelling out to ffmpeg rather than adding an audio
+    library dependency; it's already on the box and this only runs once."""
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-i", TYPING_SOUND_PATH,
+                "-f", "s16le", "-acodec", "pcm_s16le",
+                "-ar", str(sample_rate), "-ac", "1",
+                "-filter:a", f"volume={TYPING_SOUND_VOLUME}",
+                "-",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        return proc.stdout
+    except Exception:
+        logger.exception("Failed to decode typing sound effect — skipping it for this session")
+        return b""
+
+
+def _load_typing_pcm(sample_rate: int) -> bytes:
+    if sample_rate not in _typing_pcm_cache:
+        _typing_pcm_cache[sample_rate] = _decode_typing_pcm(sample_rate)
+    return _typing_pcm_cache[sample_rate]
 
 
 def _estimate_speaking_seconds(text: str) -> float:
     """Conservative (slow) estimate of how long TTS will take to speak this
     reply out loud — used only to guess whether a VAD "user started
-    speaking" event landed mid-playback (a real interruption) or after Emma
-    was already done. Erring slow occasionally mislabels a stray post-reply
-    VAD blip as an interruption; erring fast would miss real ones, which is
-    worse."""
+    speaking" event landed mid-playback (a real interruption) or after the
+    agent was already done. Erring slow occasionally mislabels a stray
+    post-reply VAD blip as an interruption; erring fast would miss real
+    ones, which is worse."""
     return max(1.5, len(text) / 12.0) + 0.3
+
+
+# One of two alternative ways to fill the "thinking" gap while run_turn()
+# resolves — a spoken filler word, or the typing sound above, chosen per
+# turn, never both. Spoken immediately on hearing a transcript, before
+# run_turn() (an LLM round trip) even starts, the same way a person says
+# "okay" or "let's see" while they're still forming a real answer, instead of
+# going silent for the full 1-3s the LLM call takes. Pushed as its own TTS
+# utterance ahead of run_turn() rather than after it, so Cartesia is already
+# synthesizing/playing it while run_turn() runs in the background thread.
+#
+# Split into two pools because a filler that only makes sense as a reply to a
+# question ("good question") read as wrong/confusing when the prospect had
+# actually just made a statement — QUESTION_FILLERS is only drawn from when
+# the transcript actually looks like a question (see _is_question).
+NEUTRAL_FILLERS = ["Okay —", "Right —", "Got it —", "I hear you —", "Makes sense —", "Sure —"]
+QUESTION_FILLERS = ["Good question —", "Great question —", "Let's see —"]
+
+_QUESTION_STARTERS = frozenset(
+    [
+        "what", "why", "how", "when", "where", "who", "which", "whose",
+        "is", "are", "was", "were", "do", "does", "did",
+        "can", "could", "will", "would", "should", "shall",
+    ]
+)
+
+
+def _is_question(text: str) -> bool:
+    stripped = text.strip()
+    if stripped.endswith("?"):
+        return True
+    first_word = re.split(r"[^a-zA-Z']+", stripped)[0].lower() if stripped else ""
+    return first_word in _QUESTION_STARTERS
 
 
 class AgentRuntimeProcessor(FrameProcessor):
@@ -63,9 +145,31 @@ class AgentRuntimeProcessor(FrameProcessor):
         super().__init__()
         self._visitor_id = visitor_id
         self._speaking_until = 0.0
+        self._last_filler = None
+        self._greeted = False
+        self._audio_out_sample_rate = 24000  # StartFrame's own default; overwritten once it arrives
+
+    def _pick_filler(self, heard_text: str) -> str:
+        pool = QUESTION_FILLERS + NEUTRAL_FILLERS if _is_question(heard_text) else NEUTRAL_FILLERS
+        choices = [f for f in pool if f != self._last_filler] or pool
+        filler = random.choice(choices)
+        self._last_filler = filler
+        return filler
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
+
+        if isinstance(frame, StartFrame):
+            # StartFrame is the one guaranteed-first frame every processor in
+            # the pipeline receives — forward it before speaking so TTS (and
+            # everything else downstream) has already run its own StartFrame
+            # setup by the time _greet() pushes real audio-bound frames at it.
+            self._audio_out_sample_rate = frame.audio_out_sample_rate
+            await self.push_frame(frame, direction)
+            if not self._greeted:
+                self._greeted = True
+                await self._greet(direction)
+            return
 
         if isinstance(frame, VADUserStartedSpeakingFrame):
             if time.monotonic() < self._speaking_until:
@@ -78,11 +182,33 @@ class AgentRuntimeProcessor(FrameProcessor):
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
             logger.info(f"[{self._visitor_id}] heard: {frame.text!r}")
             session = get_session(self._visitor_id)
+
+            typing_task = None
+            if random.random() < TYPING_SOUND_PROBABILITY:
+                # Typing sound this turn, no spoken filler — the two are
+                # alternatives, not layered together.
+                typing_task = asyncio.create_task(self._play_typing_sound(direction))
+                self._speaking_until = time.monotonic() + 2.0
+            else:
+                filler = self._pick_filler(frame.text)
+                await self._speak(filler, direction)
+                self._speaking_until = time.monotonic() + _estimate_speaking_seconds(filler)
+
             try:
                 result = await asyncio.to_thread(run_turn, frame.text, session)
             except Exception:
                 logger.exception(f"run_turn failed for visitor {self._visitor_id}")
                 result = {"reply": "Sorry, I lost my train of thought — could you say that again?"}
+
+            if typing_task is not None:
+                # Stop dynamically the moment the real reply is ready, rather
+                # than a fixed-length clip — then a short deliberate beat of
+                # silence so it reads as "finished typing, about to talk,"
+                # not audio cutting off right as speech starts.
+                typing_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await typing_task
+                await asyncio.sleep(1.0)
 
             logger.info(f"[{self._visitor_id}] replying: {result!r}")
 
@@ -112,6 +238,35 @@ class AgentRuntimeProcessor(FrameProcessor):
             return
 
         await self.push_frame(frame, direction)
+
+    async def _greet(self, direction: FrameDirection) -> None:
+        # get_session() seeds a brand-new session's history with this exact
+        # text (see context/store.py) — calling it here just ensures the
+        # session exists yet before the prospect has said anything, so that
+        # seeding has already happened by the time run_turn() looks at it.
+        get_session(self._visitor_id)
+        await self._speak(OPENING_GREETING, direction)
+        asyncio.create_task(self._report_reply(OPENING_GREETING))
+        self._speaking_until = time.monotonic() + _estimate_speaking_seconds(OPENING_GREETING)
+
+    async def _play_typing_sound(self, direction: FrameDirection) -> None:
+        rate = self._audio_out_sample_rate
+        pcm = await asyncio.to_thread(_load_typing_pcm, rate)
+        if not pcm:
+            return
+        chunk_bytes = int(rate * _CHUNK_MS / 1000) * 2  # 16-bit mono
+        if chunk_bytes <= 0:
+            return
+        try:
+            while True:
+                for i in range(0, len(pcm) - chunk_bytes, chunk_bytes):
+                    await self.push_frame(
+                        OutputAudioRawFrame(audio=pcm[i : i + chunk_bytes], sample_rate=rate, num_channels=1),
+                        direction,
+                    )
+                    await asyncio.sleep(_CHUNK_MS / 1000)
+        except asyncio.CancelledError:
+            pass
 
     async def _speak(self, text: str, direction: FrameDirection) -> None:
         # TTSService only flushes its sentence-aggregation buffer on an

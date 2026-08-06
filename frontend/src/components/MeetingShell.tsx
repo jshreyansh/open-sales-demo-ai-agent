@@ -39,7 +39,7 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
   const { voiceConnected, isMicEnabled, enableMic, connect, isUserSpeaking, isAgentSpeaking } =
     useVoiceSession(onAction);
 
-  // Emma "joins" only after the countdown finishes — a real call doesn't
+  // Shreyansh "joins" only after the countdown finishes — a real call doesn't
   // connect the instant the tab loads, it shows the join intro first.
   useEffect(() => {
     if (countdown <= 0) return;
@@ -62,8 +62,8 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
     <div className="meet">
       {countdown > 0 && (
         <div className="meet__intro">
-          <div className="meet__intro-avatar">E</div>
-          <div className="meet__intro-text">Emma is joining for the demo…</div>
+          <div className="meet__intro-avatar">S</div>
+          <div className="meet__intro-text">Shreyansh is joining for the demo…</div>
           <div className="meet__intro-count">{countdown}</div>
         </div>
       )}
@@ -77,8 +77,8 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
         </div>
         <div className="meet__topbar-right">
           <span className="meet__presenting">
-            <span className="meet__avatar meet__avatar--tiny meet__avatar--tiny-agent">E</span>
-            Emma · AI Agent (Presenting)
+            <span className="meet__avatar meet__avatar--tiny meet__avatar--tiny-agent">S</span>
+            Shreyansh · AI Agent (Presenting)
           </span>
           <span className="meet__people">
             <MeetIcon name="people" size={16} /> 2
@@ -108,9 +108,9 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
             <span className="meet__mic-badge">
               <MeetIcon name="mic" size={13} />
             </span>
-            <div className="meet__avatar meet__avatar--agent">E</div>
+            <div className="meet__avatar meet__avatar--agent">S</div>
             <VoiceDots active={isAgentSpeaking} />
-            <div className="meet__tile-label">Emma · AI Agent</div>
+            <div className="meet__tile-label">Shreyansh · AI Agent</div>
           </div>
         </div>
       </div>
