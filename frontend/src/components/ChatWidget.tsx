@@ -103,15 +103,28 @@ export default function ChatWidget({ currentPage, onAction }: ChatWidgetProps) {
     setInput("");
     setSending(true);
     try {
-      const { reply, action } = await sendMessage(visitorId, text, currentPageRef.current);
-      appendMessage("agent", reply);
-      if (action) {
-        // There's no real speech to sync to in typed chat, so approximate
-        // reading pace instead — the reply is fully explained by the time
-        // the action lands, rather than the screen jumping the instant the
-        // text appears.
-        const readMs = Math.min(6000, Math.max(900, reply.length * 45));
-        window.setTimeout(() => onAction(action), readMs);
+      const { reply, action, lead_in } = await sendMessage(visitorId, text, currentPageRef.current);
+      if (action && lead_in) {
+        // Same "transition, then action, then explanation" ordering as the
+        // voice path: show the lead-in, give it a beat to actually be read,
+        // then fire the action and reveal the explanation together — so the
+        // reply can talk about what's now on screen instead of what's about
+        // to be shown.
+        appendMessage("agent", lead_in);
+        const leadMs = Math.min(2200, Math.max(500, lead_in.length * 45));
+        window.setTimeout(() => {
+          onAction(action);
+          appendMessage("agent", reply);
+        }, leadMs);
+      } else {
+        appendMessage("agent", reply);
+        if (action) {
+          // No lead_in (shouldn't normally happen) — approximate reading
+          // pace on the full reply as a fallback so the action still doesn't
+          // jump the instant the text appears.
+          const readMs = Math.min(6000, Math.max(900, reply.length * 45));
+          window.setTimeout(() => onAction(action), readMs);
+        }
       }
     } catch {
       appendMessage("agent", "Sorry, I couldn't reach the demo backend.");

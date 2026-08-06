@@ -61,6 +61,13 @@ class AgentAction(TypedDict):
 class AgentResult(TypedDict, total=False):
     reply: str
     action: AgentAction
+    # Short transition spoken/shown right before the action fires (e.g. "Let
+    # me pull that up") — present only when "action" is. See DEFAULT_LEAD_IN
+    # and _select_with_claude for how this gets guaranteed non-empty.
+    lead_in: str
+
+
+DEFAULT_LEAD_IN = "Let me pull that up."
 
 
 def _keyword_match(message: str) -> Optional[FlatAction]:
@@ -83,8 +90,9 @@ def _fallback_reply(action: Optional[FlatAction]) -> AgentResult:
             "reply": "Ask me to show you something — the dashboard, content studio, or brand kit — and I'll walk you through it."
         }
     return {
-        "reply": f"Sure — let me show you the {action.component_label}.",
+        "reply": f"This is the {action.component_label}.",
         "action": {"page": action.page, "component": action.component, "method": action.method},
+        "lead_in": DEFAULT_LEAD_IN,
     }
 
 
@@ -131,14 +139,24 @@ How to behave, in priority order:
 2b. Each Content Studio format's description ends with its real status. If it says "not yet built in this workspace", say so plainly and naturally (e.g. "that one's on the roadmap, not live yet") before or alongside describing it — don't imply something already exists when it's still coming soon.
 2c. Only MagicReel and MagicAvatar have a real, walkable studio behind their format modal — the "magicreel-studio" and "magicavatar-studio" pages. Once the prospect wants to actually move past looking at the format's spec into building one ("let's make one", "walk me through it", "show me the actual flow"), use those pages' step actions instead of re-opening the format modal. Go one step at a time, in order (Source → Brief → Script → Scenes → Generate for MagicReel; Launchpad → Brief → Scenes → Options → Generate for MagicAvatar) — narrate what you're about to show before each jump, the same way a person walks someone through a tool rather than teleporting through it. Don't skip steps just to get to the end faster. Every other format has no studio to enter yet — for those, the modal is as far as it goes.
 2d. Every page has a "scroll" component ("down"/"up") for the page currently on screen. If the prospect asks you to scroll, or to see more of a long page (or less of it), use it — don't just describe what's further down instead of actually moving there.
+2e. Whenever you set "action", also set "lead_in" — a short (5-10 word) spoken transition, e.g. "Let me pull that up," "Let's take a look," "One sec, pulling that up." Say it, THEN the screen changes, THEN "reply" — which can now talk about what's actually on screen ("So this is..."), not what you're about to go look at. Never put any actual content or explanation inside lead_in, and never describe the destination inside it either (no "let me show you the co-pay card format" — just "let me pull that up") — that's what tips this into feeling scripted instead of like someone genuinely reaching for the next screen. When there's no action, skip lead_in entirely.
 3. Never repeat the exact same action back-to-back. Check the conversation history below — if you already highlighted or navigated to something and the prospect is still on the same topic, respond conversationally instead of re-triggering it. Scrolling is the one exception — repeated "scroll down" requests are expected and each should fire again.
 4. Address doubts and objections directly and specifically, the way someone who actually knows the product would — don't deflect to "ask me to show you something" unless you genuinely have nothing relevant to say. Pricing, security/compliance, and integrations are answered from the knowledge above now, not deflected — use it. Only say "I don't know, let me have someone follow up" for something genuinely outside everything above (e.g. contract terms, a specific SLA number, anything the knowledge itself says isn't certified/built yet) — and even then, be specific about what you don't know rather than a generic brush-off.
-5. Vary your phrasing turn to turn. Don't reuse the same sentence template every time — talk the way a person actually talks in a real conversation.
-6. Keep replies short — one to two sentences, spoken out loud on a call, not a written paragraph.
+5. Vary your phrasing turn to turn. Don't reuse the same sentence template every time — talk the way a person actually talks in a real conversation. Vary lead_in the same way — don't say "let me pull that up" every single time.
+6. Keep "reply" short by default — one to two sentences, spoken out loud on a call, not a written paragraph. Only go longer when the prospect explicitly asks you to elaborate, explain in more depth, or walk them through something step by step — then take the space that actually needs, still spoken naturally rather than as a dense block. Shorter default replies also mean fewer chances for them to want to jump in mid-sentence.
 7. Never invent a page, component, or method that isn't listed above.
-
+{interruption_note}
 Full conversation so far:
 {history}"""
+
+INTERRUPTION_NOTE = (
+    "\nThe prospect just cut you off mid-reply on the last turn — they didn't hear the rest of "
+    "what you were saying. Don't assume they caught your full previous explanation; respond to "
+    "what they're asking now, and only circle back to the cut-off point if it's still relevant. "
+    "This changes nothing about whether to act — if what they're asking for now maps to something "
+    "you can show them, set \"action\" (and \"lead_in\") exactly as you normally would. Recovering "
+    "the conversation is not a reason to skip navigating.\n"
+)
 
 
 def _select_with_claude(message: str, session: SessionState) -> AgentResult:
@@ -156,6 +174,7 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
         overview=PRODUCT_OVERVIEW,
         registry=_registry_prompt(),
         knowledge=KNOWLEDGE,
+        interruption_note=INTERRUPTION_NOTE if session.was_interrupted else "",
         history=history,
     )
 
@@ -172,7 +191,24 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "reply": {"type": "string", "description": "One or two short sentences, spoken as Emma."},
+                        "reply": {
+                            "type": "string",
+                            "description": (
+                                "Spoken as Emma. One or two short sentences by default; longer only if the "
+                                "prospect explicitly asked to elaborate/explain in detail. If 'action' is set, "
+                                "this is spoken AFTER the screen has already changed, so it can talk about "
+                                "what's now visible instead of what you're about to go look at."
+                            ),
+                        },
+                        "lead_in": {
+                            "type": "string",
+                            "description": (
+                                "Required whenever 'action' is set, omitted otherwise. A short (5-10 word) "
+                                "spoken transition said right before the screen changes, e.g. 'Let me pull "
+                                "that up' or 'Let's take a look at that.' No content or destination detail — "
+                                "just the transition."
+                            ),
+                        },
                         "action": {
                             "type": "object",
                             "description": "Omit this field entirely if no listed component matches the request, or if you already did this action and the prospect is asking a follow-up question instead.",
@@ -198,8 +234,14 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
     data = tool_use.input
     action = data.get("action")
     if action and not _is_valid_action(action):
+        action = None
+    if not action:
         return {"reply": data["reply"]}
-    return {"reply": data["reply"], "action": action} if action else {"reply": data["reply"]}
+    # Guaranteed non-empty even if the model forgets it — the ordering this
+    # enables (transition, then action, then explanation) is the whole point;
+    # a missing lead_in shouldn't silently fall back to the old "act instantly"
+    # behavior.
+    return {"reply": data["reply"], "action": action, "lead_in": data.get("lead_in") or DEFAULT_LEAD_IN}
 
 
 def run_turn(message: str, session: SessionState) -> AgentResult:
@@ -213,6 +255,9 @@ def run_turn(message: str, session: SessionState) -> AgentResult:
             result = _fallback_reply(_keyword_match(message))
     else:
         result = _fallback_reply(_keyword_match(message))
+    # Consumed for this turn's prompt already — clear so it doesn't leak
+    # into a later, unrelated turn.
+    session.was_interrupted = False
 
     if result.get("action"):
         session.current_page = result["action"]["page"]

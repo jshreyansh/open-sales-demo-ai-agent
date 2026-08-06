@@ -12,6 +12,11 @@ class HistoryEntry:
 class SessionState:
     history: List[HistoryEntry] = field(default_factory=list)
     current_page: str = "dashboard"
+    # Set by the voice pipeline when the visitor started talking while Emma
+    # was still (estimated to be) mid-reply — read once by the next run_turn
+    # call so the agent knows its last explanation may have landed only
+    # partially, then cleared.
+    was_interrupted: bool = False
 
 
 _sessions: Dict[str, SessionState] = {}

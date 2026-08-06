@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -37,7 +37,11 @@ _pending_voice_actions: Dict[str, dict] = {}
 # complete reply, there's no real streaming LLM to bracket), so that event
 # never fires. Reporting the text through this side-channel — identical
 # pattern to voice actions — is what actually gets it into the chat transcript.
-_pending_voice_replies: Dict[str, str] = {}
+#
+# A queue, not a single slot: a turn with an action reports two texts in
+# quick succession (the lead_in, then the reply) — a single dict slot would
+# let the second POST silently clobber the first before a poll ever saw it.
+_pending_voice_replies: Dict[str, List[str]] = {}
 
 
 class ChatRequest(BaseModel):
@@ -114,17 +118,22 @@ class VoiceReplyReport(BaseModel):
 
 @app.post("/internal/voice-reply")
 def report_voice_reply(body: VoiceReplyReport):
-    """Called by the voice process to hand off the spoken reply's text so
-    it can show up in the chat transcript."""
-    _pending_voice_replies[body.visitorId] = body.reply
+    """Called by the voice process to hand off a piece of spoken text (a
+    lead_in, or a reply) so it can show up in the chat transcript as its own
+    bubble."""
+    _pending_voice_replies.setdefault(body.visitorId, []).append(body.reply)
     return {"ok": True}
 
 
 @app.get("/api/voice-reply/{visitor_id}")
 def get_voice_reply(visitor_id: str):
     """Polled by the frontend during an active voice call. Returns and
-    clears the pending reply text, or "" if there isn't one."""
-    return {"reply": _pending_voice_replies.pop(visitor_id, "")}
+    clears the oldest pending reply text, or "" if there isn't one — one
+    per poll, so a lead_in and its reply each land as separate bubbles."""
+    queue = _pending_voice_replies.get(visitor_id)
+    if not queue:
+        return {"reply": ""}
+    return {"reply": queue.pop(0)}
 
 
 if __name__ == "__main__":

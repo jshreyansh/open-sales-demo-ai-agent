@@ -27,58 +27,11 @@ export function useVoiceSession(onAction: (action: AgentAction) => void, onReply
 
   const [isUserSpeaking, setIsUserSpeaking] = useState(false);
   const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
-  const isAgentSpeakingRef = useRef(false);
-  isAgentSpeakingRef.current = isAgentSpeaking;
 
   useRTVIClientEvent(RTVIEvent.UserStartedSpeaking, useCallback(() => setIsUserSpeaking(true), []));
   useRTVIClientEvent(RTVIEvent.UserStoppedSpeaking, useCallback(() => setIsUserSpeaking(false), []));
   useRTVIClientEvent(RTVIEvent.BotStartedSpeaking, useCallback(() => setIsAgentSpeaking(true), []));
   useRTVIClientEvent(RTVIEvent.BotStoppedSpeaking, useCallback(() => setIsAgentSpeaking(false), []));
-
-  // The backend decides an action's text and its navigation in the same
-  // turn, but the action shouldn't land until she's actually said the part
-  // where she's navigating — otherwise the screen jumps while she's still
-  // mid-sentence explaining. Hold it until she goes quiet.
-  const pendingActionRef = useRef<AgentAction | null>(null);
-  const silenceTimerRef = useRef<number | null>(null);
-  const safetyTimerRef = useRef<number | null>(null);
-
-  function clearActionTimers() {
-    if (silenceTimerRef.current) {
-      window.clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-    if (safetyTimerRef.current) {
-      window.clearTimeout(safetyTimerRef.current);
-      safetyTimerRef.current = null;
-    }
-  }
-
-  function flushPendingAction() {
-    clearActionTimers();
-    const action = pendingActionRef.current;
-    if (!action) return;
-    pendingActionRef.current = null;
-    onActionRef.current(action);
-  }
-
-  useEffect(() => {
-    if (isAgentSpeaking) {
-      // Speaking again (e.g. the next sentence) — a brief pause between
-      // sentences shouldn't count as "done", so cancel any pending flush.
-      if (silenceTimerRef.current) {
-        window.clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = null;
-      }
-      return;
-    }
-    if (!pendingActionRef.current) return;
-    silenceTimerRef.current = window.setTimeout(flushPendingAction, 400);
-    return () => {
-      if (silenceTimerRef.current) window.clearTimeout(silenceTimerRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAgentSpeaking]);
 
   async function connect() {
     // Connect only once — reconnecting fires the client library's own
@@ -97,7 +50,16 @@ export function useVoiceSession(onAction: (action: AgentAction) => void, onReply
 
   // Voice-triggered UI actions (and, for callers that want it, the reply
   // text itself) arrive out-of-band — the voice process is a separate
-  // service from the REST API — so poll while a call is active.
+  // service from the REST API — so poll while a call is active. Actions
+  // fire the instant they're seen: the backend already delays reporting an
+  // action until the right moment (right after a short spoken lead-in, not
+  // at the end of the whole reply), so there's nothing left to wait for
+  // here. An older version of this hook re-delayed actions until
+  // BotStoppedSpeaking, which made sense before that backend-side ordering
+  // existed — but a lead-in and its explanation play as one continuous TTS
+  // session with only a few milliseconds' gap between them, invisible to
+  // this poll's 800ms cadence, so that logic would've just delayed the
+  // action all over again until the entire reply finished.
   useEffect(() => {
     if (!voiceConnected) return;
     const id = setInterval(async () => {
@@ -106,16 +68,7 @@ export function useVoiceSession(onAction: (action: AgentAction) => void, onReply
         onReplyRef.current ? getVoiceReply(visitorId).catch(() => null) : Promise.resolve(null),
       ]);
       if (reply) onReplyRef.current?.(reply);
-      if (!action) return;
-      if (isAgentSpeakingRef.current) {
-        pendingActionRef.current = action;
-        // Safety net in case BotStoppedSpeaking never arrives — don't hold
-        // a navigation forever.
-        clearActionTimers();
-        safetyTimerRef.current = window.setTimeout(flushPendingAction, 8000);
-      } else {
-        onActionRef.current(action);
-      }
+      if (action) onActionRef.current(action);
     }, 800);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -9,6 +9,10 @@ export interface AgentAction {
 export interface ChatResponse {
   reply: string;
   action?: AgentAction;
+  // Present only alongside "action" — a short transition ("let me pull that
+  // up") meant to be shown/said before the action fires, with "reply" (the
+  // actual explanation) following after.
+  lead_in?: string;
 }
 
 export async function sendMessage(
