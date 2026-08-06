@@ -1240,25 +1240,88 @@ body {
   position: fixed;
   bottom: 24px;
   right: 24px;
-  width: 320px;
+  width: 340px;
+  height: 480px;
   background: white;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
   display: flex;
   flex-direction: column;
-  max-height: 420px;
   font-family: var(--font);
+  overflow: hidden;
+  transition: width 0.18s ease, height 0.18s ease;
+  /* Above every modal/overlay (.modal-overlay is 100) — Emma stays reachable
+     no matter what dialog is open on top of the product surface. */
+  z-index: 300;
+}
+
+.chat--expanded {
+  width: 420px;
+  height: 680px;
+}
+
+.chat-launcher {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+}
+
+.chat-launcher:hover {
+  filter: brightness(1.05);
+}
+
+.chat-launcher__avatar {
+  color: white;
+  font-weight: 700;
+  font-size: 20px;
 }
 
 .chat__header {
-  padding: 10px 12px 10px 16px;
+  padding: 12px 10px 12px 14px;
   font-weight: 600;
   border-bottom: 1px solid #eee;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex-shrink: 0;
+}
+
+.chat__header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat__header-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .chat__mode-toggle {
@@ -1298,64 +1361,97 @@ body {
   cursor: default;
 }
 
-.chat__mute-btn {
+.chat__icon-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
-  border: 1px solid var(--border);
-  background: white;
-  color: var(--text);
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
   cursor: pointer;
   margin-left: 2px;
 }
 
-.chat__mute-btn:hover {
-  background: rgba(0, 0, 0, 0.04);
+.chat__icon-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text);
 }
 
 .chat__messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 12px 16px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-height: 280px;
+  gap: 10px;
 }
 
 .chat__message {
   font-size: 14px;
-  padding: 8px 10px;
-  border-radius: 8px;
+  line-height: 1.4;
+  padding: 9px 12px;
+  border-radius: 14px;
   max-width: 85%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .chat__message--agent {
   background: var(--accent-tint-08);
+  color: var(--text);
   align-self: flex-start;
+  border-bottom-left-radius: 4px;
 }
 
 .chat__message--user {
   background: var(--accent);
   color: white;
   align-self: flex-end;
+  border-bottom-right-radius: 4px;
+}
+
+.chat__message--typing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 14px;
+}
+
+.chat__typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.5;
+  animation: chat-typing-bounce 1s ease-in-out infinite;
+}
+
+.chat__typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.chat__typing-dot:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes chat-typing-bounce {
+  0%, 100% { transform: translateY(0); opacity: 0.4; }
+  50% { transform: translateY(-3px); opacity: 1; }
 }
 
 .chat__input {
   display: flex;
   border-top: 1px solid #eee;
+  flex-shrink: 0;
 }
 
 .chat__input input {
   flex: 1;
   border: none;
-  padding: 12px;
+  padding: 12px 14px;
   font-size: 14px;
   outline: none;
   font-family: var(--font);
+  min-width: 0;
 }
 
 .chat__input button {
@@ -1365,6 +1461,11 @@ body {
   font-weight: 600;
   padding: 0 16px;
   cursor: pointer;
+}
+
+.chat__input button:disabled {
+  color: var(--text-muted);
+  cursor: default;
 }
 
 .panel {
@@ -1397,6 +1498,7 @@ body {
 /* ---- Meeting Mode ---- */
 
 .meet {
+  position: relative;
   height: 100vh;
   width: 100vw;
   background: #202124;
@@ -1457,6 +1559,48 @@ body {
   padding: 6px;
   margin: 0 20px 10px;
   border-radius: 6px;
+}
+
+.meet__intro {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: #202124;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+
+.meet__intro-avatar {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  font-weight: 700;
+  font-size: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: meet-intro-pulse 1.4s ease-in-out infinite;
+}
+
+.meet__intro-text {
+  font-size: 15px;
+  color: #e8eaed;
+}
+
+.meet__intro-count {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+@keyframes meet-intro-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.15); }
+  50% { box-shadow: 0 0 0 14px rgba(255, 255, 255, 0); }
 }
 
 .meet__body {
@@ -1584,6 +1728,48 @@ body {
   font-weight: 700;
 }
 
+.meet__avatar--tiny-agent {
+  background: var(--accent);
+}
+
+.voice-dots {
+  position: absolute;
+  bottom: 8px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 7px;
+  border-radius: 99px;
+  background: rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.voice-dots--active {
+  opacity: 1;
+}
+
+.voice-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #81c995;
+}
+
+.voice-dots--active span {
+  animation: voice-dot-pulse 0.9s ease-in-out infinite;
+}
+
+.voice-dots span:nth-child(2) { animation-delay: 0.12s; }
+.voice-dots span:nth-child(3) { animation-delay: 0.24s; }
+.voice-dots span:nth-child(4) { animation-delay: 0.36s; }
+
+@keyframes voice-dot-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.5; }
+  50% { transform: scale(1.7); opacity: 1; }
+}
+
 .meet__controls {
   display: flex;
   justify-content: center;
@@ -1598,6 +1784,7 @@ body {
   height: 44px;
   border-radius: 50%;
   border: none;
+  outline: none;
   background: rgba(255, 255, 255, 0.1);
   color: #e8eaed;
   display: flex;
@@ -1608,6 +1795,11 @@ body {
 
 .meet__ctrl:hover {
   background: rgba(255, 255, 255, 0.18);
+}
+
+.meet__ctrl:focus-visible {
+  outline: 2px solid #8ab4f8;
+  outline-offset: 2px;
 }
 
 .meet__ctrl--off {

@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
-import { usePipecatClientMicControl, usePipecatClientTransportState } from "@pipecat-ai/client-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { usePipecatClientMicControl, usePipecatClientTransportState, useRTVIClientEvent } from "@pipecat-ai/client-react";
+import { RTVIEvent } from "@pipecat-ai/client-js";
 import { getVoiceAction, type AgentAction } from "./api";
 import { getVisitorId } from "./session";
 import { connectVoice } from "./pipecatClient";
@@ -22,6 +23,61 @@ export function useVoiceSession(onAction: (action: AgentAction) => void) {
   const onActionRef = useRef(onAction);
   onActionRef.current = onAction;
 
+  const [isUserSpeaking, setIsUserSpeaking] = useState(false);
+  const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
+  const isAgentSpeakingRef = useRef(false);
+  isAgentSpeakingRef.current = isAgentSpeaking;
+
+  useRTVIClientEvent(RTVIEvent.UserStartedSpeaking, useCallback(() => setIsUserSpeaking(true), []));
+  useRTVIClientEvent(RTVIEvent.UserStoppedSpeaking, useCallback(() => setIsUserSpeaking(false), []));
+  useRTVIClientEvent(RTVIEvent.BotStartedSpeaking, useCallback(() => setIsAgentSpeaking(true), []));
+  useRTVIClientEvent(RTVIEvent.BotStoppedSpeaking, useCallback(() => setIsAgentSpeaking(false), []));
+
+  // The backend decides an action's text and its navigation in the same
+  // turn, but the action shouldn't land until she's actually said the part
+  // where she's navigating — otherwise the screen jumps while she's still
+  // mid-sentence explaining. Hold it until she goes quiet.
+  const pendingActionRef = useRef<AgentAction | null>(null);
+  const silenceTimerRef = useRef<number | null>(null);
+  const safetyTimerRef = useRef<number | null>(null);
+
+  function clearActionTimers() {
+    if (silenceTimerRef.current) {
+      window.clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    if (safetyTimerRef.current) {
+      window.clearTimeout(safetyTimerRef.current);
+      safetyTimerRef.current = null;
+    }
+  }
+
+  function flushPendingAction() {
+    clearActionTimers();
+    const action = pendingActionRef.current;
+    if (!action) return;
+    pendingActionRef.current = null;
+    onActionRef.current(action);
+  }
+
+  useEffect(() => {
+    if (isAgentSpeaking) {
+      // Speaking again (e.g. the next sentence) — a brief pause between
+      // sentences shouldn't count as "done", so cancel any pending flush.
+      if (silenceTimerRef.current) {
+        window.clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
+      return;
+    }
+    if (!pendingActionRef.current) return;
+    silenceTimerRef.current = window.setTimeout(flushPendingAction, 400);
+    return () => {
+      if (silenceTimerRef.current) window.clearTimeout(silenceTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAgentSpeaking]);
+
   async function connect() {
     // Connect only once — reconnecting fires the client library's own
     // "Connected" handler, which wipes the whole conversation history as a
@@ -43,10 +99,30 @@ export function useVoiceSession(onAction: (action: AgentAction) => void) {
     if (!voiceConnected) return;
     const id = setInterval(async () => {
       const action = await getVoiceAction(visitorId).catch(() => null);
-      if (action) onActionRef.current(action);
+      if (!action) return;
+      if (isAgentSpeakingRef.current) {
+        pendingActionRef.current = action;
+        // Safety net in case BotStoppedSpeaking never arrives — don't hold
+        // a navigation forever.
+        clearActionTimers();
+        safetyTimerRef.current = window.setTimeout(flushPendingAction, 8000);
+      } else {
+        onActionRef.current(action);
+      }
     }, 800);
     return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceConnected]);
 
-  return { transportState, connecting, voiceConnected, isMicEnabled, enableMic, connect, mute };
+  return {
+    transportState,
+    connecting,
+    voiceConnected,
+    isMicEnabled,
+    enableMic,
+    connect,
+    mute,
+    isUserSpeaking,
+    isAgentSpeaking,
+  };
 }
