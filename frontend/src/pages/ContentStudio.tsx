@@ -6,12 +6,13 @@ import FormatModal from "../components/FormatModal";
 
 interface ContentStudioProps {
   initialTab?: string;
+  onOpenStudio: (studioId: string) => void;
 }
 
 const AUDIENCES = ["HCP", "Patient", "Payer"];
 const totalFormats = MAGIC_ENGINES.reduce((sum, e) => sum + e.formats.length, 0);
 
-export default function ContentStudio({ initialTab }: ContentStudioProps) {
+export default function ContentStudio({ initialTab, onOpenStudio }: ContentStudioProps) {
   const [tab, setTab] = useState(initialTab ?? "All");
   const [objective, setObjective] = useState<Stage | null>(null);
   const [audience, setAudience] = useState<string | null>(null);
@@ -165,6 +166,10 @@ export default function ContentStudio({ initialTab }: ContentStudioProps) {
           engineLabel={selected.engine.label}
           engineIcon={selected.engine.icon}
           onClose={() => setSelected(null)}
+          onOpenStudio={(studioId) => {
+            setSelected(null);
+            onOpenStudio(studioId);
+          }}
         />
       )}
     </div>

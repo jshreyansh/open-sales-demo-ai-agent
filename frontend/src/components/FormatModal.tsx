@@ -1,16 +1,21 @@
 import { useEffect } from "react";
 import Icon from "./Icon";
-import { MLR_INPUTS, STAGE_LABELS, TEAM_ROLES } from "../registry/contentStudio";
+import { formatSlug, MLR_INPUTS, STAGE_LABELS, TEAM_ROLES } from "../registry/contentStudio";
 import type { ContentFormat } from "../registry/contentStudio";
+
+// Only these two studios are actually built so far — every other format's
+// button stays decorative until its own flow gets built the same way.
+const BUILT_STUDIOS = new Set(["magicreel", "magicavatar"]);
 
 interface FormatModalProps {
   format: ContentFormat;
   engineLabel: string;
   engineIcon: string;
   onClose: () => void;
+  onOpenStudio: (studioId: string) => void;
 }
 
-export default function FormatModal({ format, engineLabel, engineIcon, onClose }: FormatModalProps) {
+export default function FormatModal({ format, engineLabel, engineIcon, onClose, onOpenStudio }: FormatModalProps) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -166,8 +171,14 @@ export default function FormatModal({ format, engineLabel, engineIcon, onClose }
             <button className="btn modal__cta modal__cta--soon" disabled>
               <Icon name="clock" size={14} /> Coming Soon
             </button>
+          ) : BUILT_STUDIOS.has(formatSlug(format.tool)) ? (
+            <button className="btn-primary modal__cta" onClick={() => onOpenStudio(formatSlug(format.tool))}>
+              Open {format.tool} Studio →
+            </button>
           ) : (
-            <button className="btn-primary modal__cta">Open {format.tool} Studio →</button>
+            <button className="btn modal__cta modal__cta--soon" disabled>
+              Studio UI not built yet for this format
+            </button>
           )}
         </div>
       </div>

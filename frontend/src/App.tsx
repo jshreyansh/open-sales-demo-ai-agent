@@ -10,6 +10,8 @@ import ContentStudio from "./pages/ContentStudio";
 import BrandKit from "./pages/BrandKit";
 import Approvals from "./pages/Approvals";
 import StubPage from "./pages/StubPage";
+import MagicReelStudio from "./pages/studio/MagicReelStudio";
+import MagicAvatarStudio from "./pages/studio/MagicAvatarStudio";
 import { NAV_REGISTRY } from "./registry/pages";
 import { executeAction } from "./lib/uiRegistry";
 import { disconnectVoice, pipecatClient } from "./lib/pipecatClient";
@@ -55,8 +57,16 @@ export default function App() {
     if (activePageId === "analytics") return <Analytics />;
     if (activePageId === "brand-kit") return <BrandKit />;
     if (activePageId === "mlr-review") return <Approvals />;
+    if (activePageId === "magicreel-studio") return <MagicReelStudio onExit={() => setActivePageId("content-studio")} />;
+    if (activePageId === "magicavatar-studio") return <MagicAvatarStudio onExit={() => setActivePageId("content-studio")} />;
     if (activePageId in CONTENT_STUDIO_TABS) {
-      return <ContentStudio key={activePageId} initialTab={CONTENT_STUDIO_TABS[activePageId]} />;
+      return (
+        <ContentStudio
+          key={activePageId}
+          initialTab={CONTENT_STUDIO_TABS[activePageId]}
+          onOpenStudio={(studioId) => setActivePageId(`${studioId}-studio`)}
+        />
+      );
     }
     return <StubPage label={findLabel(activePageId)} />;
   }
