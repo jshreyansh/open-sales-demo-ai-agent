@@ -35,7 +35,7 @@ from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
-from pipecat.services.cartesia.tts import CartesiaTTSService
+from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
 from pipecat.services.groq.stt import GroqSTTService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.workers.runner import WorkerRunner
@@ -71,7 +71,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     stt = GroqSTTService(api_key=os.getenv("GROQ_API_KEY"))
     tts = CartesiaTTSService(
         api_key=os.getenv("CARTESIA_API_KEY"),
-        settings=CartesiaTTSService.Settings(voice=os.getenv("CARTESIA_VOICE_ID")),
+        settings=CartesiaTTSService.Settings(
+            voice=os.getenv("CARTESIA_VOICE_ID"),
+            # Default pace read as sluggish on a live call — 1.3 is a
+            # noticeable pickup without tipping into unnatural. Valid range
+            # per Cartesia is [0.6, 1.5].
+            generation_config=GenerationConfig(speed=1.3),
+        ),
     )
     agent = AgentRuntimeProcessor(visitor_id)
 
