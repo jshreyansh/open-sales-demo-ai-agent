@@ -232,6 +232,21 @@ CONTENT_STUDIO_FORMATS: List[ContentFormatSpec] = [
 ]
 
 
+def _scroll_component() -> RegistryComponent:
+    # Real scrollBy on the page's actual scroll container, not a simulated
+    # click — lets the agent pan a long page (including the shared screen in
+    # Meeting Mode) up/down instead of only jumping between fixed sections.
+    return RegistryComponent(
+        id="scroll",
+        label="Page scroll",
+        description="Scrolling the current page up or down.",
+        actions=[
+            RegistryAction(id="down", description="Scroll the page down a bit to reveal content further down"),
+            RegistryAction(id="up", description="Scroll the page back up"),
+        ],
+    )
+
+
 def _content_studio_components() -> List[RegistryComponent]:
     components = []
     for f in CONTENT_STUDIO_FORMATS:
@@ -304,6 +319,7 @@ UI_REGISTRY: List[RegistryPage] = [
                 description="List of running campaigns with progress and status (Paused / Optimizing).",
                 actions=[RegistryAction(id="highlight", description="Draw attention to the active campaigns list")],
             ),
+            _scroll_component(),
         ],
     ),
     RegistryPage(
@@ -323,6 +339,7 @@ UI_REGISTRY: List[RegistryPage] = [
                 ),
                 actions=[RegistryAction(id="highlight", description="Draw attention to the approvals queue")],
             ),
+            _scroll_component(),
         ],
     ),
     RegistryPage(
@@ -335,6 +352,7 @@ UI_REGISTRY: List[RegistryPage] = [
                 description="Sent, Viewed, Played, Completed, Shared funnel for campaign engagement.",
                 actions=[RegistryAction(id="highlight", description="Draw attention to the engagement funnel")],
             ),
+            _scroll_component(),
         ],
     ),
     RegistryPage(
@@ -395,6 +413,7 @@ UI_REGISTRY: List[RegistryPage] = [
             # card format?" -> open MagicSave) instead of only being able to
             # gesture at a whole tab.
             *_content_studio_components(),
+            _scroll_component(),
         ],
     ),
     # The two Content Studio formats with a real, walkable studio behind
@@ -425,6 +444,7 @@ UI_REGISTRY: List[RegistryPage] = [
                     RegistryAction(id="step-generate", description="Jump to the Generate step (video quality tier, render)"),
                 ],
             ),
+            _scroll_component(),
         ],
     ),
     RegistryPage(
@@ -461,6 +481,7 @@ UI_REGISTRY: List[RegistryPage] = [
                     RegistryAction(id="step-generate", description="Jump to the Generate step (render the master)"),
                 ],
             ),
+            _scroll_component(),
         ],
     ),
     RegistryPage(
@@ -479,6 +500,7 @@ UI_REGISTRY: List[RegistryPage] = [
                 description="The brand color fields: Primary, Accent, Callout Background, Text.",
                 actions=[RegistryAction(id="highlight", description="Draw attention to the palette editor")],
             ),
+            _scroll_component(),
         ],
     ),
 ]

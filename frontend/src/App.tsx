@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PipecatClientAudio, PipecatClientProvider } from "@pipecat-ai/client-react";
 import Sidebar from "./components/Sidebar";
 import TopBar from "./components/TopBar";
@@ -13,7 +13,7 @@ import StubPage from "./pages/StubPage";
 import MagicReelStudio from "./pages/studio/MagicReelStudio";
 import MagicAvatarStudio from "./pages/studio/MagicAvatarStudio";
 import { NAV_REGISTRY } from "./registry/pages";
-import { executeAction } from "./lib/uiRegistry";
+import { executeAction, registerComponent, unregisterComponent } from "./lib/uiRegistry";
 import { disconnectVoice, pipecatClient } from "./lib/pipecatClient";
 import type { AgentAction } from "./lib/api";
 
@@ -42,6 +42,22 @@ function getInitialMode(): "product" | "meeting" {
 export default function App() {
   const [activePageId, setActivePageId] = useState("dashboard");
   const [mode, setMode] = useState<"product" | "meeting">(getInitialMode);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // Scroll is a real, non-simulated action (scrollBy on the actual page
+  // container) — registered per current page so the agent can pan the
+  // shared screen up/down the same way it triggers any other action.
+  useEffect(() => {
+    registerComponent(activePageId, "scroll", {
+      // "smooth" silently no-ops on a negative (upward) delta here — a
+      // Chromium quirk under this container's CSS `zoom` (confirmed: works
+      // fine for positive/downward, and "auto" works both directions) — so
+      // "auto" is the reliable choice even though it loses the glide.
+      down: () => contentRef.current?.scrollBy({ top: 420, behavior: "auto" }),
+      up: () => contentRef.current?.scrollBy({ top: -420, behavior: "auto" }),
+    });
+    return () => unregisterComponent(activePageId, "scroll");
+  }, [activePageId]);
 
   function handleAgentAction(action: AgentAction) {
     if (action.page !== activePageId) {
@@ -74,7 +90,7 @@ export default function App() {
   const productShell = (
     <div className="app-shell">
       <Sidebar activePageId={activePageId} onNavigate={setActivePageId} />
-      <div className="app-shell__content">
+      <div className="app-shell__content" ref={contentRef}>
         {mode === "product" && <TopBar />}
         {renderPage()}
       </div>
