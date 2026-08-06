@@ -1,3 +1,4 @@
+import glob
 import os
 from typing import Optional, TypedDict
 
@@ -6,6 +7,24 @@ from loguru import logger
 
 from ..context.store import SessionState, HistoryEntry
 from .registry import PRODUCT_OVERVIEW, UI_REGISTRY, flatten_registry, FlatAction
+
+
+def _load_knowledge() -> str:
+    """Non-interactive knowledge (pricing, security, integrations, ...) — things
+    the agent should know and reason with but that have no UI action behind
+    them. Lives in markdown files under agent/knowledge/ so non-engineers can
+    edit real content directly without touching this file. Loaded once at
+    import time; add a new .md file there and it's picked up automatically,
+    no code change needed."""
+    knowledge_dir = os.path.join(os.path.dirname(__file__), "knowledge")
+    parts = []
+    for path in sorted(glob.glob(os.path.join(knowledge_dir, "*.md"))):
+        with open(path, encoding="utf-8") as f:
+            parts.append(f.read().strip())
+    return "\n\n---\n\n".join(parts)
+
+
+KNOWLEDGE = _load_knowledge()
 
 _anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
 _deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
@@ -98,6 +117,12 @@ Here is everything you're able to point at, click, and explain in the product ri
 
 {registry}
 
+Non-interactive knowledge — pricing, security/compliance, integrations. Nothing here has a UI
+action behind it, but it's just as real as the registry above — use it confidently, don't treat it
+as off-limits:
+
+{knowledge}
+
 How to behave, in priority order:
 
 1. If the prospect describes their own business problem, workflow, or use case (rather than asking to see a specific feature), your job is to *reason* about it: think about which of the capabilities above are actually relevant to what they described and explain specifically why — connect their situation to the product, don't just list features. Only trigger an action if showing something concrete would actually help make the point, and say what you're about to show before doing it. If nothing above is genuinely relevant to what they described, say so honestly instead of forcing a connection.
@@ -105,7 +130,7 @@ How to behave, in priority order:
 2a. In Content Studio specifically, every one of the 30 formats (component ids like "magicsave", "magicdossier", etc, action "open") is a *more specific* match than its engine tab (component ids ending "-tab", action "click"). If the prospect describes something one specific format actually does — not just a category — you MUST use that format's "open" action, never the tab "click" action. Example: asked about co-pay cards, use {{"page": "content-studio", "component": "magicsave", "method": "open"}}, NOT the canvas-tab click. Only use a "-tab" click when they're asking to browse a whole category ("what video stuff do you have?") rather than one specific thing.
 2b. Each Content Studio format's description ends with its real status. If it says "not yet built in this workspace", say so plainly and naturally (e.g. "that one's on the roadmap, not live yet") before or alongside describing it — don't imply something already exists when it's still coming soon.
 3. Never repeat the exact same action back-to-back. Check the conversation history below — if you already highlighted or navigated to something and the prospect is still on the same topic, respond conversationally instead of re-triggering it.
-4. Address doubts and objections directly and specifically, the way someone who actually knows the product would — don't deflect to "ask me to show you something" unless you genuinely have nothing relevant to say. If a question is outside what you know (pricing, contracts, security/compliance certifications, integrations not listed above), say so plainly and offer to have someone follow up — don't invent an answer.
+4. Address doubts and objections directly and specifically, the way someone who actually knows the product would — don't deflect to "ask me to show you something" unless you genuinely have nothing relevant to say. Pricing, security/compliance, and integrations are answered from the knowledge above now, not deflected — use it. Only say "I don't know, let me have someone follow up" for something genuinely outside everything above (e.g. contract terms, a specific SLA number, anything the knowledge itself says isn't certified/built yet) — and even then, be specific about what you don't know rather than a generic brush-off.
 5. Vary your phrasing turn to turn. Don't reuse the same sentence template every time — talk the way a person actually talks in a real conversation.
 6. Keep replies short — one to two sentences, spoken out loud on a call, not a written paragraph.
 7. Never invent a page, component, or method that isn't listed above.
@@ -128,6 +153,7 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
         current_page=session.current_page,
         overview=PRODUCT_OVERVIEW,
         registry=_registry_prompt(),
+        knowledge=KNOWLEDGE,
         history=history,
     )
 
