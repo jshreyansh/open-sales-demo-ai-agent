@@ -28,7 +28,6 @@ function nextId() {
 }
 
 export default function ChatWidget({ currentPage, onAction }: ChatWidgetProps) {
-  const { transportState, connecting, isMicEnabled, enableMic, connect, mute } = useVoiceSession(onAction);
   // A plain local list — exactly one bubble per turn. Pipecat's own
   // conversation aggregation (meant for merging streamed ASR/LLM chunks into
   // one utterance) was merging separate user sends into a single bubble, so
@@ -55,6 +54,13 @@ export default function ChatWidget({ currentPage, onAction }: ChatWidgetProps) {
     setMessages((prev) => [...prev, { id: nextId(), role, text }]);
   }, []);
 
+  // The user's side of a voice turn comes through as a real ASR transcript
+  // (interim + final chunks, only the final one is a complete utterance).
+  // The agent's side doesn't use RTVIEvent.BotTranscript — pipecat only fires
+  // that for a streaming LLMTextFrame, and the voice pipeline pushes one
+  // complete plain TextFrame instead, so that event never fires here. Emma's
+  // reply text arrives via the same voice-reply polling useVoiceSession
+  // already does for actions (see the onReply argument below).
   useRTVIClientEvent(
     RTVIEvent.UserTranscript,
     useCallback(
@@ -64,16 +70,10 @@ export default function ChatWidget({ currentPage, onAction }: ChatWidgetProps) {
       [appendMessage]
     )
   );
-  useRTVIClientEvent(
-    RTVIEvent.BotTranscript,
-    // Unlike UserTranscript (interim + final ASR chunks), BotTranscript only
-    // fires once per complete generated utterance — no final flag to check.
-    useCallback(
-      (data: { text: string }) => {
-        appendMessage("agent", data.text);
-      },
-      [appendMessage]
-    )
+
+  const { transportState, connecting, isMicEnabled, enableMic, connect, mute } = useVoiceSession(
+    onAction,
+    useCallback((text: string) => appendMessage("agent", text), [appendMessage])
   );
 
   async function startTalk() {

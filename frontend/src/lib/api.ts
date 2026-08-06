@@ -37,6 +37,17 @@ export async function getVoiceAction(visitorId: string): Promise<AgentAction | n
   return result.page && result.component && result.method ? (result as AgentAction) : null;
 }
 
+/**
+ * Polled while a voice call is active — the reply text Emma just spoke.
+ * Pipecat's own bot-transcription RTVI event isn't reliably emitted for the
+ * voice pipeline's one-shot (non-streaming) reply, so this side-channel is
+ * what actually gets her spoken words into the chat transcript.
+ */
+export async function getVoiceReply(visitorId: string): Promise<string | null> {
+  const result = await getJson<{ reply?: string }>(`/api/voice-reply/${visitorId}`);
+  return result.reply || null;
+}
+
 export function getDashboard() {
   return getJson<import("./types").DashboardData>("/api/dashboard");
 }

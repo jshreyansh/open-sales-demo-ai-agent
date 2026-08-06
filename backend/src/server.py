@@ -31,6 +31,14 @@ brand_kit_state = dict(brand_kit_data)
 # /chat response already uses.
 _pending_voice_actions: Dict[str, dict] = {}
 
+# Same idea for the reply text itself. Pipecat's own bot-transcription RTVI
+# event depends on pushing an LLMTextFrame through the pipeline; the voice
+# process pushes a plain TextFrame instead (run_turn already returns the
+# complete reply, there's no real streaming LLM to bracket), so that event
+# never fires. Reporting the text through this side-channel — identical
+# pattern to voice actions — is what actually gets it into the chat transcript.
+_pending_voice_replies: Dict[str, str] = {}
+
 
 class ChatRequest(BaseModel):
     visitorId: Optional[str] = None
@@ -97,6 +105,26 @@ def get_voice_action(visitor_id: str):
     """Polled by the frontend during an active voice call. Returns and
     clears the pending action, or {} if there isn't one."""
     return _pending_voice_actions.pop(visitor_id, {})
+
+
+class VoiceReplyReport(BaseModel):
+    visitorId: str
+    reply: str
+
+
+@app.post("/internal/voice-reply")
+def report_voice_reply(body: VoiceReplyReport):
+    """Called by the voice process to hand off the spoken reply's text so
+    it can show up in the chat transcript."""
+    _pending_voice_replies[body.visitorId] = body.reply
+    return {"ok": True}
+
+
+@app.get("/api/voice-reply/{visitor_id}")
+def get_voice_reply(visitor_id: str):
+    """Polled by the frontend during an active voice call. Returns and
+    clears the pending reply text, or "" if there isn't one."""
+    return {"reply": _pending_voice_replies.pop(visitor_id, "")}
 
 
 if __name__ == "__main__":

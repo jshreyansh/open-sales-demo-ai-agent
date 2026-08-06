@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePipecatClientMicControl, usePipecatClientTransportState, useRTVIClientEvent } from "@pipecat-ai/client-react";
 import { RTVIEvent } from "@pipecat-ai/client-js";
-import { getVoiceAction, type AgentAction } from "./api";
+import { getVoiceAction, getVoiceReply, type AgentAction } from "./api";
 import { getVisitorId } from "./session";
 import { connectVoice } from "./pipecatClient";
 
@@ -13,7 +13,7 @@ const visitorId = getVisitorId();
  * (Meeting Mode's always-on call). Both read/write the same underlying
  * client, so muting from either place is reflected in the other.
  */
-export function useVoiceSession(onAction: (action: AgentAction) => void) {
+export function useVoiceSession(onAction: (action: AgentAction) => void, onReply?: (text: string) => void) {
   const transportState = usePipecatClientTransportState();
   const { enableMic, isMicEnabled } = usePipecatClientMicControl();
 
@@ -22,6 +22,8 @@ export function useVoiceSession(onAction: (action: AgentAction) => void) {
 
   const onActionRef = useRef(onAction);
   onActionRef.current = onAction;
+  const onReplyRef = useRef(onReply);
+  onReplyRef.current = onReply;
 
   const [isUserSpeaking, setIsUserSpeaking] = useState(false);
   const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
@@ -93,12 +95,17 @@ export function useVoiceSession(onAction: (action: AgentAction) => void) {
     enableMic(false);
   }
 
-  // Voice-triggered UI actions arrive out-of-band (the voice process is a
-  // separate service from the REST API) — poll while a call is active.
+  // Voice-triggered UI actions (and, for callers that want it, the reply
+  // text itself) arrive out-of-band — the voice process is a separate
+  // service from the REST API — so poll while a call is active.
   useEffect(() => {
     if (!voiceConnected) return;
     const id = setInterval(async () => {
-      const action = await getVoiceAction(visitorId).catch(() => null);
+      const [action, reply] = await Promise.all([
+        getVoiceAction(visitorId).catch(() => null),
+        onReplyRef.current ? getVoiceReply(visitorId).catch(() => null) : Promise.resolve(null),
+      ]);
+      if (reply) onReplyRef.current?.(reply);
       if (!action) return;
       if (isAgentSpeakingRef.current) {
         pendingActionRef.current = action;

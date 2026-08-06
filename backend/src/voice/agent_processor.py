@@ -52,6 +52,7 @@ class AgentRuntimeProcessor(FrameProcessor):
             action = result.get("action")
             if action:
                 asyncio.create_task(self._report_action(action))
+            asyncio.create_task(self._report_reply(result["reply"]))
 
             # TTSService only flushes its sentence-aggregation buffer on an
             # LLMFullResponseEndFrame (or EndFrame) — a bare TextFrame gets
@@ -76,3 +77,14 @@ class AgentRuntimeProcessor(FrameProcessor):
                 )
         except Exception:
             logger.exception(f"Failed to report voice action for visitor {self._visitor_id}")
+
+    async def _report_reply(self, reply: str) -> None:
+        try:
+            async with aiohttp.ClientSession() as http:
+                await http.post(
+                    f"{REST_API_URL}/internal/voice-reply",
+                    json={"visitorId": self._visitor_id, "reply": reply},
+                    timeout=aiohttp.ClientTimeout(total=3),
+                )
+        except Exception:
+            logger.exception(f"Failed to report voice reply for visitor {self._visitor_id}")
