@@ -43,6 +43,20 @@ TYPING_SOUND_PROBABILITY = 0.5
 TYPING_SOUND_VOLUME = 0.4
 _CHUNK_MS = 20
 
+# Ends the call after this much total silence from both sides — someone who
+# mutes and walks away without hanging up would otherwise hold this box's
+# one call slot (see server.py's single-call gate) indefinitely. 2 minutes,
+# not longer: every extra idle minute is a minute the whole demo is
+# unusable for the next visitor, and two full silent minutes on a live
+# voice call is already a strong abandonment signal — normal conversation
+# has pauses, not two straight minutes where neither side says anything.
+IDLE_TIMEOUT_SECS = 120
+# How often the background watcher (see bot.py's run_bot) wakes up to
+# check — cheap (one timestamp comparison), so this doesn't need to be
+# tight; it only affects how quickly an abandoned call is caught, not
+# anything in the live path.
+IDLE_CHECK_INTERVAL_SECS = 15
+
 _typing_pcm_cache: Dict[int, bytes] = {}
 
 
@@ -157,6 +171,12 @@ class AgentRuntimeProcessor(FrameProcessor):
         # I'm just sitting idle" — the latter needs to react immediately, or
         # a hand-raise with no follow-up speech would silently do nothing.
         self._turn_in_progress = False
+        # Bumped on any real speech from either side (see BotStartedSpeakingFrame/
+        # VADUserStartedSpeakingFrame below) — read via seconds_since_activity()
+        # by bot.py's idle watcher to detect an abandoned call. A plain
+        # timestamp write is the only per-frame cost, so tracking this adds
+        # no measurable latency to the actual conversation.
+        self._last_activity = time.monotonic()
 
     def _pick_filler(self, heard_text: str) -> str:
         pool = QUESTION_FILLERS + NEUTRAL_FILLERS if _is_question(heard_text) else NEUTRAL_FILLERS
@@ -183,6 +203,7 @@ class AgentRuntimeProcessor(FrameProcessor):
 
         if isinstance(frame, BotStartedSpeakingFrame):
             self._bot_speaking = True
+            self._last_activity = time.monotonic()
             await self.push_frame(frame, direction)
             return
 
@@ -192,6 +213,7 @@ class AgentRuntimeProcessor(FrameProcessor):
             return
 
         if isinstance(frame, VADUserStartedSpeakingFrame):
+            self._last_activity = time.monotonic()
             if self._bot_speaking:
                 get_session(self._visitor_id).was_interrupted = True
                 await self.broadcast_interruption()
@@ -357,6 +379,11 @@ class AgentRuntimeProcessor(FrameProcessor):
                             data = await resp.json()
                             if not data.get("raised"):
                                 continue
+                            # Counts as activity even though it's not speech —
+                            # a hand-raise is a genuine engagement signal, and
+                            # someone who just raised their hand shouldn't get
+                            # idled out from under them before they even speak.
+                            self._last_activity = time.monotonic()
                             if self._turn_in_progress:
                                 # A turn (filler/run_turn/reply) is already
                                 # running — let its own end-of-turn check
@@ -376,6 +403,32 @@ class AgentRuntimeProcessor(FrameProcessor):
                         logger.exception(f"Failed to poll hand-raise for visitor {self._visitor_id}")
         except asyncio.CancelledError:
             pass
+
+    def seconds_since_activity(self) -> float:
+        """Read by bot.py's idle watcher (see run_bot) — kept here because
+        this is the processor that actually observes real speech from both
+        sides (BotStartedSpeakingFrame/VADUserStartedSpeakingFrame above),
+        not something the watcher could track on its own."""
+        return time.monotonic() - self._last_activity
+
+    def is_bot_speaking(self) -> bool:
+        """Also read by bot.py's idle watcher, to know when a farewell it
+        asked for has actually finished playing before it tears down the
+        call — see speak_idle_farewell."""
+        return self._bot_speaking
+
+    async def speak_idle_farewell(self) -> None:
+        """Called by bot.py's idle watcher once IDLE_TIMEOUT_SECS of total
+        silence has passed. Speaks a real goodbye rather than letting the
+        watcher silently drop the connection — a dead cut-off would read as
+        a bug, not an ended call, and would break the "real person"
+        illusion this whole demo relies on."""
+        farewell = (
+            "Looks like you might have stepped away — I'll go ahead and hop off. "
+            "Feel free to jump back in anytime!"
+        )
+        asyncio.create_task(self._report_reply(farewell))
+        await self._speak(farewell, FrameDirection.DOWNSTREAM)
 
     async def cleanup(self):
         if self._hand_raise_poll_task is not None:

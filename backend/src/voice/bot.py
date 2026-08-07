@@ -15,6 +15,7 @@ multi-second LLM+TTS latency already in this pipeline, it's not
 noticeable.
 """
 
+import asyncio
 import os
 
 import aiohttp
@@ -45,7 +46,12 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.workers.runner import WorkerRunner
 
 from ..context.store import start_session
-from .agent_processor import AgentRuntimeProcessor, TTSLevelReporter
+from .agent_processor import (
+    IDLE_CHECK_INTERVAL_SECS,
+    IDLE_TIMEOUT_SECS,
+    AgentRuntimeProcessor,
+    TTSLevelReporter,
+)
 
 REST_API_URL = "http://localhost:8787"
 
@@ -60,6 +66,66 @@ transport_params = {
         serializer=ProtobufFrameSerializer(),
     ),
 }
+
+
+async def _release_voice_lock(visitor_id: str) -> None:
+    # Frees the single-call gate (see server.py's _active_call) the moment
+    # a call actually ends, rather than leaving the next caller to wait out
+    # its TTL safety net. Best-effort: if this fails, the TTL still
+    # recovers it eventually. Shared by on_client_disconnected and
+    # _watch_idle so both teardown paths release it the same way.
+    try:
+        async with aiohttp.ClientSession() as http:
+            await http.post(
+                f"{REST_API_URL}/api/voice-lock/release",
+                json={"visitorId": visitor_id},
+                timeout=aiohttp.ClientTimeout(total=3),
+            )
+    except Exception:
+        logger.exception(f"Failed to release voice lock for visitor {visitor_id}")
+
+
+async def _watch_idle(agent: AgentRuntimeProcessor, worker: PipelineWorker, visitor_id: str) -> None:
+    """Ends the call after IDLE_TIMEOUT_SECS of total silence from both
+    sides — someone who mutes and walks away without hanging up would
+    otherwise hold this box's one call slot indefinitely. Lives here, not
+    on AgentRuntimeProcessor, because actually tearing down the call needs
+    `worker`: pushing an EndFrame from mid-pipeline was tried first and
+    doesn't work — it only closes half of the WebSocket client's shared
+    "leave counter" (confirmed by reading pipecat's actual client wrapper
+    source: disconnect() only takes effect once both the input and output
+    transport sides have released it), so the socket silently stayed open.
+    worker.cancel() is the same, already-correct teardown path the hangup
+    button already uses, which pushes a CancelFrame through the whole
+    pipeline and properly closes both sides.
+
+    Sleeps almost all the time — only wakes every IDLE_CHECK_INTERVAL_SECS
+    to compare two timestamps read from `agent` — so this can't add latency
+    to the actual conversation; the only work on the live audio/frame path
+    is the one-line timestamp bumps already in AgentRuntimeProcessor.
+    """
+    try:
+        while True:
+            await asyncio.sleep(IDLE_CHECK_INTERVAL_SECS)
+            if agent.seconds_since_activity() < IDLE_TIMEOUT_SECS:
+                continue
+            logger.info(f"[{visitor_id}] idle for {IDLE_TIMEOUT_SECS}s, ending call")
+            await agent.speak_idle_farewell()
+            # Give TTS a moment to actually start (BotStartedSpeakingFrame
+            # lags slightly behind pushing the text) before polling for it
+            # to finish — otherwise this could see "not speaking yet" and
+            # cut the farewell off before a word of it plays. Capped at ~10s
+            # total so a stuck flag can't wedge this task forever.
+            await asyncio.sleep(0.5)
+            for _ in range(95):
+                if not agent.is_bot_speaking():
+                    break
+                await asyncio.sleep(0.1)
+            await worker.cancel()
+            await _release_voice_lock(visitor_id)
+            return
+    except asyncio.CancelledError:
+        pass
 
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
@@ -137,6 +203,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         params=PipelineParams(enable_metrics=True),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
     )
+    idle_watch_task = asyncio.create_task(_watch_idle(agent, worker, visitor_id))
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(_transport, _client):
@@ -145,20 +212,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(_transport, _client):
         logger.info(f"Voice client disconnected: {visitor_id}")
+        idle_watch_task.cancel()
         await worker.cancel()
-        # Frees the single-call gate (see server.py's _active_call) the
-        # moment this call actually ends, rather than leaving the next
-        # caller to wait out its TTL safety net. Best-effort: if this fails,
-        # the TTL still recovers it eventually.
-        try:
-            async with aiohttp.ClientSession() as http:
-                await http.post(
-                    f"{REST_API_URL}/api/voice-lock/release",
-                    json={"visitorId": visitor_id},
-                    timeout=aiohttp.ClientTimeout(total=3),
-                )
-        except Exception:
-            logger.exception(f"Failed to release voice lock for visitor {visitor_id}")
+        await _release_voice_lock(visitor_id)
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)

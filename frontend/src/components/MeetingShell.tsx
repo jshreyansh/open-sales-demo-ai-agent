@@ -113,6 +113,25 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [joined, countdown]);
 
+  // The backend can end a call on its own now (see agent_processor.py's
+  // idle-timeout watcher — someone who mutes and walks away without
+  // hanging up), not just the visitor clicking hangup. Without this, that
+  // would leave the visitor sitting on the "Our agent is joining..." banner
+  // for a call that's actually already over, which reads as a bug rather
+  // than an intentional end. Once the call has genuinely connected, a drop
+  // back to disconnected is treated the same as clicking hangup.
+  const wasConnected = useRef(false);
+  useEffect(() => {
+    if (voiceConnected) {
+      wasConnected.current = true;
+      return;
+    }
+    if (wasConnected.current) {
+      wasConnected.current = false;
+      onLeave();
+    }
+  }, [voiceConnected, onLeave]);
+
   // The non-interrupting alternative to talking over the agent: posts to the
   // voice process (a separate process from this UI) via the REST API, which
   // polls for it and hands off after finishing its current explanation,
