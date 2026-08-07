@@ -4,14 +4,15 @@ Runs as its own Pipecat server, separate from the REST API (server.py, port
 8787). STT (Groq/Whisper) -> AgentRuntimeProcessor (calls the same
 run_turn() the text chat uses) -> TTS (Cartesia) -> back to the browser.
 
-Run standalone to verify the voice loop works before wiring it into the
-actual React frontend — Pipecat's runner serves a prebuilt WebRTC test page
-for exactly this:
-
-    source .venv/bin/activate
-    python -m src.voice.bot
-
-Then open the URL it prints (defaults to http://localhost:7860).
+Transport is a plain WebSocket (not WebRTC): audio travels as regular
+WebSocket frames over ordinary TCP/HTTPS, which passes through a standard
+HTTP load balancer or reverse proxy untouched. WebRTC's raw UDP media
+stream doesn't — that matters the moment this runs anywhere that isn't
+literally the same machine as the browser (e.g. behind an AWS ALB in a
+private subnet, which is exactly the deployment this was switched for).
+The cost is a bit more latency than a direct UDP path; against the
+multi-second LLM+TTS latency already in this pipeline, it's not
+noticeable.
 """
 
 import os
@@ -35,17 +36,24 @@ from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
+from pipecat.serializers.protobuf import ProtobufFrameSerializer
 from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
 from pipecat.services.groq.stt import GroqSTTService
-from pipecat.transports.base_transport import BaseTransport, TransportParams
+from pipecat.transports.base_transport import BaseTransport
+from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.workers.runner import WorkerRunner
 
 from .agent_processor import AgentRuntimeProcessor
 
 transport_params = {
-    "webrtc": lambda: TransportParams(
+    # serializer must match the client's default (@pipecat-ai/websocket-transport's
+    # WebSocketTransport uses ProtobufFrameSerializer unless told otherwise) — the
+    # two ends need to agree on the wire format, this isn't set automatically for
+    # the plain "websocket" transport the way it is for the telephony ones.
+    "websocket": lambda: FastAPIWebsocketParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
+        serializer=ProtobufFrameSerializer(),
     ),
 }
 
@@ -55,6 +63,15 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     body = getattr(runner_args, "body", None)
     if isinstance(body, dict) and body.get("visitorId"):
         visitor_id = body["visitorId"]
+    else:
+        # The plain-WebSocket runner path has no body/metadata channel at
+        # all (unlike the old WebRTC /start flow) — visitorId travels as a
+        # query param on the WebSocket URL itself instead (see
+        # frontend/src/lib/pipecatClient.ts).
+        ws = getattr(runner_args, "websocket", None)
+        query_visitor_id = getattr(ws, "query_params", {}).get("visitorId") if ws else None
+        if query_visitor_id:
+            visitor_id = query_visitor_id
 
     # VAD is its own pipeline stage in this Pipecat version — it's what turns
     # raw audio into VADUserStartedSpeakingFrame/VADUserStoppedSpeakingFrame,
@@ -119,27 +136,6 @@ async def bot(runner_args: RunnerArguments):
 
 
 if __name__ == "__main__":
-    import pipecat.transports.smallwebrtc.request_handler as _webrtc_request_handler
     from pipecat.runner.run import main
-
-    # pipecat's dev runner never configures ICE/STUN servers for its own
-    # (server-side, aiortc) WebRTC peer — confirmed by reading the runner
-    # source: no CLI flag, no env var, SmallWebRTCRequestHandler is
-    # constructed with esp32_mode/host only. That's fine on localhost, but
-    # once this isn't localhost (a real deployment), the only ICE candidate
-    # the server offers is its own private IP — unreachable from a browser
-    # on the public internet, so the offer/answer exchange succeeds but
-    # audio never actually connects. Patching the default in here rather
-    # than forking the runner's route-mounting code for one field.
-    _original_request_handler_init = _webrtc_request_handler.SmallWebRTCRequestHandler.__init__
-
-    def _patched_request_handler_init(self, *args, **kwargs):
-        # Plain URL strings, not dicts — SmallWebRTCConnection only accepts
-        # list[str] or list[RTCIceServer] (confirmed in connection.py), a
-        # dict here would raise TypeError.
-        kwargs.setdefault("ice_servers", ["stun:stun.l.google.com:19302"])
-        _original_request_handler_init(self, *args, **kwargs)
-
-    _webrtc_request_handler.SmallWebRTCRequestHandler.__init__ = _patched_request_handler_init
 
     main()
