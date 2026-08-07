@@ -119,6 +119,27 @@ async def bot(runner_args: RunnerArguments):
 
 
 if __name__ == "__main__":
+    import pipecat.transports.smallwebrtc.request_handler as _webrtc_request_handler
     from pipecat.runner.run import main
+
+    # pipecat's dev runner never configures ICE/STUN servers for its own
+    # (server-side, aiortc) WebRTC peer — confirmed by reading the runner
+    # source: no CLI flag, no env var, SmallWebRTCRequestHandler is
+    # constructed with esp32_mode/host only. That's fine on localhost, but
+    # once this isn't localhost (a real deployment), the only ICE candidate
+    # the server offers is its own private IP — unreachable from a browser
+    # on the public internet, so the offer/answer exchange succeeds but
+    # audio never actually connects. Patching the default in here rather
+    # than forking the runner's route-mounting code for one field.
+    _original_request_handler_init = _webrtc_request_handler.SmallWebRTCRequestHandler.__init__
+
+    def _patched_request_handler_init(self, *args, **kwargs):
+        # Plain URL strings, not dicts — SmallWebRTCConnection only accepts
+        # list[str] or list[RTCIceServer] (confirmed in connection.py), a
+        # dict here would raise TypeError.
+        kwargs.setdefault("ice_servers", ["stun:stun.l.google.com:19302"])
+        _original_request_handler_init(self, *args, **kwargs)
+
+    _webrtc_request_handler.SmallWebRTCRequestHandler.__init__ = _patched_request_handler_init
 
     main()

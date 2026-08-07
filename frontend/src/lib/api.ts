@@ -52,6 +52,17 @@ export async function getVoiceReply(visitorId: string): Promise<string | null> {
   return result.reply || null;
 }
 
+/**
+ * Called when the prospect clicks the hand-raise button in Meeting Mode — the
+ * non-interrupting alternative to talking over the agent. The voice process
+ * (a separate process from this REST API) polls for this and, instead of
+ * cutting the agent off mid-sentence like a real interruption would, lets it
+ * finish its current explanation and then hands off explicitly.
+ */
+export async function raiseHand(visitorId: string): Promise<void> {
+  await fetch(`${API_URL}/api/hand-raise/${visitorId}`, { method: "POST" });
+}
+
 export function getDashboard() {
   return getJson<import("./types").DashboardData>("/api/dashboard");
 }

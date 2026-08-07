@@ -1288,6 +1288,13 @@ body {
   font-size: 20px;
 }
 
+.chat-launcher__avatar--img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
 .chat__header {
   padding: 12px 10px 12px 14px;
   font-weight: 600;
@@ -1316,6 +1323,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.chat__header-avatar--img {
+  background: none;
+  object-fit: cover;
 }
 
 .chat__header-actions {
@@ -1587,6 +1599,10 @@ body {
   animation: meet-intro-pulse 1.4s ease-in-out infinite;
 }
 
+.meet__intro-avatar-img {
+  object-fit: cover;
+}
+
 .meet__intro-text {
   font-size: 15px;
   color: #e8eaed;
@@ -1722,6 +1738,18 @@ body {
   background: var(--accent);
 }
 
+/* The two live call-tile avatars specifically (not the topbar/intro ones) —
+   bigger, and with a base "elevated" drop shadow plus a faint permanent
+   tint right on the edge. useAudioLevelRing overrides this same box-shadow
+   property inline once real audio comes through; this is just what shows
+   before that (or if a track never arrives). */
+.meet__avatar--tile {
+  width: 96px;
+  height: 96px;
+  font-size: 32px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35), 0 0 0 2px rgba(138, 180, 248, 0.3);
+}
+
 .meet__avatar--tiny {
   width: 20px;
   height: 20px;
@@ -1738,43 +1766,13 @@ body {
   background: var(--accent);
 }
 
-.voice-dots {
-  position: absolute;
-  bottom: 8px;
-  right: 10px;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding: 5px 7px;
-  border-radius: 99px;
-  background: rgba(0, 0, 0, 0.35);
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-
-.voice-dots--active {
-  opacity: 1;
-}
-
-.voice-dots span {
-  width: 4px;
-  height: 4px;
+.meet__avatar-img {
+  width: 100%;
+  height: 100%;
   border-radius: 50%;
-  background: #81c995;
+  object-fit: cover;
 }
 
-.voice-dots--active span {
-  animation: voice-dot-pulse 0.9s ease-in-out infinite;
-}
-
-.voice-dots span:nth-child(2) { animation-delay: 0.12s; }
-.voice-dots span:nth-child(3) { animation-delay: 0.24s; }
-.voice-dots span:nth-child(4) { animation-delay: 0.36s; }
-
-@keyframes voice-dot-pulse {
-  0%, 100% { transform: scale(1); opacity: 0.5; }
-  50% { transform: scale(1.7); opacity: 1; }
-}
 
 .meet__controls {
   display: flex;
@@ -1817,7 +1815,8 @@ body {
   background: #cfd2d6;
 }
 
-.meet__ctrl--active {
+.meet__ctrl--active,
+.meet__ctrl--pressed {
   background: var(--accent);
   color: white;
 }

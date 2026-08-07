@@ -12,7 +12,10 @@ from typing import Dict, List, Optional
 # and the frontend shows the identical text as the first chat bubble;
 # seeding it into history here means run_turn's very next call already sees
 # it as the opening turn.
-OPENING_GREETING = "Hi, I'm Shreyansh, sales rep at SwishX — here to walk you through the demo. What can I help you with?"
+OPENING_GREETING = (
+    "Hi, I'm Rachel, sales rep at SwishX — here to walk you through the demo. "
+    "Feel free to raise your hand anytime if something comes to mind — what can I help you with?"
+)
 
 
 @dataclass
@@ -26,9 +29,10 @@ class SessionState:
     history: List[HistoryEntry] = field(default_factory=list)
     current_page: str = "dashboard"
     # Set by the voice pipeline when the visitor started talking while the
-    # agent was still (estimated to be) mid-reply — read once by the next run_turn
-    # call so the agent knows its last explanation may have landed only
-    # partially, then cleared.
+    # agent was actually still speaking (tracked via pipecat's own
+    # BotStartedSpeakingFrame/BotStoppedSpeakingFrame) — read once by the
+    # next run_turn call so the agent knows its last explanation may have
+    # landed only partially, then cleared.
     was_interrupted: bool = False
     # Captured once the prospect introduces themselves in response to
     # OPENING_GREETING (see runtime.py's "prospect_name" tool field) — kept

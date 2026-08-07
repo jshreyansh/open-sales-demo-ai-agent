@@ -6,6 +6,7 @@ import { getVisitorId } from "../lib/session";
 import { useVoiceSession } from "../lib/useVoiceSession";
 import MeetIcon from "./MeetIcons";
 import Icon from "./Icon";
+import rachelPhoto from "../assets/rachel.jpg";
 
 interface ChatWidgetProps {
   currentPage: string;
@@ -23,7 +24,9 @@ const visitorId = getVisitorId();
 // the voice pipeline speaks that exact text as its first utterance (see
 // AgentRuntimeProcessor._greet), so this chat bubble matches what a prospect
 // would hear if they switched to Talk mode instead.
-const WELCOME = "Hi, I'm Shreyansh, sales rep at SwishX — here to walk you through the demo. What can I help you with?";
+const WELCOME =
+  "Hi, I'm Rachel, sales rep at SwishX — here to walk you through the demo. " +
+  "Feel free to raise your hand anytime if something comes to mind — what can I help you with?";
 
 let msgSeq = 0;
 function nextId() {
@@ -139,8 +142,8 @@ export default function ChatWidget({ currentPage, onAction }: ChatWidgetProps) {
 
   if (!open) {
     return (
-      <button className="chat-launcher" onClick={() => setOpen(true)} aria-label="Open chat with Shreyansh">
-        <span className="chat-launcher__avatar">S</span>
+      <button className="chat-launcher" onClick={() => setOpen(true)} aria-label="Open chat with Rachel">
+        <img src={rachelPhoto} alt="" className="chat-launcher__avatar chat-launcher__avatar--img" />
       </button>
     );
   }
@@ -149,8 +152,8 @@ export default function ChatWidget({ currentPage, onAction }: ChatWidgetProps) {
     <div className={`chat ${expanded ? "chat--expanded" : ""}`}>
       <div className="chat__header">
         <div className="chat__header-title">
-          <span className="chat__header-avatar">S</span>
-          Shreyansh
+          <img src={rachelPhoto} alt="" className="chat__header-avatar chat__header-avatar--img" />
+          Rachel
         </div>
         <div className="chat__header-actions">
           <div className="chat__mode-toggle">

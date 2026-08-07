@@ -43,6 +43,12 @@ _pending_voice_actions: Dict[str, dict] = {}
 # let the second POST silently clobber the first before a poll ever saw it.
 _pending_voice_replies: Dict[str, List[str]] = {}
 
+# The reverse direction of the two mailboxes above: the frontend's hand-raise
+# button posts here, and the voice process (a separate process on :7860)
+# polls it — that's how a click in Meeting Mode becomes something the live
+# call actually reacts to, since the two processes don't share memory.
+_pending_hand_raises: Dict[str, bool] = {}
+
 
 class ChatRequest(BaseModel):
     visitorId: Optional[str] = None
@@ -134,6 +140,22 @@ def get_voice_reply(visitor_id: str):
     if not queue:
         return {"reply": ""}
     return {"reply": queue.pop(0)}
+
+
+@app.post("/api/hand-raise/{visitor_id}")
+def raise_hand(visitor_id: str):
+    """Called by the frontend when the prospect clicks the hand-raise button
+    in Meeting Mode — the non-interrupting alternative to talking over the
+    agent."""
+    _pending_hand_raises[visitor_id] = True
+    return {"ok": True}
+
+
+@app.get("/internal/hand-raise/{visitor_id}")
+def get_hand_raise(visitor_id: str):
+    """Polled by the voice process. Returns and clears the pending flag, so
+    it's handled exactly once."""
+    return {"raised": _pending_hand_raises.pop(visitor_id, False)}
 
 
 if __name__ == "__main__":
