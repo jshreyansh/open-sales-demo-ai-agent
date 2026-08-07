@@ -1888,12 +1888,6 @@ body {
   color: transparent;
 }
 
-.prejoin__subtitle {
-  font-size: 14px;
-  color: rgba(232, 234, 237, 0.7);
-  margin: 0;
-}
-
 /* A single scrollable row instead of a multi-row grid — that's what keeps
    the name input and Join button below always on-screen regardless of how
    many personas exist. Faded on the right edge (mask, not a solid overlay,

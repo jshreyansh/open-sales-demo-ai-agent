@@ -35,8 +35,7 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
       <div className="prejoin__inner">
         <div className="prejoin__header">
           <div className="prejoin__kicker">SwishX · Live Demo</div>
-          <h1 className="prejoin__title">Choose who you'd like to meet</h1>
-          <p className="prejoin__subtitle">Pick a rep for your demo call — they'll greet you by name.</p>
+          <h1 className="prejoin__title">Welcome! Choose your host for the demo</h1>
         </div>
 
         <div className="prejoin__lane">

@@ -1,0 +1,74 @@
+name: Deploy to production
+
+# Runs on the self-hosted runner installed directly on the production box
+# (contentiq-demo-box) — the box sits in a private subnet behind an AWS ALB
+# with no other inbound path, so a GitHub-hosted runner has no network route
+# to it. See globalplan.md / project memory for the full ALB/UDP backstory
+# that drove this setup.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Never run two deploys at once, and never let an older push's deploy race
+# ahead of a newer one — always finish the queued one, don't cancel it
+# mid-flight (a cancelled deploy could leave the box with a half-restarted
+# service).
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, contentiq-demo]
+    steps:
+      - name: Pull latest code
+        # No actions/checkout here on purpose: /opt/contentiq-demo IS the
+        # deployed git repo (nginx and both systemd services point at paths
+        # inside it), so this resets that exact directory straight to
+        # origin/main rather than cloning a second copy elsewhere. Only
+        # touches git-tracked files — frontend/dist and backend/.venv are
+        # gitignored and untouched by --hard.
+        run: |
+          cd /opt/contentiq-demo
+          git fetch origin main
+          git reset --hard origin/main
+
+      - name: Install backend dependencies
+        run: |
+          cd /opt/contentiq-demo/backend
+          source .venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Build frontend
+        working-directory: /opt/contentiq-demo/frontend
+        env:
+          # Same-origin production URLs — nginx proxies /chat, /api, /internal
+          # to the REST API and /voice/ to the voicebot (see
+          # /etc/nginx/sites-available/contentiq-demo on the box).
+          VITE_API_URL: https://contentiq-demo.benplat.in
+          VITE_VOICE_URL: https://contentiq-demo.benplat.in/voice
+        run: |
+          npm ci
+          npm run build
+
+      - name: Publish frontend build
+        run: |
+          sudo rm -rf /opt/contentiq-demo/frontend-dist
+          sudo cp -r /opt/contentiq-demo/frontend/dist /opt/contentiq-demo/frontend-dist
+          sudo chown -R www-data:www-data /opt/contentiq-demo/frontend-dist
+
+      - name: Restart backend services
+        run: sudo systemctl restart contentiq-server contentiq-voicebot
+
+      - name: Wait for services to come up
+        run: sleep 3
+
+      - name: Verify deployment
+        run: |
+          curl -sf https://contentiq-demo.benplat.in/health
+          status=$(curl -s -o /dev/null -w "%{http_code}" https://contentiq-demo.benplat.in/)
+          if [ "$status" != "200" ]; then
+            echo "Frontend returned $status, expected 200"
+            exit 1
+          fi
