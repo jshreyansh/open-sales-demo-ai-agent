@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { PERSONAS } from "../lib/personas";
+import MeetIcon from "./MeetIcons";
 
 interface PreJoinScreenProps {
   // Returns false when someone else is already on the call (see
@@ -99,9 +100,9 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
               </div>
               <div className="persona-card__position">{persona.position}</div>
               <div className="persona-card__about">{persona.about}</div>
-              <div className="persona-card__nationality">
-                <span className="persona-card__flag">{persona.flag}</span>
-                {persona.nationality}
+              <div className="persona-card__location">
+                <MeetIcon name="location" size={14} />
+                {persona.location}
               </div>
             </div>
           </div>

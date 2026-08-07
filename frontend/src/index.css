@@ -1926,8 +1926,12 @@ body {
   width: clamp(260px, 26vw, 360px);
   height: clamp(360px, 58vh, 500px);
   flex-shrink: 0;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), 0 14px 40px rgba(255, 79, 0, 0.22);
+  border-color: rgba(255, 255, 255, 0.14);
+  /* Elevated, not outlined — a soft dark drop shadow reading as "this card
+     is lifted off the page" instead of the earlier hard accent-colored
+     ring, which implied a selection state that no longer applies now that
+     there's only one card to show. */
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5), 0 4px 14px rgba(0, 0, 0, 0.35);
 }
 
 .persona-card__photo {
@@ -2020,7 +2024,7 @@ body {
   margin-top: 4px;
 }
 
-.persona-card__nationality {
+.persona-card__location {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2029,8 +2033,9 @@ body {
   margin-top: 6px;
 }
 
-.persona-card__flag {
-  font-size: 16px;
+.persona-card__location svg {
+  flex-shrink: 0;
+  opacity: 0.75;
 }
 
 .prejoin__form {

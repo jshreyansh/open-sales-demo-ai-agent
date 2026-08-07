@@ -11,6 +11,7 @@ import {
   mdiAccountMultiple,
   mdiAccount,
   mdiInformationOutline,
+  mdiMapMarkerOutline,
 } from "@mdi/js";
 
 interface MeetIconProps {
@@ -26,7 +27,8 @@ interface MeetIconProps {
     | "captions"
     | "people"
     | "account"
-    | "info";
+    | "info"
+    | "location";
   size?: number;
 }
 
@@ -46,6 +48,7 @@ const PATHS: Record<MeetIconProps["name"], string> = {
   people: mdiAccountMultiple,
   account: mdiAccount,
   info: mdiInformationOutline,
+  location: mdiMapMarkerOutline,
 };
 
 export default function MeetIcon({ name, size = 20 }: MeetIconProps) {

@@ -14,6 +14,11 @@ export interface Persona {
   about: string;
   nationality: string;
   flag: string;
+  // "City, Country" — shown on the pre-join card instead of nationality/flag
+  // (a location pin reads as more like a real person's profile than a flag
+  // emoji does). nationality/flag are kept on the type since they're still
+  // meaningful persona data, just not what's rendered right now.
+  location: string;
   photo?: string;
   available: boolean;
 }
@@ -23,9 +28,10 @@ export const PERSONAS: Persona[] = [
     id: "us-female",
     name: AGENT_NAME,
     position: "Senior Sales Manager",
-    about: "I still get a kick out of walking people through this demo.",
+    about: "I've been doing these demos for a couple of years now — still my favorite part of the job.",
     nationality: "American",
     flag: "🇺🇸",
+    location: "New Jersey, United States",
     photo: AGENT_PHOTO,
     available: true,
   },
@@ -36,6 +42,7 @@ export const PERSONAS: Persona[] = [
     about: "I'll get straight to what matters to you — no filler, no fluff.",
     nationality: "American",
     flag: "🇺🇸",
+    location: "Austin, United States",
     available: false,
   },
   {
@@ -45,6 +52,7 @@ export const PERSONAS: Persona[] = [
     about: "Ask me anything — I'd rather answer than pitch.",
     nationality: "French",
     flag: "🇫🇷",
+    location: "Paris, France",
     available: false,
   },
   {
@@ -54,6 +62,7 @@ export const PERSONAS: Persona[] = [
     about: "I like a good question more than a good script.",
     nationality: "French",
     flag: "🇫🇷",
+    location: "Lyon, France",
     available: false,
   },
   {
@@ -63,6 +72,7 @@ export const PERSONAS: Persona[] = [
     about: "Calm, clear, and happy to go as deep as you want.",
     nationality: "British",
     flag: "🇬🇧",
+    location: "London, United Kingdom",
     available: false,
   },
   {
@@ -72,6 +82,7 @@ export const PERSONAS: Persona[] = [
     about: "I keep demos tight and focused on what you actually need.",
     nationality: "British",
     flag: "🇬🇧",
+    location: "Manchester, United Kingdom",
     available: false,
   },
   {
@@ -81,6 +92,7 @@ export const PERSONAS: Persona[] = [
     about: "I'll find the one thing in here that actually solves your problem.",
     nationality: "Indian",
     flag: "🇮🇳",
+    location: "Bengaluru, India",
     available: false,
   },
   {
@@ -90,6 +102,7 @@ export const PERSONAS: Persona[] = [
     about: "Curious about your workflow first, product second.",
     nationality: "Indian",
     flag: "🇮🇳",
+    location: "Mumbai, India",
     available: false,
   },
 ];
