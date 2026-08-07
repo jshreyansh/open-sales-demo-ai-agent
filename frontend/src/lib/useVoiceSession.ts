@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePipecatClientMicControl, usePipecatClientTransportState, useRTVIClientEvent } from "@pipecat-ai/client-react";
 import { RTVIEvent } from "@pipecat-ai/client-js";
-import { getVoiceAction, getVoiceReply, type AgentAction } from "./api";
+import { claimVoiceLock, getVoiceAction, getVoiceReply, type AgentAction } from "./api";
 import { getVisitorId } from "./session";
 import { connectVoice } from "./pipecatClient";
 
@@ -33,15 +33,23 @@ export function useVoiceSession(onAction: (action: AgentAction) => void, onReply
   useRTVIClientEvent(RTVIEvent.BotStartedSpeaking, useCallback(() => setIsAgentSpeaking(true), []));
   useRTVIClientEvent(RTVIEvent.BotStoppedSpeaking, useCallback(() => setIsAgentSpeaking(false), []));
 
-  async function connect(name?: string) {
+  /**
+   * Returns false if someone else is already on the line (see
+   * server.py's _active_call) — callers need to check this and show that
+   * instead of assuming the call connected.
+   */
+  async function connect(name?: string): Promise<boolean> {
     // Connect only once — reconnecting fires the client library's own
     // "Connected" handler, which wipes the whole conversation history as a
     // side effect. Once connected, treat further "connect" calls as just
     // unmuting so the shared transcript survives toggling.
     if (transportState === "disconnected") {
+      const claimed = await claimVoiceLock(visitorId);
+      if (!claimed) return false;
       await connectVoice(visitorId, name);
     }
     enableMic(true);
+    return true;
   }
 
   function mute() {

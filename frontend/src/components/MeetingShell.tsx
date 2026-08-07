@@ -3,7 +3,7 @@ import { usePipecatClientMediaTrack } from "@pipecat-ai/client-react";
 import { useVoiceSession } from "../lib/useVoiceSession";
 import { useAudioLevelRing } from "../lib/useAudioLevelRing";
 import { useReportedAudioLevelRing } from "../lib/useReportedAudioLevelRing";
-import { raiseHand, startSession, type AgentAction } from "../lib/api";
+import { claimVoiceLock, raiseHand, startSession, type AgentAction } from "../lib/api";
 import { getVisitorId } from "../lib/session";
 import MeetIcon from "./MeetIcons";
 import PreJoinScreen from "./PreJoinScreen";
@@ -123,16 +123,27 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
     window.setTimeout(() => setHandRaised(false), 2000);
   }
 
+  // Claimed here, at the moment of clicking Join, not later when connect()
+  // actually opens the WebSocket after the countdown — reserving the slot
+  // immediately (rather than leaving a 5-second window where a second
+  // visitor could also slip through the countdown) is what PreJoinScreen's
+  // busy message is actually protecting. connect() below claims again for
+  // the same visitor when it runs, which is a harmless no-op re-claim, not
+  // a second real check.
+  //
   // The actual voice personalization happens via connect(visitorName) in
-  // the effect above. This REST call is a separate, secondary thing: it
+  // the effect above. startSession here is a separate, secondary thing: it
   // seeds the REST API process's own session store with the same name, in
   // case anything reads it from that side later (e.g. a future text
   // transcript in Meeting Mode) — Meeting Mode has no such surface today,
   // so this is forward-looking, not load-bearing.
-  function handleJoin(name: string) {
+  async function handleJoin(name: string): Promise<boolean> {
+    const claimed = await claimVoiceLock(visitorId);
+    if (!claimed) return false;
     void startSession(visitorId, name);
     setVisitorName(name);
     setJoined(true);
+    return true;
   }
 
   if (!joined) {

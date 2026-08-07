@@ -68,15 +68,41 @@ export async function raiseHand(visitorId: string): Promise<void> {
  * pre-join screen — before the voice connection starts. Explicitly
  * (re)starts the backend session with that name so the opening greeting
  * (spoken by the voice pipeline) addresses them by it from the first word,
- * instead of waiting for them to volunteer it mid-conversation. Always
- * starts fresh rather than resuming whatever session visitorId already had
- * (it persists in localStorage across visits) — a new "Join" is a new call.
+ * instead of waiting for them to volunteer it mid-conversation.
  */
 export async function startSession(visitorId: string, name: string): Promise<void> {
   await fetch(`${API_URL}/api/session/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ visitorId, name }),
+  });
+}
+
+/**
+ * The voicebot process handles one real call at a time (see server.py's
+ * _active_call for why) — called right before connecting voice so a second
+ * caller gets a clear "busy" answer instead of silently degrading whoever's
+ * already on the line. Returns false if someone else is already connected.
+ */
+export async function claimVoiceLock(visitorId: string): Promise<boolean> {
+  const res = await fetch(`${API_URL}/api/voice-lock/claim`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visitorId }),
+  });
+  if (!res.ok) return false;
+  const data = await res.json();
+  return !!data.ok;
+}
+
+/** Called on explicit hangup — best-effort; bot.py's on_client_disconnected
+ * is the reliable release path (see server.py), this just frees the line
+ * faster for the common "clicked hang up" case instead of waiting on that. */
+export async function releaseVoiceLock(visitorId: string): Promise<void> {
+  await fetch(`${API_URL}/api/voice-lock/release`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visitorId }),
   });
 }
 

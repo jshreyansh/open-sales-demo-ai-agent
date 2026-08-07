@@ -15,7 +15,8 @@ import MagicAvatarStudio from "./pages/studio/MagicAvatarStudio";
 import { NAV_REGISTRY } from "./registry/pages";
 import { executeAction, registerComponent, unregisterComponent } from "./lib/uiRegistry";
 import { disconnectVoice, pipecatClient } from "./lib/pipecatClient";
-import type { AgentAction } from "./lib/api";
+import { releaseVoiceLock, type AgentAction } from "./lib/api";
+import { getVisitorId } from "./lib/session";
 
 function findLabel(pageId: string): string {
   for (const group of NAV_REGISTRY) {
@@ -107,6 +108,11 @@ export default function App() {
           onAction={handleAgentAction}
           onLeave={() => {
             void disconnectVoice();
+            // Best-effort, fast-path release — bot.py's on_client_disconnected
+            // (fired by the WebSocket actually closing) is the reliable path;
+            // this just frees the line a beat sooner for the common "clicked
+            // hang up" case instead of waiting on that.
+            void releaseVoiceLock(getVisitorId());
             const url = new URL(window.location.href);
             url.searchParams.delete("mode");
             window.history.replaceState(null, "", url.toString());

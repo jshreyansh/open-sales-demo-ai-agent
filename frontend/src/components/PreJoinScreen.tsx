@@ -3,7 +3,10 @@ import { PERSONAS } from "../lib/personas";
 import MeetIcon from "./MeetIcons";
 
 interface PreJoinScreenProps {
-  onJoin: (name: string) => void;
+  // Returns false when someone else is already on the call (see
+  // server.py's _active_call) — this screen shows the busy message instead
+  // of assuming the join succeeded.
+  onJoin: (name: string) => Promise<boolean>;
 }
 
 // Meeting Mode's first screen — before the join countdown, not instead of
@@ -22,12 +25,39 @@ interface PreJoinScreenProps {
 export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
   const [selectedId, setSelectedId] = useState(() => PERSONAS.find((p) => p.available)?.id ?? PERSONAS[0].id);
   const [name, setName] = useState("");
+  const [joining, setJoining] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  const canJoin = name.trim().length > 0;
+  const canJoin = name.trim().length > 0 && !joining;
 
-  function handleJoin() {
+  async function handleJoin() {
     if (!canJoin) return;
-    onJoin(name.trim());
+    setJoining(true);
+    const ok = await onJoin(name.trim());
+    if (!ok) {
+      setBusy(true);
+      setJoining(false);
+    }
+    // On success the parent unmounts this screen, nothing left to reset here.
+  }
+
+  // The voicebot handles one real call at a time (see server.py's
+  // _active_call) — this is what tells a second visitor that plainly,
+  // instead of letting them join a call that's already silently degrading
+  // for someone else.
+  if (busy) {
+    return (
+      <div className="prejoin">
+        <div className="prejoin__busy">
+          <div className="prejoin__kicker">SwishX · Live Demo</div>
+          <h1 className="prejoin__title">Fiona is already on a call</h1>
+          <p className="prejoin__busy-text">Come back in a few minutes and try again.</p>
+          <button type="button" className="prejoin__join" onClick={() => setBusy(false)}>
+            Try again
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -99,7 +129,7 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
 
         <div className="prejoin__actions">
           <button type="button" className="prejoin__join" disabled={!canJoin} onClick={handleJoin}>
-            Join now
+            {joining ? "Checking…" : "Join now"}
           </button>
           <button type="button" className="prejoin__schedule" disabled title="Coming soon">
             Schedule for later

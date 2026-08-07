@@ -84,7 +84,13 @@ export default function ChatWidget({ currentPage, onAction }: ChatWidgetProps) {
   async function startTalk() {
     setTalkMode(true);
     try {
-      await connect();
+      const connected = await connect();
+      if (!connected) {
+        // Someone else is already on the line — the voicebot handles one
+        // real call at a time (see server.py's _active_call).
+        setTalkMode(false);
+        appendMessage("agent", `${AGENT_NAME} is already on a call right now. Try again in a few minutes.`);
+      }
     } catch {
       setTalkMode(false);
     }

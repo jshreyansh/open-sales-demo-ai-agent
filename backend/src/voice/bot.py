@@ -17,6 +17,7 @@ noticeable.
 
 import os
 
+import aiohttp
 from dotenv import load_dotenv
 
 # Must run before importing anything that transitively touches agent.runtime —
@@ -45,6 +46,8 @@ from pipecat.workers.runner import WorkerRunner
 
 from ..context.store import start_session
 from .agent_processor import AgentRuntimeProcessor, TTSLevelReporter
+
+REST_API_URL = "http://localhost:8787"
 
 transport_params = {
     # serializer must match the client's default (@pipecat-ai/websocket-transport's
@@ -143,6 +146,19 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     async def on_client_disconnected(_transport, _client):
         logger.info(f"Voice client disconnected: {visitor_id}")
         await worker.cancel()
+        # Frees the single-call gate (see server.py's _active_call) the
+        # moment this call actually ends, rather than leaving the next
+        # caller to wait out its TTL safety net. Best-effort: if this fails,
+        # the TTL still recovers it eventually.
+        try:
+            async with aiohttp.ClientSession() as http:
+                await http.post(
+                    f"{REST_API_URL}/api/voice-lock/release",
+                    json={"visitorId": visitor_id},
+                    timeout=aiohttp.ClientTimeout(total=3),
+                )
+        except Exception:
+            logger.exception(f"Failed to release voice lock for visitor {visitor_id}")
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)

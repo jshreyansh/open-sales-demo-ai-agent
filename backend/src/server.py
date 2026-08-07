@@ -1,4 +1,5 @@
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
@@ -49,6 +50,20 @@ _pending_voice_replies: Dict[str, List[str]] = {}
 # call actually reacts to, since the two processes don't share memory.
 _pending_hand_raises: Dict[str, bool] = {}
 
+# Whole-app single-call gate: the voicebot (bot.py) is one process running
+# every concurrent call's VAD/STT/TTS on one event loop, with no worker pool
+# and no autoscaling behind it — a second simultaneous caller doesn't get a
+# clean "no capacity" error, they just silently degrade the first caller's
+# call too. This makes that real limit explicit instead of letting it
+# happen invisibly. None means the line is free.
+_active_call: Optional[Dict[str, Any]] = None
+# Safety net only, not the normal release path — the normal path is bot.py
+# calling /api/voice-lock/release from on_client_disconnected the moment a
+# call actually ends. This just self-heals a lock that got stuck because
+# that never fired (e.g. the voice process crashed outright), without ever
+# interrupting a call that's realistically still going.
+_CALL_LOCK_TTL_SECS = 30 * 60
+
 
 class ChatRequest(BaseModel):
     visitorId: Optional[str] = None
@@ -80,6 +95,42 @@ def start_session_endpoint(body: StartSessionRequest):
     them by it from the very first word."""
     name = body.name.strip() if body.name else None
     start_session(body.visitorId, name)
+    return {"ok": True}
+
+
+class VoiceLockRequest(BaseModel):
+    visitorId: str
+
+
+@app.post("/api/voice-lock/claim")
+def claim_voice_lock(body: VoiceLockRequest):
+    """Called right before connecting voice — both Meeting Mode's pre-join
+    screen and Product Mode's Talk button go through useVoiceSession.connect(),
+    which calls this first. Only one real call is supported at a time on
+    this box today (see the module-level comment on _active_call); this is
+    what actually enforces that instead of just hoping it doesn't happen."""
+    global _active_call
+    now = time.monotonic()
+    if _active_call is not None:
+        stale = (now - _active_call["claimed_at"]) > _CALL_LOCK_TTL_SECS
+        same_visitor = _active_call["visitorId"] == body.visitorId
+        if not stale and not same_visitor:
+            return {"ok": False}
+    _active_call = {"visitorId": body.visitorId, "claimed_at": now}
+    return {"ok": True}
+
+
+@app.post("/api/voice-lock/release")
+def release_voice_lock(body: VoiceLockRequest):
+    """Called by bot.py's on_client_disconnected the moment a call actually
+    ends (the prompt, common-case release), and also by the frontend on an
+    explicit hangup for good measure. Only releases if the caller actually
+    holds the lock, so a stale/late release from a call that already lost
+    the lock (e.g. to the TTL) can't accidentally kick out whoever's on it
+    now."""
+    global _active_call
+    if _active_call is not None and _active_call["visitorId"] == body.visitorId:
+        _active_call = None
     return {"ok": True}
 
 
