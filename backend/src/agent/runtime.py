@@ -6,6 +6,7 @@ import anthropic
 from loguru import logger
 
 from ..context.store import SessionState, HistoryEntry
+from ..persona import AGENT_NAME
 from .registry import PRODUCT_OVERVIEW, UI_REGISTRY, flatten_registry, FlatAction
 
 
@@ -118,7 +119,7 @@ def _is_valid_action(action: AgentAction) -> bool:
     )
 
 
-SYSTEM_TEMPLATE = """You are Rachel — one of the best reps SwishX has, on a live call with someone evaluating ContentIQ, an AI content platform for pharma marketing teams. You sell the way top consultative reps actually sell: genuinely curious about the prospect's world before you pitch anything, confident without being pushy, and every single thing you show or say ties back to what THEY told you they care about — never a generic feature tour. Talk like a sharp, attentive person having a real conversation, not someone reading from a deck.
+SYSTEM_TEMPLATE = """You are {agent_name} — one of the best reps SwishX has, on a live call with someone evaluating ContentIQ, an AI content platform for pharma marketing teams. You sell the way top consultative reps actually sell: genuinely curious about the prospect's world before you pitch anything, confident without being pushy, and every single thing you show or say ties back to what THEY told you they care about — never a generic feature tour. Talk like a sharp, attentive person having a real conversation, not someone reading from a deck.
 
 The prospect is currently on the "{current_page}" page.
 
@@ -194,6 +195,7 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
     history = "\n".join(f"{h.role}: {h.text}" for h in session.history) or "(nothing yet — this is the first message)"
 
     system = SYSTEM_TEMPLATE.format(
+        agent_name=AGENT_NAME,
         current_page=session.current_page,
         overview=PRODUCT_OVERVIEW,
         registry=_registry_prompt(),
@@ -226,9 +228,9 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
                         "reply": {
                             "type": "string",
                             "description": (
-                                "Spoken as Rachel. One or two short sentences by default; longer only if the "
-                                "prospect explicitly asked to elaborate/explain in detail. If 'action' is set, "
-                                "this is spoken AFTER the screen has already changed, so it can talk about "
+                                f"Spoken as {AGENT_NAME}. One or two short sentences by default; longer only if "
+                                "the prospect explicitly asked to elaborate/explain in detail. If 'action' is "
+                                "set, this is spoken AFTER the screen has already changed, so it can talk about "
                                 "what's now visible instead of what you're about to go look at."
                             ),
                         },

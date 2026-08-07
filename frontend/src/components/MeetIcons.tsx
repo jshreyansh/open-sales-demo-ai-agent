@@ -9,6 +9,7 @@ import {
   mdiDotsHorizontal,
   mdiPhoneHangup,
   mdiAccountMultiple,
+  mdiAccount,
   mdiInformationOutline,
 } from "@mdi/js";
 
@@ -24,6 +25,7 @@ interface MeetIconProps {
     | "hangup"
     | "captions"
     | "people"
+    | "account"
     | "info";
   size?: number;
 }
@@ -42,6 +44,7 @@ const PATHS: Record<MeetIconProps["name"], string> = {
   dots: mdiDotsHorizontal,
   hangup: mdiPhoneHangup,
   people: mdiAccountMultiple,
+  account: mdiAccount,
   info: mdiInformationOutline,
 };
 

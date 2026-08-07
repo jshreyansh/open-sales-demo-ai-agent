@@ -1831,6 +1831,335 @@ body {
   background: #d33426;
 }
 
+/* ---- Meeting Mode: pre-join screen ---- */
+/* The whole screen is sized to fit one viewport with no page scroll — only
+   the persona lane below scrolls (horizontally, internally). Sizes here use
+   clamp()/vh so it still holds up on shorter laptop screens, not just the
+   viewport this was designed against. */
+
+.prejoin {
+  height: 100vh;
+  width: 100vw;
+  color: #e8eaed;
+  font-family: var(--font);
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 7vh 24px 3vh;
+  /* SwishX's own brand wallpaper as the backdrop, dimmed under a scrim so
+     cards/text stay readable — the warm glow is deliberately left visible
+     near the top, behind the heading, rather than fully washed out. */
+  background:
+    linear-gradient(180deg, rgba(9, 9, 11, 0.35) 0%, rgba(9, 9, 11, 0.72) 50%, rgba(9, 9, 11, 0.92) 100%),
+    url("./assets/prejoin-bg.jpg") center 35% / cover no-repeat,
+    #0c0c0e;
+}
+
+.prejoin__inner {
+  width: 100%;
+  max-width: 1100px;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(16px, 2.6vh, 28px);
+}
+
+.prejoin__header {
+  text-align: center;
+}
+
+.prejoin__kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #ffb37a;
+  margin-bottom: 10px;
+}
+
+.prejoin__title {
+  font-size: clamp(24px, 3.4vh, 34px);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  margin: 0 0 8px;
+  background: linear-gradient(180deg, #ffffff 30%, #cfd2d6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.prejoin__subtitle {
+  font-size: 14px;
+  color: rgba(232, 234, 237, 0.7);
+  margin: 0;
+}
+
+/* A single scrollable row instead of a multi-row grid — that's what keeps
+   the name input and Join button below always on-screen regardless of how
+   many personas exist. Faded on the right edge (mask, not a solid overlay,
+   so it works over any card content) to signal there's more to scroll to. */
+.prejoin__lane {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 2px 10px;
+  -webkit-mask-image: linear-gradient(to right, black 0, black calc(100% - 40px), transparent 100%);
+  mask-image: linear-gradient(to right, black 0, black calc(100% - 40px), transparent 100%);
+}
+
+.persona-card {
+  position: relative;
+  flex: 0 0 clamp(160px, 18vw, 224px);
+  /* Fixed, not clamped to content — every card (photo or placeholder, short
+     about-line or long) needs to line up at exactly the same height in the
+     lane, so this is sized for the longest about-line across all personas
+     rather than shrinking to fit each one individually. */
+  height: clamp(260px, 40vh, 330px);
+  border-radius: 16px;
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(160deg, #3a3540, #1c1c20);
+  color: inherit;
+  font: inherit;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.persona-card:hover:not(.persona-card--locked) {
+  border-color: rgba(255, 255, 255, 0.28);
+  transform: translateY(-2px);
+}
+
+.persona-card--selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 10px 30px rgba(255, 79, 0, 0.2);
+}
+
+.persona-card--locked {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.persona-card--locked:hover {
+  transform: none;
+}
+
+.persona-card__photo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* A generic person glyph in a soft radial glow, standing in for personas
+   that don't have a real photo yet — considerably less "empty box" than a
+   bare initial letter, without needing a real photo attached to a
+   fictional name. */
+.persona-card__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.3);
+  background: radial-gradient(circle at 50% 38%, rgba(255, 255, 255, 0.07), transparent 60%);
+}
+
+.persona-card__status {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 3px 7px;
+  border-radius: 99px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #cfd2d6;
+}
+
+.persona-card__status--available {
+  background: rgba(52, 168, 83, 0.25);
+  color: #81c995;
+}
+
+/* The name/position/about/nationality block sits directly on the photo,
+   readable via this bottom fade rather than a separate solid panel below
+   it — that separate panel was the main thing making the old cards tall. */
+.persona-card__overlay {
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* Fixed min-height (not just padding) — this is what keeps the text block
+     the same size on every card regardless of how long that persona's
+     about-line runs, so the photo-visible area above it lines up too. */
+  min-height: 128px;
+  padding: 40px 13px 12px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.94) 0%, rgba(0, 0, 0, 0.8) 45%, rgba(0, 0, 0, 0) 100%);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 3px;
+}
+
+.persona-card__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.persona-card__name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.persona-card__radio {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.persona-card__radio--checked {
+  border-color: var(--accent);
+}
+
+.persona-card__radio--checked::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.persona-card__radio--disabled {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.persona-card__position {
+  font-size: 11px;
+  color: #cfd2d6;
+}
+
+.persona-card__about {
+  font-size: 11px;
+  color: #b8bcc0;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.persona-card__nationality {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #cfd2d6;
+  margin-top: 3px;
+}
+
+.persona-card__flag {
+  font-size: 13px;
+}
+
+.prejoin__name {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.prejoin__name label {
+  font-size: 12px;
+  color: #9aa0a6;
+}
+
+.prejoin__name input {
+  width: 100%;
+  max-width: 440px;
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 14px;
+  padding: clamp(12px, 2vh, 18px) 20px;
+  color: #fff;
+  font-size: 18px;
+  text-align: center;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.prejoin__name input::placeholder {
+  color: rgba(232, 234, 237, 0.4);
+}
+
+.prejoin__name input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(255, 79, 0, 0.18);
+}
+
+.prejoin__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.prejoin__join {
+  min-width: 260px;
+  padding: clamp(12px, 1.8vh, 16px) 40px;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 8px 24px rgba(255, 79, 0, 0.35);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.prejoin__join:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 28px rgba(255, 79, 0, 0.45);
+}
+
+.prejoin__join:disabled {
+  background: rgba(255, 255, 255, 0.12);
+  color: #6c6f73;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.prejoin__schedule {
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: #9aa0a6;
+  cursor: not-allowed;
+}
+
 /* ---- Format detail modal (Content Studio) ---- */
 
 .modal-overlay {

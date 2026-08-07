@@ -63,6 +63,23 @@ export async function raiseHand(visitorId: string): Promise<void> {
   await fetch(`${API_URL}/api/hand-raise/${visitorId}`, { method: "POST" });
 }
 
+/**
+ * Called once, right when the visitor picks a name on Meeting Mode's
+ * pre-join screen — before the voice connection starts. Explicitly
+ * (re)starts the backend session with that name so the opening greeting
+ * (spoken by the voice pipeline) addresses them by it from the first word,
+ * instead of waiting for them to volunteer it mid-conversation. Always
+ * starts fresh rather than resuming whatever session visitorId already had
+ * (it persists in localStorage across visits) — a new "Join" is a new call.
+ */
+export async function startSession(visitorId: string, name: string): Promise<void> {
+  await fetch(`${API_URL}/api/session/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visitorId, name }),
+  });
+}
+
 export function getDashboard() {
   return getJson<import("./types").DashboardData>("/api/dashboard");
 }

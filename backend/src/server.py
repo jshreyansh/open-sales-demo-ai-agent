@@ -9,7 +9,7 @@ from pydantic import BaseModel
 load_dotenv()
 
 from .agent.runtime import run_turn
-from .context.store import get_session
+from .context.store import get_session, start_session
 from .data.dashboard import dashboard_data
 from .data.analytics import analytics_overview
 from .data.brand_kit import brand_kit_data
@@ -64,6 +64,23 @@ def chat(body: ChatRequest):
     if body.currentPage:
         session.current_page = body.currentPage
     return run_turn(body.message, session)
+
+
+class StartSessionRequest(BaseModel):
+    visitorId: str
+    name: Optional[str] = None
+
+
+@app.post("/api/session/start")
+def start_session_endpoint(body: StartSessionRequest):
+    """Called once by Meeting Mode's pre-join screen, right when the visitor
+    picks a name — before the voice connection is made. Seeds a fresh
+    session with a greeting personalized to that name, so the voice
+    pipeline's opening line (see AgentRuntimeProcessor._greet) addresses
+    them by it from the very first word."""
+    name = body.name.strip() if body.name else None
+    start_session(body.visitorId, name)
+    return {"ok": True}
 
 
 @app.get("/health")

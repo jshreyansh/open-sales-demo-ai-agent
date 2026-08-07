@@ -1,9 +1,12 @@
+import array
 import asyncio
 import contextlib
 import os
 import random
 import re
 import subprocess
+import time
+import uuid
 from typing import Dict
 
 import aiohttp
@@ -16,9 +19,11 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     OutputAudioRawFrame,
+    OutputTransportMessageFrame,
     StartFrame,
     TextFrame,
     TranscriptionFrame,
+    TTSAudioRawFrame,
     VADUserStartedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -264,13 +269,17 @@ class AgentRuntimeProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
     async def _greet(self, direction: FrameDirection) -> None:
-        # get_session() seeds a brand-new session's history with this exact
-        # text (see context/store.py) — calling it here just ensures the
-        # session exists yet before the prospect has said anything, so that
-        # seeding has already happened by the time run_turn() looks at it.
-        get_session(self._visitor_id)
-        await self._speak(OPENING_GREETING, direction)
-        asyncio.create_task(self._report_reply(OPENING_GREETING))
+        # get_session() creates a brand-new session seeded with OPENING_GREETING
+        # if one doesn't exist yet (see context/store.py) — but for Meeting
+        # Mode, the frontend's pre-join screen already called start_session()
+        # with the visitor's name moments earlier, which seeds a personalized
+        # greeting instead. Either way, speak back whatever text actually got
+        # seeded rather than the generic constant, so the personalized case
+        # is heard, not silently discarded.
+        session = get_session(self._visitor_id)
+        greeting = session.history[0].text if session.history else OPENING_GREETING
+        await self._speak(greeting, direction)
+        asyncio.create_task(self._report_reply(greeting))
 
     async def _play_typing_sound(self, direction: FrameDirection) -> None:
         rate = self._audio_out_sample_rate
@@ -374,3 +383,69 @@ class AgentRuntimeProcessor(FrameProcessor):
             with contextlib.suppress(asyncio.CancelledError):
                 await self._hand_raise_poll_task
         await super().cleanup()
+
+
+def _rms_level(audio_bytes: bytes) -> float:
+    """0-1 loudness from raw 16-bit PCM, same normalization the frontend's
+    own useAudioLevelRing.ts uses for the visitor's mic (RMS / int16 full
+    scale, boosted 4x since normal speech sits well under full scale) —
+    kept consistent so both sides of the speaking ring feel comparably
+    responsive rather than one looking louder than the other by accident."""
+    usable_len = len(audio_bytes) - (len(audio_bytes) % 2)
+    if usable_len <= 0:
+        return 0.0
+    samples = array.array("h")
+    samples.frombytes(audio_bytes[:usable_len])
+    if not samples:
+        return 0.0
+    mean_square = sum(s * s for s in samples) / len(samples)
+    rms = mean_square**0.5
+    return min(1.0, (rms / 32768.0) * 4)
+
+
+class TTSLevelReporter(FrameProcessor):
+    """Sits right after TTS in the pipeline, before transport.output().
+
+    The agent's synthesized speech isn't exposed to the browser as an
+    inspectable MediaStreamTrack under the WebSocket transport the way the
+    visitor's own mic is (confirmed by reading
+    @pipecat-ai/websocket-transport's WavMediaManager.tracks() directly —
+    it returns a "local" track but has no "bot" key at all), so there's
+    nothing for the frontend to run a Web Audio analyser on for its side.
+    This computes the same kind of loudness value server-side, from the
+    actual audio bytes about to be sent, and reports it alongside the
+    audio as a small RTVI server-message — genuine measured amplitude, not
+    a canned animation keyed off start/stop timing.
+
+    Purely a side channel: the original audio frame is always forwarded
+    unchanged and immediately, so this can't add latency or alter what's
+    actually heard — it only ever adds one small extra message frame.
+    """
+
+    _MIN_INTERVAL_SECS = 0.08  # ~12/sec — smooth enough for a CSS transition, cheap on the wire
+
+    def __init__(self):
+        super().__init__()
+        self._last_sent = 0.0
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, TTSAudioRawFrame):
+            now = time.monotonic()
+            if now - self._last_sent >= self._MIN_INTERVAL_SECS:
+                self._last_sent = now
+                level = _rms_level(frame.audio)
+                await self.push_frame(
+                    OutputTransportMessageFrame(
+                        message={
+                            "id": str(uuid.uuid4()),
+                            "label": "rtvi-ai",
+                            "type": "server-message",
+                            "data": {"kind": "agent-audio-level", "level": level},
+                        }
+                    ),
+                    direction,
+                )
+
+        await self.push_frame(frame, direction)

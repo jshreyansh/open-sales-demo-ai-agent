@@ -10,6 +10,24 @@ const ELEVATION = "0 6px 18px rgba(0, 0, 0, 0.35)";
 const TINT_RGB = "138, 180, 248"; // Meet's speaking-indicator blue
 
 /**
+ * Shared by both ring sources (this file's live MediaStreamTrack analyser,
+ * and useReportedAudioLevelRing's server-message-driven one) so the two
+ * tiles look identically responsive at the same level value, whichever
+ * source it came from.
+ */
+export function applyLevelToRing(el: HTMLElement, level: number) {
+  const strokeOpacity = 0.45 + level * 0.55;
+  const glowBlur = 14 + level * 46;
+  const glowSpread = 6 + level * 6;
+  const glowOpacity = 0.3 + level * 0.6;
+  el.style.boxShadow = [
+    ELEVATION,
+    `0 0 0 3px rgba(${TINT_RGB}, ${strokeOpacity})`,
+    `0 0 ${glowBlur}px ${glowSpread}px rgba(${TINT_RGB}, ${glowOpacity})`,
+  ].join(", ");
+}
+
+/**
  * Drives an avatar's box-shadow from a MediaStreamTrack's *real* amplitude —
  * not a canned pulse animation and not the pipecat client's own
  * localAudioLevel/remoteAudioLevel RTVI events (those are only wired up for
@@ -63,16 +81,7 @@ export function useAudioLevelRing(track: MediaStreamTrack | null | undefined) {
       const level = Math.min(1, rms * 4);
 
       const el = ringRef.current;
-      if (el) {
-        const strokeOpacity = 0.3 + level * 0.6;
-        const glowBlur = 6 + level * 22;
-        const glowOpacity = 0.12 + level * 0.38;
-        el.style.boxShadow = [
-          ELEVATION,
-          `0 0 0 2px rgba(${TINT_RGB}, ${strokeOpacity})`,
-          `0 0 ${glowBlur}px 4px rgba(${TINT_RGB}, ${glowOpacity})`,
-        ].join(", ");
-      }
+      if (el) applyLevelToRing(el, level);
       rafId = requestAnimationFrame(tick);
     }
     rafId = requestAnimationFrame(tick);

@@ -43,7 +43,7 @@ from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.workers.runner import WorkerRunner
 
-from .agent_processor import AgentRuntimeProcessor
+from .agent_processor import AgentRuntimeProcessor, TTSLevelReporter
 
 transport_params = {
     # serializer must match the client's default (@pipecat-ai/websocket-transport's
@@ -98,6 +98,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         ),
     )
     agent = AgentRuntimeProcessor(visitor_id)
+    # Reports the agent's real speaking loudness to the client alongside its
+    # audio — see TTSLevelReporter's docstring for why this exists (its
+    # synthesized speech has no MediaStreamTrack the frontend could
+    # otherwise measure directly, unlike the visitor's own mic).
+    tts_level_reporter = TTSLevelReporter()
 
     pipeline = Pipeline(
         [
@@ -106,6 +111,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
             stt,
             agent,
             tts,
+            tts_level_reporter,
             transport.output(),
         ]
     )
