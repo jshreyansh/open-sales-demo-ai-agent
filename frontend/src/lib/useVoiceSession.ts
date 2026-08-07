@@ -33,13 +33,13 @@ export function useVoiceSession(onAction: (action: AgentAction) => void, onReply
   useRTVIClientEvent(RTVIEvent.BotStartedSpeaking, useCallback(() => setIsAgentSpeaking(true), []));
   useRTVIClientEvent(RTVIEvent.BotStoppedSpeaking, useCallback(() => setIsAgentSpeaking(false), []));
 
-  async function connect() {
+  async function connect(name?: string) {
     // Connect only once — reconnecting fires the client library's own
     // "Connected" handler, which wipes the whole conversation history as a
     // side effect. Once connected, treat further "connect" calls as just
     // unmuting so the shared transcript survives toggling.
     if (transportState === "disconnected") {
-      await connectVoice(visitorId);
+      await connectVoice(visitorId, name);
     }
     enableMic(true);
   }

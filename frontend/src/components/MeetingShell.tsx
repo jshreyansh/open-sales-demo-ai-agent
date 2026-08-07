@@ -64,6 +64,10 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
   // below) behind PreJoinScreen — the visitor picks a rep and gives their
   // name there first, a real call doesn't auto-connect before that.
   const [joined, setJoined] = useState(false);
+  // Captured from PreJoinScreen — threaded into connect() below so the
+  // voice pipeline's own process (see the connect-effect's comment) gets it
+  // directly, rather than relying on a side channel it can't see.
+  const [visitorName, setVisitorName] = useState<string | undefined>(undefined);
   const { voiceConnected, isMicEnabled, enableMic, connect, mute } = useVoiceSession(onAction);
   // "You" tile: real local mic MediaStreamTrack, analysed client-side. The
   // agent's tile: WebSocketTransport exposes no "bot" track at all (its
@@ -91,13 +95,21 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
   // connect() itself enables the mic (that's the right default for Product
   // Mode's explicit "Talk" button) — Meeting Mode wants the opposite default,
   // muted until the visitor deliberately unmutes, so mute right after.
+  //
+  // visitorName is passed straight into connect() (which threads it onto
+  // the WebSocket URL as a query param, see pipecatClient.ts) rather than
+  // relying on the earlier POST /api/session/start alone — that REST call
+  // lands in the REST API process (server.py, port 8787), a completely
+  // separate OS process from the voice pipeline it needs to reach (bot.py,
+  // port 7860), each with its own independent in-memory session store. Only
+  // what actually reaches bot.py's own process affects what it speaks.
   const connectStarted = useRef(false);
   useEffect(() => {
     if (!joined) return;
     if (countdown > 0) return;
     if (connectStarted.current) return;
     connectStarted.current = true;
-    void connect().then(() => mute());
+    void connect(visitorName).then(() => mute());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [joined, countdown]);
 
@@ -111,16 +123,15 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
     window.setTimeout(() => setHandRaised(false), 2000);
   }
 
-  // Priming the session with the visitor's name before the voice pipeline
-  // ever connects means the very first thing it says is already
-  // personalized ("Hi Alex, I'm Fiona...") instead of generic — the voice
-  // process reads back whatever greeting this call seeded (see
-  // backend/src/context/store.py's start_session). Fire-and-forget: the
-  // 5-second join countdown plus pipeline setup time is ample margin for
-  // this request to land first, and if it doesn't, the call still works —
-  // it just falls back to the generic non-personalized greeting.
+  // The actual voice personalization happens via connect(visitorName) in
+  // the effect above. This REST call is a separate, secondary thing: it
+  // seeds the REST API process's own session store with the same name, in
+  // case anything reads it from that side later (e.g. a future text
+  // transcript in Meeting Mode) — Meeting Mode has no such surface today,
+  // so this is forward-looking, not load-bearing.
   function handleJoin(name: string) {
     void startSession(visitorId, name);
+    setVisitorName(name);
     setJoined(true);
   }
 

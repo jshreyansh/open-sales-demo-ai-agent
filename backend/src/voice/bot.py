@@ -43,6 +43,7 @@ from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.workers.runner import WorkerRunner
 
+from ..context.store import start_session
 from .agent_processor import AgentRuntimeProcessor, TTSLevelReporter
 
 transport_params = {
@@ -60,18 +61,30 @@ transport_params = {
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     visitor_id = "voice-test"
+    visitor_name = None
     body = getattr(runner_args, "body", None)
     if isinstance(body, dict) and body.get("visitorId"):
         visitor_id = body["visitorId"]
+        visitor_name = body.get("name") or None
     else:
         # The plain-WebSocket runner path has no body/metadata channel at
-        # all (unlike the old WebRTC /start flow) — visitorId travels as a
-        # query param on the WebSocket URL itself instead (see
+        # all (unlike the old WebRTC /start flow) — visitorId (and, if the
+        # visitor gave one on Meeting Mode's pre-join screen, name) travel
+        # as query params on the WebSocket URL itself instead (see
         # frontend/src/lib/pipecatClient.ts).
         ws = getattr(runner_args, "websocket", None)
-        query_visitor_id = getattr(ws, "query_params", {}).get("visitorId") if ws else None
-        if query_visitor_id:
-            visitor_id = query_visitor_id
+        query_params = getattr(ws, "query_params", {}) if ws else {}
+        if query_params.get("visitorId"):
+            visitor_id = query_params["visitorId"]
+        visitor_name = query_params.get("name") or None
+
+    # Seeds *this process's* session store with a personalized greeting
+    # before AgentRuntimeProcessor/_greet ever touch it — server.py (the
+    # REST API, port 8787) is a separate OS process with its own separate
+    # in-memory session store, so a name captured there (see
+    # POST /api/session/start) never reaches this one on its own. Only a
+    # no-op if visitor_name is None (falls back to the generic greeting).
+    start_session(visitor_id, visitor_name)
 
     # VAD is its own pipeline stage in this Pipecat version — it's what turns
     # raw audio into VADUserStartedSpeakingFrame/VADUserStoppedSpeakingFrame,
