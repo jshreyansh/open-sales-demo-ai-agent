@@ -1847,12 +1847,13 @@ body {
   justify-content: center;
   align-items: flex-start;
   padding: 7vh 24px 3vh;
-  /* SwishX's own brand wallpaper as the backdrop, dimmed under a scrim so
-     cards/text stay readable — the warm glow is deliberately left visible
-     near the top, behind the heading, rather than fully washed out. */
+  /* SwishX's own brand wallpaper as the backdrop — contain, not cover, so
+     the full image always shows uncropped (letterboxed into the dark
+     background color on whichever axis has leftover room), under a
+     moderate scrim so it reads clearly without washing it out. */
   background:
-    linear-gradient(180deg, rgba(9, 9, 11, 0.35) 0%, rgba(9, 9, 11, 0.72) 50%, rgba(9, 9, 11, 0.92) 100%),
-    url("./assets/prejoin-bg.jpg") center 35% / cover no-repeat,
+    linear-gradient(180deg, rgba(9, 9, 11, 0.2) 0%, rgba(9, 9, 11, 0.5) 45%, rgba(9, 9, 11, 0.8) 100%),
+    url("./assets/prejoin-bg.jpg") center / contain no-repeat,
     #0c0c0e;
 }
 
