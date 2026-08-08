@@ -99,7 +99,6 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
                 </span>
               </div>
               <div className="persona-card__position">{persona.position}</div>
-              <div className="persona-card__about">{persona.about}</div>
               <div className="persona-card__location">
                 <MeetIcon name="location" size={14} />
                 {persona.location}
@@ -125,7 +124,7 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
 
             <div className="prejoin__actions">
               <button type="button" className="prejoin__join" disabled={!canJoin} onClick={handleJoin}>
-                {joining ? "Checking…" : "Join now"}
+                {joining ? "Checking…" : "Join Product Demo"}
               </button>
               <button type="button" className="prejoin__schedule" disabled title="Coming soon">
                 Schedule for later

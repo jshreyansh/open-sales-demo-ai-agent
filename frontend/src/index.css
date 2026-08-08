@@ -1910,7 +1910,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: clamp(28px, 4vw, 56px);
+  gap: clamp(40px, 6vw, 80px);
   flex-wrap: wrap;
 }
 
@@ -2042,7 +2042,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: clamp(20px, 3vh, 32px);
+  gap: clamp(26px, 4vh, 40px);
   width: clamp(260px, 26vw, 380px);
 }
 
