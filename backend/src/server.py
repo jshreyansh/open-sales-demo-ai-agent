@@ -11,6 +11,7 @@ load_dotenv()
 
 from .agent.runtime import run_turn
 from .context.store import get_session, start_session
+from .data import gate_log
 from .data.dashboard import dashboard_data
 from .data.analytics import analytics_overview
 from .data.brand_kit import brand_kit_data
@@ -48,7 +49,14 @@ _pending_voice_replies: Dict[str, List[str]] = {}
 # button posts here, and the voice process (a separate process on :7860)
 # polls it — that's how a click in Meeting Mode becomes something the live
 # call actually reacts to, since the two processes don't share memory.
-_pending_hand_raises: Dict[str, bool] = {}
+#
+# Unlike the mailboxes above, this is real persistent state, not a one-shot
+# flag that gets consumed on first read: raising and lowering the hand are
+# both explicit visitor actions (see MeetingShell's toggle button), and the
+# voice process itself tracks whether it has already acknowledged the
+# current raise — see agent_processor.py's _hand_ack_sent. Nothing here
+# auto-expires a raise; only a visitor clicking the button again does.
+_hand_raise_state: Dict[str, bool] = {}
 
 # Whole-app single-call gate: the voicebot (bot.py) is one process running
 # every concurrent call's VAD/STT/TTS on one event loop, with no worker pool
@@ -84,18 +92,87 @@ def chat(body: ChatRequest):
 class StartSessionRequest(BaseModel):
     visitorId: str
     name: Optional[str] = None
+    company: Optional[str] = None
+    email: Optional[str] = None
 
 
 @app.post("/api/session/start")
 def start_session_endpoint(body: StartSessionRequest):
     """Called once by Meeting Mode's pre-join screen, right when the visitor
-    picks a name — before the voice connection is made. Seeds a fresh
-    session with a greeting personalized to that name, so the voice
-    pipeline's opening line (see AgentRuntimeProcessor._greet) addresses
-    them by it from the very first word."""
+    fills in their name, company, and work email — before the voice
+    connection is made. Seeds a fresh session with a greeting personalized
+    to that name, so the voice pipeline's opening line (see
+    AgentRuntimeProcessor._greet) addresses them by it from the very first
+    word, and with company/email already on hand as the first real MEDDIC
+    data point (see runtime.py's _company_note)."""
     name = body.name.strip() if body.name else None
-    start_session(body.visitorId, name)
+    company = body.company.strip() if body.company else None
+    email = body.email.strip() if body.email else None
+    start_session(body.visitorId, name, company, email)
     return {"ok": True}
+
+
+class VisitorLookupRequest(BaseModel):
+    email: str
+
+
+@app.post("/api/visitor/lookup")
+def lookup_visitor(body: VisitorLookupRequest):
+    """Called by the shared gate form (PreJoinScreen and the dashboard gate)
+    the moment a valid work email is entered — lets a returning visitor skip
+    straight past the name/company fields instead of retyping what's already
+    on file from a previous visit (see gate_log.lookup_by_email)."""
+    result = gate_log.lookup_by_email(body.email)
+    if result is None:
+        return {"known": False}
+    return {"known": True, **result}
+
+
+class VisitorGateRequest(BaseModel):
+    visitorId: str
+    email: str
+    name: Optional[str] = None
+    company: Optional[str] = None
+    path: str
+    status: str
+
+
+@app.post("/api/visitor/gate")
+def report_visitor_gate(body: VisitorGateRequest):
+    """Called once per gate submission — allowed or blocked — by the shared
+    gate form. This is the actual write path for the admin panel's identity
+    log; unlike everything else in this file, it's meant to persist across a
+    restart (see gate_log.py)."""
+    gate_log.record_attempt(body.visitorId, body.email, body.name, body.company, body.path, body.status)
+    return {"ok": True}
+
+
+@app.get("/api/admin/visitors")
+def admin_list_visitors():
+    return gate_log.list_visitors_summary()
+
+
+@app.get("/api/admin/attempts")
+def admin_list_attempts(limit: int = 200, offset: int = 0):
+    return gate_log.list_attempts(limit, offset)
+
+
+@app.get("/api/admin/stats")
+def admin_stats():
+    return gate_log.get_stats()
+
+
+@app.get("/api/admin/visitors/{email}")
+def admin_visitor_detail(email: str):
+    detail = gate_log.get_visitor_detail(email)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="No visitor with that email")
+    return detail
+
+
+@app.get("/api/admin/transcript/{visitor_id}")
+def admin_transcript(visitor_id: str):
+    return gate_log.list_transcript(visitor_id)
 
 
 class VoiceLockRequest(BaseModel):
@@ -210,20 +287,30 @@ def get_voice_reply(visitor_id: str):
     return {"reply": queue.pop(0)}
 
 
+class HandRaiseRequest(BaseModel):
+    raised: bool
+
+
 @app.post("/api/hand-raise/{visitor_id}")
-def raise_hand(visitor_id: str):
-    """Called by the frontend when the prospect clicks the hand-raise button
-    in Meeting Mode — the non-interrupting alternative to talking over the
-    agent."""
-    _pending_hand_raises[visitor_id] = True
+def set_hand_raise(visitor_id: str, body: HandRaiseRequest):
+    """Called by the frontend's hand-raise button — a toggle, not a momentary
+    press. Raising and lowering are both explicit clicks the visitor makes;
+    the button itself decides when to unset this, nothing here times it out."""
+    if body.raised:
+        _hand_raise_state[visitor_id] = True
+    else:
+        _hand_raise_state.pop(visitor_id, None)
     return {"ok": True}
 
 
 @app.get("/internal/hand-raise/{visitor_id}")
 def get_hand_raise(visitor_id: str):
-    """Polled by the voice process. Returns and clears the pending flag, so
-    it's handled exactly once."""
-    return {"raised": _pending_hand_raises.pop(visitor_id, False)}
+    """Polled by the voice process every second. Returns the current state
+    without consuming it — the voice process tracks for itself whether it's
+    already handed off for the current raise (see agent_processor.py's
+    _hand_ack_sent), so polling the same "still raised" state repeatedly is
+    expected and safe."""
+    return {"raised": _hand_raise_state.get(visitor_id, False)}
 
 
 if __name__ == "__main__":

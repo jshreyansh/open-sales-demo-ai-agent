@@ -131,29 +131,36 @@ async def _watch_idle(agent: AgentRuntimeProcessor, worker: PipelineWorker, visi
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     visitor_id = "voice-test"
     visitor_name = None
+    visitor_company = None
+    visitor_email = None
     body = getattr(runner_args, "body", None)
     if isinstance(body, dict) and body.get("visitorId"):
         visitor_id = body["visitorId"]
         visitor_name = body.get("name") or None
+        visitor_company = body.get("company") or None
+        visitor_email = body.get("email") or None
     else:
         # The plain-WebSocket runner path has no body/metadata channel at
-        # all (unlike the old WebRTC /start flow) — visitorId (and, if the
-        # visitor gave one on Meeting Mode's pre-join screen, name) travel
-        # as query params on the WebSocket URL itself instead (see
+        # all (unlike the old WebRTC /start flow) — visitorId (and, if given
+        # on Meeting Mode's pre-join screen, name/company/email) travel as
+        # query params on the WebSocket URL itself instead (see
         # frontend/src/lib/pipecatClient.ts).
         ws = getattr(runner_args, "websocket", None)
         query_params = getattr(ws, "query_params", {}) if ws else {}
         if query_params.get("visitorId"):
             visitor_id = query_params["visitorId"]
         visitor_name = query_params.get("name") or None
+        visitor_company = query_params.get("company") or None
+        visitor_email = query_params.get("email") or None
 
     # Seeds *this process's* session store with a personalized greeting
     # before AgentRuntimeProcessor/_greet ever touch it — server.py (the
     # REST API, port 8787) is a separate OS process with its own separate
-    # in-memory session store, so a name captured there (see
+    # in-memory session store, so anything captured there (see
     # POST /api/session/start) never reaches this one on its own. Only a
-    # no-op if visitor_name is None (falls back to the generic greeting).
-    start_session(visitor_id, visitor_name)
+    # no-op for fields that are None (falls back to the generic greeting,
+    # and _company_note in runtime.py just stays silent about company/email).
+    start_session(visitor_id, visitor_name, visitor_company, visitor_email)
 
     # VAD is its own pipeline stage in this Pipecat version — it's what turns
     # raw audio into VADUserStartedSpeakingFrame/VADUserStoppedSpeakingFrame,

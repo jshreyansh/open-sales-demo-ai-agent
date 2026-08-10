@@ -105,6 +105,19 @@ def _load_typing_pcm(sample_rate: int) -> bytes:
 NEUTRAL_FILLERS = ["Okay —", "Right —", "Got it —", "I hear you —", "Makes sense —", "Sure —"]
 QUESTION_FILLERS = ["Good question —", "Great question —", "Let's see —"]
 
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Rough sentence splitter — good enough for spoken replies (short,
+    plain punctuation), not meant to handle abbreviations or edge cases a
+    real NLP sentence tokenizer would. Used by _speak_reply so a hand-raise
+    mid-reply can interrupt at a sentence boundary instead of only after the
+    whole thing."""
+    parts = [p.strip() for p in _SENTENCE_SPLIT_RE.split(text.strip()) if p.strip()]
+    return parts or [text]
+
+
 _QUESTION_STARTERS = frozenset(
     [
         "what", "why", "how", "when", "where", "who", "which", "whose",
@@ -163,8 +176,26 @@ class AgentRuntimeProcessor(FrameProcessor):
         self._last_filler = None
         self._greeted = False
         self._audio_out_sample_rate = 24000  # StartFrame's own default; overwritten once it arrives
+        # Mirrors the backend's current hand-raise state (see server.py's
+        # _hand_raise_state) — the visitor controls this directly via a
+        # toggle button, not a timer, so this only ever changes on the next
+        # poll after an actual click.
         self._hand_raised = False
+        # Whether the handoff line has already been spoken for the CURRENT
+        # raise — set the moment it's spoken, reset back to False whenever
+        # the raise transitions low->high (a fresh raise) or high->low (the
+        # visitor lowered it, so the next raise starts clean). This is what
+        # makes a raise get exactly one handoff no matter how long it stays
+        # up or how many poll ticks see it, instead of repeating.
+        self._hand_ack_sent = False
         self._hand_raise_poll_task: asyncio.Task | None = None
+        # Set on BotStartedSpeakingFrame, cleared on BotStoppedSpeakingFrame —
+        # lets _speak_reply wait for one sentence's real playback to actually
+        # finish before speaking the next, so a hand-raise mid-reply can be
+        # caught at the next sentence boundary instead of only after the
+        # whole explanation. Starts set (idle = "nothing playing").
+        self._speech_finished = asyncio.Event()
+        self._speech_finished.set()
         # True only while a TranscriptionFrame's filler/run_turn/speak
         # sequence is actively running. Lets _poll_hand_raise tell "raised
         # while I'm mid-turn, defer to its natural end" from "raised while
@@ -203,12 +234,14 @@ class AgentRuntimeProcessor(FrameProcessor):
 
         if isinstance(frame, BotStartedSpeakingFrame):
             self._bot_speaking = True
+            self._speech_finished.clear()
             self._last_activity = time.monotonic()
             await self.push_frame(frame, direction)
             return
 
         if isinstance(frame, BotStoppedSpeakingFrame):
             self._bot_speaking = False
+            self._speech_finished.set()
             await self.push_frame(frame, direction)
             return
 
@@ -266,23 +299,21 @@ class AgentRuntimeProcessor(FrameProcessor):
                     await self._speak(lead_in, direction)
                     asyncio.create_task(self._report_action(action))
                     asyncio.create_task(self._report_reply(reply))
-                    await self._speak(reply, direction)
+                    await self._speak_reply(reply, direction)
                 else:
                     if action:
                         asyncio.create_task(self._report_action(action))
                     asyncio.create_task(self._report_reply(reply))
-                    await self._speak(reply, direction)
+                    await self._speak_reply(reply, direction)
 
-                if self._hand_raised:
-                    # Caught a raise that happened while this turn was
-                    # already running — the natural "finished my current
-                    # topic" point, not mid-utterance. Hand-raise is
-                    # deliberately the non-interrupting alternative to VAD
-                    # barge-in: let the explanation finish, then hand off
-                    # explicitly instead of auto-continuing to whatever would
-                    # come next. (A raise while fully idle is instead caught
-                    # and handled directly by _poll_hand_raise.)
-                    self._hand_raised = False
+                if self._hand_raised and not self._hand_ack_sent:
+                    # Either a raise landed right as the last sentence
+                    # finished (too late for _speak_reply's own per-sentence
+                    # check to catch), or the whole reply was one sentence to
+                    # begin with. Either way, this is the natural end-of-turn
+                    # point to hand off — _speak_reply already handles the
+                    # mid-reply case by breaking early and handing off itself,
+                    # which sets _hand_ack_sent so this doesn't double-fire.
                     await self._speak_hand_raise_handoff(direction)
             finally:
                 self._turn_in_progress = False
@@ -333,6 +364,21 @@ class AgentRuntimeProcessor(FrameProcessor):
         await self.push_frame(TextFrame(text), direction)
         await self.push_frame(LLMFullResponseEndFrame(), direction)
 
+    async def _speak_reply(self, text: str, direction: FrameDirection) -> None:
+        """Like _speak, but one sentence at a time — waiting for each
+        sentence's real playback to finish (via _speech_finished, set/cleared
+        off BotStartedSpeakingFrame/BotStoppedSpeakingFrame) before starting
+        the next. This is what lets a hand-raise mid-reply interrupt at the
+        sentence boundary it happened in, instead of only ever being noticed
+        after the entire explanation has already been spoken."""
+        for sentence in _split_sentences(text):
+            self._speech_finished.clear()
+            await self._speak(sentence, direction)
+            await self._speech_finished.wait()
+            if self._hand_raised and not self._hand_ack_sent:
+                await self._speak_hand_raise_handoff(direction)
+                return
+
     async def _report_action(self, action: dict) -> None:
         try:
             async with aiohttp.ClientSession() as http:
@@ -356,6 +402,11 @@ class AgentRuntimeProcessor(FrameProcessor):
             logger.exception(f"Failed to report voice reply for visitor {self._visitor_id}")
 
     async def _speak_hand_raise_handoff(self, direction: FrameDirection) -> None:
+        # Set before speaking, not after — this is the single gate that
+        # stops a raise from getting handed off twice (once mid-reply via
+        # _speak_reply, once more at end-of-turn, or twice across repeated
+        # polls while it's still held up).
+        self._hand_ack_sent = True
         handoff = "Yes, go ahead — what's your question?"
         asyncio.create_task(self._report_reply(handoff))
         await self._speak(handoff, direction)
@@ -367,6 +418,14 @@ class AgentRuntimeProcessor(FrameProcessor):
         # the live call actually reacts to, mirroring the existing
         # voice-action/voice-reply mailbox pattern in server.py, just in the
         # opposite direction.
+        #
+        # Unlike the old version, the backend's hand-raise state is no
+        # longer a one-shot flag consumed on first read — it's the visitor's
+        # own toggle (see MeetingShell's button), which stays raised until
+        # they click it again. So this loop tracks transitions itself
+        # (low->high is a fresh raise, high->low means they lowered it) and
+        # relies on _hand_ack_sent to make sure a raise that stays up for
+        # many poll ticks only ever gets handed off once.
         try:
             async with aiohttp.ClientSession() as http:
                 while True:
@@ -377,30 +436,36 @@ class AgentRuntimeProcessor(FrameProcessor):
                             timeout=aiohttp.ClientTimeout(total=3),
                         ) as resp:
                             data = await resp.json()
-                            if not data.get("raised"):
-                                continue
-                            # Counts as activity even though it's not speech —
-                            # a hand-raise is a genuine engagement signal, and
-                            # someone who just raised their hand shouldn't get
-                            # idled out from under them before they even speak.
-                            self._last_activity = time.monotonic()
-                            if self._turn_in_progress:
-                                # A turn (filler/run_turn/reply) is already
-                                # running — let its own end-of-turn check
-                                # (in process_frame) catch this instead, so
-                                # the handoff waits for the current topic to
-                                # actually finish rather than colliding with
-                                # it mid-utterance.
-                                self._hand_raised = True
-                            else:
-                                # Genuinely idle — nothing else is going to
-                                # trigger a check, so react right here. This
-                                # is the case a hand-raise is actually FOR:
-                                # the prospect didn't say anything, they just
-                                # raised their hand.
-                                await self._speak_hand_raise_handoff(FrameDirection.DOWNSTREAM)
+                            raised = bool(data.get("raised"))
                     except Exception:
                         logger.exception(f"Failed to poll hand-raise for visitor {self._visitor_id}")
+                        continue
+
+                    if raised != self._hand_raised:
+                        # Either edge (fresh raise, or the visitor lowering
+                        # it) resets the ack gate — a fresh raise deserves
+                        # its own handoff, and lowering it is what makes the
+                        # *next* raise fresh again. Only a real transition
+                        # does this; polling the same still-raised state
+                        # tick after tick must not re-open the gate.
+                        self._hand_ack_sent = False
+                    if raised and not self._hand_raised:
+                        # Counts as activity even though it's not speech — a
+                        # hand-raise is a genuine engagement signal, and
+                        # someone who just raised their hand shouldn't get
+                        # idled out from under them before they even speak.
+                        self._last_activity = time.monotonic()
+                    self._hand_raised = raised
+
+                    if self._hand_raised and not self._hand_ack_sent and not self._turn_in_progress:
+                        # Genuinely idle when the raise landed — nothing else
+                        # is going to trigger a check (the mid-reply case is
+                        # instead caught inside _speak_reply, and the
+                        # end-of-turn case right after it returns), so react
+                        # here. This is the case a hand-raise is actually
+                        # FOR: the prospect didn't say anything, they just
+                        # raised their hand.
+                        await self._speak_hand_raise_handoff(FrameDirection.DOWNSTREAM)
         except asyncio.CancelledError:
             pass
 
