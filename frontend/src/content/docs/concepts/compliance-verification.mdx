@@ -1,0 +1,68 @@
+---
+title: Compliance & verification
+description: How claim-linking and output verification actually work.
+---
+
+Compliance isn't a review step bolted onto the end of generation — it's two of the six pipeline stages, and it can
+reject a request at two different points for two different reasons.
+
+## Claims linked (pre-generation)
+
+Before anything renders, every claim implied by your prompt is checked against your account's approved claim set
+(configured in your brand dossier). A prompt implying a claim your dossier doesn't have on file is rejected
+immediately, before any generation cost is incurred:
+
+```json
+{
+  "error": {
+    "type": "compliance_error",
+    "code": "unlinked_claim",
+    "message": "The prompt implies a claim ('reduces symptoms by 50%') with no matching entry in the account's approved claim set.",
+    "stage": "claims_linked"
+  }
+}
+```
+
+This is the cheap failure mode — you find out in milliseconds, not after paying for a render.
+
+## Output verified (post-generation)
+
+After rendering, the visible result is checked again against the same claim set and the regulatory ruleset's fair
+balance requirements. A render that technically matches the prompt but drifts into implying something the prompt
+didn't (a common failure mode of downstream generation models) is caught here instead:
+
+```json
+{
+  "error": {
+    "type": "compliance_error",
+    "code": "verification_failed",
+    "message": "Rendered output implies fair-balance language is present but ISI was not visually legible for the required duration.",
+    "stage": "output_verified"
+  }
+}
+```
+
+A request that fails here still incurs its generation cost — the render happened — but never resolves as
+`succeeded`, and no cost is retried automatically.
+
+## The `compliance` object
+
+Every successful generation includes a `compliance` object, even though it passed:
+
+```json
+{
+  "compliance": {
+    "verified": true,
+    "flags": []
+  }
+}
+```
+
+`flags` is populated with non-fatal notes — things that passed but are worth a human glance — even on a successful
+generation. It's always an array, even when empty.
+
+<Callout title="This isn't a substitute for your MLR process" type="warn">
+  Claim-linking and output verification catch structural compliance issues — unlinked claims, missing fair balance.
+  They don't replace your organization's actual MLR review; they mean far less of what reaches that review needs
+  correction.
+</Callout>

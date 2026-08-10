@@ -1,0 +1,44 @@
+---
+title: List video generations
+description: GET /v1/videos
+---
+
+```
+GET https://swishx-api-platform.vercel.app/v1/videos
+```
+
+## Query parameters
+
+| Parameter | Type    | Description                                                              |
+| --------- | ------- | ------------------------------------------------------------------------- |
+| `limit`   | integer | Max results to return. Default `20`, max `100`.                           |
+| `after`   | string  | An `id` from a previous page's results — returns generations created after it. |
+| `status`  | string  | Filter to a single `status` value.                                        |
+
+```bash
+curl "https://swishx-api-platform.vercel.app/v1/videos?limit=10&status=succeeded" \
+  -H "Authorization: Bearer $SWISHX_API_KEY"
+```
+
+## Response
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "vid_8f2c1a9b3d4e",
+      "object": "video",
+      "status": "succeeded",
+      "model": "finsen-3.2",
+      "created_at": "2026-08-07T18:22:04Z",
+      "completed_at": "2026-08-07T18:24:41Z"
+    }
+  ],
+  "has_more": false
+}
+```
+
+Each item in `data` is the same shape returned by
+[Retrieve a video generation](/docs/api/api-reference/videos/retrieve). To page through results, pass the last item's
+`id` as `after` on the next request.

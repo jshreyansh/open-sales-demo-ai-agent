@@ -1,132 +1,42 @@
-import { useEffect, useRef, useState } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { PipecatClientAudio, PipecatClientProvider } from "@pipecat-ai/client-react";
-import Sidebar from "./components/Sidebar";
-import TopBar from "./components/TopBar";
-import MeetingShell from "./components/MeetingShell";
-import ChatWidget from "./components/ChatWidget";
-import Dashboard from "./pages/Dashboard";
-import Analytics from "./pages/Analytics";
-import ContentStudio from "./pages/ContentStudio";
-import BrandKit from "./pages/BrandKit";
-import Approvals from "./pages/Approvals";
-import StubPage from "./pages/StubPage";
-import MagicReelStudio from "./pages/studio/MagicReelStudio";
-import MagicAvatarStudio from "./pages/studio/MagicAvatarStudio";
-import { NAV_REGISTRY } from "./registry/pages";
-import { executeAction, registerComponent, unregisterComponent } from "./lib/uiRegistry";
-import { disconnectVoice, pipecatClient } from "./lib/pipecatClient";
-import { releaseVoiceLock, type AgentAction } from "./lib/api";
-import { getVisitorId } from "./lib/session";
-
-function findLabel(pageId: string): string {
-  for (const group of NAV_REGISTRY) {
-    const item = group.items.find((i) => i.id === pageId);
-    if (item) return item.label;
-  }
-  return pageId;
-}
-
-const CONTENT_STUDIO_TABS: Record<string, string> = {
-  "content-studio": "All",
-  "magic-video": "Video",
-  "magic-aid": "Aid",
-  "magic-mail": "Mail",
-  "magic-canvas": "Canvas",
-  "magic-doc": "Doc",
-};
-
-function getInitialMode(): "product" | "meeting" {
-  const params = new URLSearchParams(window.location.search);
-  return params.get("mode") === "meeting" ? "meeting" : "product";
-}
+import Landing from "./pages/Landing";
+import DashboardRoute from "./pages/DashboardRoute";
+import MeetRoute from "./pages/MeetRoute";
+import AdminLayout from "./pages/admin/AdminLayout";
+import AdminDashboard from "./pages/admin/AdminDashboard";
+import AdminVisitors from "./pages/admin/AdminVisitors";
+import AdminVisitorDetail from "./pages/admin/AdminVisitorDetail";
+import AdminAttempts from "./pages/admin/AdminAttempts";
+import DocsHome from "./pages/docs/DocsHome";
+import DocsRoute from "./pages/docs/DocsRoute";
+import { pipecatClient } from "./lib/pipecatClient";
 
 export default function App() {
-  const [activePageId, setActivePageId] = useState("dashboard");
-  const [mode, setMode] = useState<"product" | "meeting">(getInitialMode);
-  const contentRef = useRef<HTMLDivElement>(null);
-
-  // Scroll is a real, non-simulated action (scrollBy on the actual page
-  // container) — registered per current page so the agent can pan the
-  // shared screen up/down the same way it triggers any other action.
-  useEffect(() => {
-    registerComponent(activePageId, "scroll", {
-      // "smooth" silently no-ops on a negative (upward) delta here — a
-      // Chromium quirk under this container's CSS `zoom` (confirmed: works
-      // fine for positive/downward, and "auto" works both directions) — so
-      // "auto" is the reliable choice even though it loses the glide.
-      down: () => contentRef.current?.scrollBy({ top: 420, behavior: "auto" }),
-      up: () => contentRef.current?.scrollBy({ top: -420, behavior: "auto" }),
-    });
-    return () => unregisterComponent(activePageId, "scroll");
-  }, [activePageId]);
-
-  function handleAgentAction(action: AgentAction) {
-    if (action.page !== activePageId) {
-      // Navigating remounts the target page, which registers its
-      // components — executeAction queues until that registration lands.
-      setActivePageId(action.page);
-    }
-    executeAction(action.page, action.component, action.method);
-  }
-
-  function renderPage() {
-    if (activePageId === "dashboard") return <Dashboard />;
-    if (activePageId === "analytics") return <Analytics />;
-    if (activePageId === "brand-kit") return <BrandKit />;
-    if (activePageId === "mlr-review") return <Approvals />;
-    if (activePageId === "magicreel-studio") return <MagicReelStudio onNavigate={setActivePageId} />;
-    if (activePageId === "magicavatar-studio") return <MagicAvatarStudio onExit={() => setActivePageId("content-studio")} />;
-    if (activePageId in CONTENT_STUDIO_TABS) {
-      return (
-        <ContentStudio
-          key={activePageId}
-          initialTab={CONTENT_STUDIO_TABS[activePageId]}
-          onOpenStudio={(studioId) => setActivePageId(`${studioId}-studio`)}
-        />
-      );
-    }
-    return <StubPage label={findLabel(activePageId)} />;
-  }
-
-  const productShell = (
-    <div className="app-shell">
-      <Sidebar activePageId={activePageId} onNavigate={setActivePageId} />
-      <div className="app-shell__content" ref={contentRef}>
-        {mode === "product" && <TopBar />}
-        {renderPage()}
-      </div>
-    </div>
-  );
-
   return (
     <PipecatClientProvider client={pipecatClient}>
       {/* Renders the actual <audio> element that plays the bot's TTS speech —
           without this, voice replies are received but never played back. */}
       <PipecatClientAudio />
-      {mode === "meeting" ? (
-        <MeetingShell
-          onAction={handleAgentAction}
-          onLeave={() => {
-            void disconnectVoice();
-            // Best-effort, fast-path release — bot.py's on_client_disconnected
-            // (fired by the WebSocket actually closing) is the reliable path;
-            // this just frees the line a beat sooner for the common "clicked
-            // hang up" case instead of waiting on that.
-            void releaseVoiceLock(getVisitorId());
-            const url = new URL(window.location.href);
-            url.searchParams.delete("mode");
-            window.history.replaceState(null, "", url.toString());
-            setMode("product");
-          }}
-        >
-          {productShell}
-        </MeetingShell>
-      ) : (
-        <>
-          {productShell}
-          <ChatWidget currentPage={activePageId} onAction={handleAgentAction} />
-        </>
-      )}
+      <Routes>
+        <Route path="/" element={<Landing />} />
+        <Route path="/demo/dashboard" element={<DashboardRoute />} />
+        <Route path="/demo/meet" element={<MeetRoute />} />
+        {/* Public, no visitor gate — reachable directly, and crawlable.
+            /docs is the Knowledge Base hub; /docs/api/* is the ported API
+            reference content (a future /docs/product/* section is where
+            Gourab's product docs will land later). */}
+        <Route path="/docs" element={<DocsHome />} />
+        <Route path="/docs/api" element={<DocsRoute />} />
+        <Route path="/docs/api/*" element={<DocsRoute />} />
+        <Route path="/admin" element={<AdminLayout />}>
+          <Route index element={<AdminDashboard />} />
+          <Route path="visitors" element={<AdminVisitors />} />
+          <Route path="visitors/:email" element={<AdminVisitorDetail />} />
+          <Route path="attempts" element={<AdminAttempts />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </PipecatClientProvider>
   );
 }

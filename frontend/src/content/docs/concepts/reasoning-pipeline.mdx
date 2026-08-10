@@ -1,0 +1,82 @@
+---
+title: The reasoning pipeline
+description: What happens between a queued request and a succeeded one.
+---
+
+Every request to `/v1/videos` moves through the same six stages, in order, regardless of which downstream model
+ends up rendering the shot. This is what `status` is actually tracking as it moves from `queued` through to
+`succeeded` or `failed`.
+
+<Steps>
+<Step>
+
+### Brief decoded
+
+Your `prompt` (and optional `negative_prompt`) is parsed into a structured intent — subject, setting, tone, and any
+explicit call to action. This is also where obviously malformed requests fail fast, before anything downstream is
+touched.
+
+</Step>
+<Step>
+
+### Context harnessed
+
+The decoded brief is merged with your account's brand dossier (approved claims, prior assets, tone of voice) and the
+regulatory ruleset that applies to your therapeutic area (ISI, fair balance language, label constraints). This
+merged context — not the raw prompt — is what every later stage actually reasons over.
+
+</Step>
+<Step>
+
+### Prompts layered
+
+A generation-ready prompt is constructed from the harnessed context: a descriptive still-frame prompt for the
+opening frame, and a short motion prompt describing how it animates. Keeping these separate is what lets Finsen
+regenerate a bad keyframe for cents, instead of re-rendering an entire clip.
+
+</Step>
+<Step>
+
+### Claims linked
+
+Every claim implied by the constructed prompt is checked against your dossier's approved claim set. A request that
+implies an unapproved or off-label claim is rejected here with a `compliance_error`, before any generation cost is
+incurred — see [Compliance & verification](/docs/api/concepts/compliance-verification).
+
+</Step>
+<Step>
+
+### Model routed
+
+The request is routed to whichever downstream generation model suits the shot — see
+[Model routing](/docs/api/concepts/model-routing). This is also where `resolution` and tier-appropriate generation
+settings are applied.
+
+</Step>
+<Step>
+
+### Output verified
+
+Once rendered, the output is checked again: does the visible result still match the approved claims and fair-balance
+requirements decided two stages earlier? Only after this second check does the request resolve as `succeeded`. This
+is the stage that makes SwishX's output MLR-ready by construction, not by a separate review pass afterward.
+
+</Step>
+</Steps>
+
+## Tracking pipeline stage from the API
+
+The `status` field on a video generation reflects where a request currently sits:
+
+| `status`     | Meaning                                                         |
+| ------------ | ---------------------------------------------------------------- |
+| `queued`     | Accepted; brief decoding and context harness not yet started.    |
+| `processing` | Somewhere between context harnessing and model routing.          |
+| `verifying`  | Rendered; running the output-verification stage.                 |
+| `succeeded`  | Passed verification. `output` is populated.                      |
+| `failed`     | Rejected or failed at some stage. See `error` for which one.      |
+
+<Callout title="See it live" type="info">
+  The [Usage & Analytics](https://swishx-api-platform.vercel.app/analytics) page on the API Platform shows average time spent in
+  each stage across your account's requests.
+</Callout>

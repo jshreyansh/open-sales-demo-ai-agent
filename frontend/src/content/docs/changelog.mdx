@@ -1,0 +1,64 @@
+---
+title: Changelog
+description: Every release, Nov 2025 to today.
+---
+
+Newest first. Any `finsen-3.x` version remains callable indefinitely — see [Models](/docs/api/concepts/models) for the
+deprecation policy on pre-3.0 versions.
+
+<Callout title="About the names" type="info">
+  SwishX names each model generation after a Nobel laureate in Physiology or Medicine, rotating to a new name every
+  two or three versions: **Behring** (1.x), **Ross** (2.x), then **Finsen** (3.x, current).
+</Callout>
+
+## Finsen 3.2 — Aug 6, 2026
+
+**Current.** Sharper claim-grounding accuracy and lower multi-model routing latency than 3.1.
+
+- Reduced false-positive rate on the claims-linked stage for comparative claims.
+- Faster model-routing decisions when a downstream model is near capacity.
+
+## Finsen 3.1 — Jun 2026
+
+Keyframe-first generation, reducing hallucination on rare disease states and off-label claims.
+
+- Introduced `keyframe_id` on video generation — reuse or regenerate a still without re-rendering the clip.
+- Meaningfully fewer off-label visual implications on longer (12–16s) generations.
+
+## Finsen 3.0 — May 2026
+
+Full reasoning pipeline shipped: brief decoded, context harnessed, prompts layered, claims linked, model routed,
+output verified — MLR-ready by construction, not by a separate review pass afterward.
+
+- First version where request/response shape is considered stable going forward.
+- Output verification added as a distinct post-render stage (see
+  [Compliance & verification](/docs/api/concepts/compliance-verification)).
+
+## Ross 2.5 — Mar 2026
+
+Claim Extractor and Audience Classifier split into dedicated reasoning stages, instead of being handled implicitly
+inside context harnessing.
+
+- Claim-linking rejections now include which specific claim triggered them.
+
+## Ross 2.2 — Feb 2026
+
+Compliance Verifier added — automated ISI and fair-balance checks before render, not just at claim-linking time.
+
+- First version to reject a request for fair-balance reasons pre-generation, not just unlinked claims.
+
+## Ross 2.0 — Jan 2026
+
+Multi-model routing across Veo, Kling, and Runway; scene-level model selection instead of a single fixed generator.
+
+- `routed_model` first appears in the response shape.
+
+## Behring 1.5 — Dec 2025
+
+Introduced the Context Harness — brief, dossier, and regulatory ruleset merged before generation, rather than the
+brief being sent to the generator on its own.
+
+## Behring 1.0 — Nov 2025
+
+Text-to-video orchestration, single-pass prompting, no compliance layer. The first version of the API — a single
+generation call with no claim-linking or verification stages.

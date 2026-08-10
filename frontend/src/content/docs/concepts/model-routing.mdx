@@ -1,0 +1,46 @@
+---
+title: Model routing
+description: How SwishX picks a downstream generation model for each shot.
+---
+
+The reasoning model doesn't render video itself — the **Model routed** stage of the pipeline sends each request to whichever
+downstream generation model actually suits the shot, then normalizes the result back into a single response shape
+regardless of which one ran.
+
+## Routed models
+
+| Model         | `routed_model` value | Typically used for                                  |
+| ------------- | --------------------- | ---------------------------------------------------- |
+| Veo           | `veo-3`                | Photoreal HCP and patient-facing scenes               |
+| Kling         | `kling-1.6`             | Fast turnaround, social-length cuts                   |
+| Runway        | `runway-gen-3`          | Stylized or non-photoreal brand moments               |
+| Sora          | `sora`                  | Longer single-shot continuity                         |
+
+You don't choose `routed_model` directly — it's an output field, decided by the router based on your prompt, the
+requested `duration_seconds` and `resolution`, and current per-model availability. Two identical requests submitted
+minutes apart can legitimately route to different models if one becomes temporarily unavailable; the reasoning and
+compliance guarantees are identical either way.
+
+## Keyframe-first generation
+
+For most requests, Finsen doesn't ask the downstream model to invent a scene from text alone. It first renders a
+photoreal still using `finsen-3.2-keyframe` from the layered image prompt, then animates that exact frame with a
+short motion prompt. A bad still costs cents to redo; a bad multi-second clip does not — this is why keyframe
+regeneration is exposed as its own step (see [Create a keyframe image](/docs/api/api-reference/images/create)) rather
+than bundled silently into video generation.
+
+```json
+{
+  "id": "vid_8f2c1a9b3d4e",
+  "routed_model": "veo-3",
+  "keyframe": {
+    "id": "img_3a9c1f2b8e7d",
+    "status": "ready"
+  }
+}
+```
+
+<Callout title="When keyframe-first is skipped" type="info">
+  Very short, motion-heavy shots (under 3 seconds) route directly to text-to-video generation — a keyframe adds
+  latency without meaningfully improving consistency at that length.
+</Callout>

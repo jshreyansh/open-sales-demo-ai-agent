@@ -10,14 +10,23 @@
   },
   "dependencies": {
     "@mdi/js": "^7.4.47",
+    "@mdx-js/rollup": "^3.1.1",
     "@pipecat-ai/client-js": "^1.13.0",
     "@pipecat-ai/client-react": "^1.8.1",
     "@pipecat-ai/small-webrtc-transport": "^1.10.6",
     "@pipecat-ai/websocket-transport": "^1.7.1",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.18.2",
+    "rehype-pretty-code": "^0.14.5",
+    "rehype-slug": "^6.0.0",
+    "remark-frontmatter": "^5.0.0",
+    "remark-gfm": "^4.0.1",
+    "remark-mdx-frontmatter": "^5.2.0",
+    "shiki": "^4.4.3"
   },
   "devDependencies": {
+    "@types/mdx": "^2.0.14",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",

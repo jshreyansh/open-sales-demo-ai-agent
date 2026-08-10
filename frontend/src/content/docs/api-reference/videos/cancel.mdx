@@ -1,0 +1,37 @@
+---
+title: Cancel a video generation
+description: DELETE /v1/videos/:id
+---
+
+Cancels a generation that hasn't resolved yet.
+
+```
+DELETE https://swishx-api-platform.vercel.app/v1/videos/{id}
+```
+
+```bash
+curl -X DELETE https://swishx-api-platform.vercel.app/v1/videos/vid_8f2c1a9b3d4e \
+  -H "Authorization: Bearer $SWISHX_API_KEY"
+```
+
+```json
+{
+  "id": "vid_8f2c1a9b3d4e",
+  "object": "video",
+  "status": "canceled",
+  "created_at": "2026-08-07T18:22:04Z",
+  "completed_at": "2026-08-07T18:22:11Z"
+}
+```
+
+## Cancellation windows
+
+| Current `status` | Cancelable? |
+| ------------------ | ------------ |
+| `queued`            | Yes          |
+| `processing`        | Yes          |
+| `verifying`         | No — the render already happened; canceling now wouldn't recover the cost. |
+| `succeeded` / `failed` / `canceled` | No — already resolved. |
+
+Canceling a request that's no longer cancelable returns `400 invalid_request_error`. A canceled generation is not
+charged — `cost_cents` stays `null`.

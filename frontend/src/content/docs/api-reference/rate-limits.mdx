@@ -1,0 +1,48 @@
+---
+title: Rate limits
+description: Requests per minute and concurrency, per capability.
+---
+
+Rate limits are per-account, tracked separately for each generation capability:
+
+| Capability        | Requests / minute | Concurrent jobs | Applies to               |
+| ------------------ | ------------------ | ---------------- | -------------------------- |
+| Video generation   | 10                  | 2                 | `finsen-3.2`               |
+| Image generation   | 30                  | 5                 | `finsen-3.2-keyframe`      |
+
+<Callout title="Playground is not rate-limited the same way" type="info">
+  The [Playground](https://swishx-api-platform.vercel.app/playground) on the API Platform is capped at 1 concurrent job
+  independent of these limits, so a Playground request never competes with production API traffic.
+</Callout>
+
+## Response headers
+
+Every response includes the current limit state for the capability the request used:
+
+```
+X-RateLimit-Limit: 10
+X-RateLimit-Remaining: 7
+X-RateLimit-Reset: 1786124400
+```
+
+`X-RateLimit-Reset` is a Unix timestamp for when the per-minute window resets.
+
+## Exceeding a limit
+
+```json
+{
+  "error": {
+    "type": "rate_limit_error",
+    "code": "requests_per_minute_exceeded",
+    "message": "Video generation is limited to 10 requests/minute. Retry after the window resets."
+  }
+}
+```
+
+Concurrency limits return the same `type`, with `code: "concurrent_jobs_exceeded"` — wait for an in-flight
+generation to resolve (`succeeded` or `failed`) before submitting another.
+
+## Need higher limits?
+
+Rate limits scale with usage history, or reach out directly for dedicated capacity —
+[partnerships@swishx.com](mailto:partnerships@swishx.com).

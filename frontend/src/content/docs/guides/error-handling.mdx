@@ -1,0 +1,55 @@
+---
+title: Error handling
+description: Which errors to retry, and which to surface.
+---
+
+Not every error means the same thing, and treating them all as "retry with backoff" will either loop forever on
+something that will never succeed, or give up on something that would have worked a second later.
+
+## Decision table
+
+| `type`                  | Retry?                          | What to do instead                                                        |
+| ------------------------ | -------------------------------- | ---------------------------------------------------------------------------|
+| `invalid_request_error`  | No                                | Fix the request. `param` tells you which field.                           |
+| `authentication_error`   | No                                | Check the key is current and not revoked.                                 |
+| `insufficient_balance`   | No                                | Add funds before retrying — retrying immediately fails the same way.      |
+| `compliance_error`       | No, not as-is                     | The prompt (or dossier) needs to change — see [Compliance & verification](/docs/api/concepts/compliance-verification). |
+| `rate_limit_error`       | Yes, after the reset window       | Read `X-RateLimit-Reset`, wait, then retry.                                |
+| `api_error`              | Yes, with exponential backoff     | Transient. 2–3 attempts is usually enough.                                 |
+
+## A minimal retry wrapper
+
+```js
+async function createVideo(body, { maxAttempts = 3 } = {}) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const res = await fetch("https://swishx-api-platform.vercel.app/v1/videos", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.SWISHX_API_KEY}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": body.idempotencyKey,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (res.ok) return res.json();
+
+    const { error } = await res.json();
+    const retryable = error.type === "rate_limit_error" || error.type === "api_error";
+
+    if (!retryable || attempt === maxAttempts) {
+      throw new Error(`${error.type}: ${error.message}`);
+    }
+
+    await new Promise((r) => setTimeout(r, 2 ** attempt * 500));
+  }
+}
+```
+
+Note the `Idempotency-Key` — without it, a retry after a request that actually succeeded server-side (but whose
+response you never received) creates a second, billed generation. With it, the retry returns the original.
+
+<Callout title="Log the code, not just the message" type="info">
+  `message` is for humans and may be reworded over time. Branch on `error.code`, which is stable — see the full list
+  on the [Errors](/docs/api/api-reference/errors) page.
+</Callout>

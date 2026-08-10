@@ -1,0 +1,51 @@
+---
+title: Introduction
+description: What the SwishX API is, and how it's put together.
+---
+
+SwishX is a reasoning model for life-sciences video — not a thin wrapper around a text-to-video model, but an
+orchestration layer that decodes a creative brief, grounds it against your brand's claims and regulatory ruleset,
+routes it to the right downstream generation model, and verifies the output before it's ever handed back to you.
+
+SwishX names each model generation after a Nobel laureate in Physiology or Medicine, rotating to a new name every
+two or three versions. The current generation is **Finsen** — the current version is **Finsen 3.2** — see the
+[changelog](/docs/api/changelog) for the full version history back to Behring 1.0.
+
+<Callout title="Who this is for">
+  These docs are for engineers integrating the SwishX API directly. If you're looking for the product itself, see
+  [swishx.com](https://swishx.com); to manage your account, keys, and billing, see the
+  [SwishX API Platform](https://swishx-api-platform.vercel.app).
+</Callout>
+
+## Why a reasoning model, not a video API
+
+Most video-generation APIs take a prompt and return a clip. That's fine for a demo; it falls apart the moment the
+output has to survive Medical/Legal/Regulatory (MLR) review. SwishX's reasoning model sits in front of the actual
+generation step and runs every request through six stages before anything renders:
+
+1. **Brief decoded** — your prompt is parsed into an intent: subject, setting, tone, call to action.
+2. **Context harnessed** — your brand dossier (claims, prior assets, tone) and regulatory ruleset (ISI, fair balance,
+   label) are merged with the brief.
+3. **Prompts layered** — a structured generation prompt is built from the merged context, not the raw brief alone.
+4. **Claims linked** — every claim implied by the prompt is checked against your dossier's approved claim set.
+5. **Model routed** — the request is sent to whichever downstream model (Veo, Kling, Runway, Sora) suits the shot.
+6. **Output verified** — the rendered result is checked again before the request resolves as `succeeded`.
+
+Read more in [The reasoning pipeline](/docs/api/concepts/reasoning-pipeline).
+
+## Base URL
+
+All API requests are made to:
+
+```
+https://swishx-api-platform.vercel.app/v1
+```
+
+## Where to start
+
+<Cards>
+  <Card title="Quickstart" href="/docs/api/getting-started/quickstart" description="Make your first request in under five minutes." />
+  <Card title="Authentication" href="/docs/api/getting-started/authentication" description="How API keys work, and how to keep them safe." />
+  <Card title="API Reference" href="/docs/api/api-reference/errors" description="Every endpoint, request, and response shape." />
+  <Card title="Changelog" href="/docs/api/changelog" description="Every release, Nov 2025 to today." />
+</Cards>

@@ -1,0 +1,81 @@
+---
+title: Polling for results
+description: A minimal, correct polling loop.
+---
+
+There's no webhook or server-sent event yet — polling [Retrieve a video generation](/docs/api/api-reference/videos/retrieve)
+is the only way to know when a generation finishes. This guide is a minimal loop that does it correctly: backs off,
+has a hard timeout, and distinguishes retryable errors from ones that mean stop.
+
+<Tabs items={['Node.js', 'Python']}>
+<Tab value="Node.js">
+
+```js
+async function waitForVideo(id, { timeoutMs = 5 * 60_000, intervalMs = 3000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const res = await fetch(`https://swishx-api-platform.vercel.app/v1/videos/${id}`, {
+      headers: { Authorization: `Bearer ${process.env.SWISHX_API_KEY}` },
+    });
+
+    if (!res.ok && res.status !== 429) {
+      throw new Error(`Unexpected response: ${res.status}`);
+    }
+
+    const video = await res.json();
+
+    if (video.status === "succeeded") return video;
+    if (video.status === "failed" || video.status === "canceled") {
+      throw new Error(video.error?.message ?? `Generation ${video.status}`);
+    }
+
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+
+  throw new Error(`Timed out waiting for ${id}`);
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import os
+import time
+import requests
+
+def wait_for_video(video_id, timeout_seconds=300, interval_seconds=3):
+    deadline = time.monotonic() + timeout_seconds
+    headers = {"Authorization": f"Bearer {os.environ['SWISHX_API_KEY']}"}
+
+    while time.monotonic() < deadline:
+        response = requests.get(
+            f"https://swishx-api-platform.vercel.app/v1/videos/{video_id}", headers=headers
+        )
+        video = response.json()
+
+        if video["status"] == "succeeded":
+            return video
+        if video["status"] in ("failed", "canceled"):
+            message = (video.get("error") or {}).get("message", f"Generation {video['status']}")
+            raise RuntimeError(message)
+
+        time.sleep(interval_seconds)
+
+    raise TimeoutError(f"Timed out waiting for {video_id}")
+```
+
+</Tab>
+</Tabs>
+
+## Why 3 seconds
+
+Most generations move through all six pipeline stages in under two minutes. Polling faster than every ~2–3 seconds
+mostly burns your rate limit budget without getting you the result any sooner — see
+[Rate limits](/docs/api/api-reference/rate-limits) for the exact per-minute cap.
+
+<Callout title="Don't poll forever" type="warn">
+  Always set a deadline. A generation stuck in `processing` well past a few minutes is unusual enough to be worth
+  surfacing as an error in your own system, not silently retried indefinitely.
+</Callout>

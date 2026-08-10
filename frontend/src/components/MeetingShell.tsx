@@ -3,7 +3,7 @@ import { usePipecatClientMediaTrack } from "@pipecat-ai/client-react";
 import { useVoiceSession } from "../lib/useVoiceSession";
 import { useAudioLevelRing } from "../lib/useAudioLevelRing";
 import { useReportedAudioLevelRing } from "../lib/useReportedAudioLevelRing";
-import { claimVoiceLock, raiseHand, startSession, type AgentAction } from "../lib/api";
+import { claimVoiceLock, setHandRaiseState, startSession, type AgentAction } from "../lib/api";
 import { getVisitorId } from "../lib/session";
 import MeetIcon from "./MeetIcons";
 import PreJoinScreen from "./PreJoinScreen";
@@ -68,6 +68,8 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
   // voice pipeline's own process (see the connect-effect's comment) gets it
   // directly, rather than relying on a side channel it can't see.
   const [visitorName, setVisitorName] = useState<string | undefined>(undefined);
+  const [visitorCompany, setVisitorCompany] = useState<string | undefined>(undefined);
+  const [visitorEmail, setVisitorEmail] = useState<string | undefined>(undefined);
   const { voiceConnected, isMicEnabled, enableMic, connect, mute } = useVoiceSession(onAction);
   // "You" tile: real local mic MediaStreamTrack, analysed client-side. The
   // agent's tile: WebSocketTransport exposes no "bot" track at all (its
@@ -109,7 +111,7 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
     if (countdown > 0) return;
     if (connectStarted.current) return;
     connectStarted.current = true;
-    void connect(visitorName).then(() => mute());
+    void connect(visitorName, visitorCompany, visitorEmail).then(() => mute());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [joined, countdown]);
 
@@ -132,14 +134,16 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
     }
   }, [voiceConnected, onLeave]);
 
-  // The non-interrupting alternative to talking over the agent: posts to the
-  // voice process (a separate process from this UI) via the REST API, which
-  // polls for it and hands off after finishing its current explanation,
-  // rather than cutting off mid-sentence like a real VAD interruption would.
-  function handleRaiseHand() {
-    setHandRaised(true);
-    void raiseHand(visitorId);
-    window.setTimeout(() => setHandRaised(false), 2000);
+  // A real toggle, not a momentary press: the visitor raises their hand and
+  // it stays raised — same as actually raising a hand in a room — until they
+  // click it again to lower it. Nothing auto-resets this; the agent hands
+  // off once (see agent_processor.py's _hand_ack_sent) but never lowers the
+  // hand itself, since only the visitor really knows when their question's
+  // been answered.
+  function handleToggleHandRaise() {
+    const next = !handRaised;
+    setHandRaised(next);
+    void setHandRaiseState(visitorId, next);
   }
 
   // Claimed here, at the moment of clicking Join, not later when connect()
@@ -156,11 +160,13 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
   // case anything reads it from that side later (e.g. a future text
   // transcript in Meeting Mode) — Meeting Mode has no such surface today,
   // so this is forward-looking, not load-bearing.
-  async function handleJoin(name: string): Promise<boolean> {
+  async function handleJoin(name: string, company: string, email: string): Promise<boolean> {
     const claimed = await claimVoiceLock(visitorId);
     if (!claimed) return false;
-    void startSession(visitorId, name);
+    void startSession(visitorId, name, company, email);
     setVisitorName(name);
+    setVisitorCompany(company);
+    setVisitorEmail(email);
     setJoined(true);
     return true;
   }
@@ -244,8 +250,12 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
         </button>
         <button
           className={`meet__ctrl ${handRaised ? "meet__ctrl--pressed" : ""}`}
-          onClick={handleRaiseHand}
-          title="Raise hand — the agent will finish its point, then let you ask your question"
+          onClick={handleToggleHandRaise}
+          title={
+            handRaised
+              ? "Lower hand"
+              : "Raise hand — the agent will finish its point, then let you ask your question"
+          }
         >
           <MeetIcon name="hand" />
         </button>

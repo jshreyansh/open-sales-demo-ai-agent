@@ -1,0 +1,69 @@
+---
+title: Retrieve a video generation
+description: GET /v1/videos/:id
+---
+
+```
+GET https://swishx-api-platform.vercel.app/v1/videos/{id}
+```
+
+```bash
+curl https://swishx-api-platform.vercel.app/v1/videos/vid_8f2c1a9b3d4e \
+  -H "Authorization: Bearer $SWISHX_API_KEY"
+```
+
+## The video object
+
+```json
+{
+  "id": "vid_8f2c1a9b3d4e",
+  "object": "video",
+  "status": "succeeded",
+  "model": "finsen-3.2",
+  "prompt": "A pharma rep opens with a warm, confident smile.",
+  "negative_prompt": null,
+  "duration_seconds": 8,
+  "resolution": "1080p",
+  "routed_model": "veo-3",
+  "keyframe": {
+    "id": "img_3a9c1f2b8e7d",
+    "status": "ready"
+  },
+  "compliance": {
+    "verified": true,
+    "flags": []
+  },
+  "output": {
+    "url": "https://cdn.swishx.com/videos/vid_8f2c1a9b3d4e.mp4",
+    "thumbnail_url": "https://cdn.swishx.com/videos/vid_8f2c1a9b3d4e.jpg"
+  },
+  "error": null,
+  "cost_cents": 1200,
+  "created_at": "2026-08-07T18:22:04Z",
+  "completed_at": "2026-08-07T18:24:41Z"
+}
+```
+
+| Field                | Type          | Description                                                                          |
+| ---------------------- | ------------- | -------------------------------------------------------------------------------------- |
+| `id`                   | string        | Unique identifier, prefixed `vid_`.                                                    |
+| `object`               | string        | Always `"video"`.                                                                       |
+| `status`               | string        | `queued`, `processing`, `verifying`, `succeeded`, `failed`, or `canceled`.              |
+| `model`                | string        | The `finsen-3.x` version requested.                                                    |
+| `prompt`               | string        | The prompt as submitted.                                                                |
+| `negative_prompt`      | string \| null | The negative prompt, if any.                                                            |
+| `duration_seconds`     | integer       | Requested duration.                                                                     |
+| `resolution`           | string        | `"720p"` or `"1080p"`.                                                                  |
+| `routed_model`         | string \| null | Which downstream model rendered this — see [Model routing](/docs/api/concepts/model-routing). `null` until routed. |
+| `keyframe`             | object \| null | The keyframe still used, if keyframe-first generation ran. `null` for direct text-to-video. |
+| `compliance`           | object \| null | `{ verified, flags }`. `null` until the output-verified stage runs.                    |
+| `output`               | object \| null | `{ url, thumbnail_url }`. `null` until `status` is `succeeded`.                        |
+| `error`                | object \| null | Populated when `status` is `failed`. Same shape as [API errors](/docs/api/api-reference/errors). |
+| `cost_cents`           | integer \| null | What this generation cost, in cents. `null` until it resolves.                         |
+| `created_at`           | string        | ISO 8601 timestamp.                                                                     |
+| `completed_at`         | string \| null | ISO 8601 timestamp. `null` while still in progress.                                     |
+
+<Callout title="Polling frequency" type="info">
+  Poll every 2–5 seconds. Most generations resolve within a few minutes; there's no server-sent event or webhook
+  yet, so polling is the only way to know when a generation finishes.
+</Callout>

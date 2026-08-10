@@ -1,0 +1,47 @@
+---
+title: Errors
+description: Error shape, types, and codes.
+---
+
+Errors are returned as a JSON body with a single `error` object, alongside a non-2xx HTTP status:
+
+```json
+{
+  "error": {
+    "type": "invalid_request_error",
+    "code": "missing_parameter",
+    "message": "Missing required parameter: 'prompt'.",
+    "param": "prompt"
+  }
+}
+```
+
+| Field     | Description                                                                 |
+| --------- | ----------------------------------------------------------------------------|
+| `type`    | Broad error category — see below.                                          |
+| `code`    | Specific, stable machine-readable identifier. Safe to branch on.            |
+| `message` | Human-readable explanation. May change wording; don't parse it.            |
+| `param`   | Present on `invalid_request_error` — which request field caused the error.  |
+| `stage`   | Present on `compliance_error` — which pipeline stage rejected the request.  |
+
+## Error types
+
+| `type`                    | HTTP status | Meaning                                                              |
+| -------------------------- | ----------- | ---------------------------------------------------------------------|
+| `invalid_request_error`   | `400`       | Malformed or missing parameters.                                     |
+| `authentication_error`    | `401`       | Missing, invalid, or revoked API key.                                |
+| `insufficient_balance`    | `402`       | Account balance can't cover the request.                             |
+| `compliance_error`        | `422`       | Rejected by claim-linking or output verification — see [Compliance & verification](/docs/api/concepts/compliance-verification). |
+| `rate_limit_error`        | `429`       | Too many requests — see [Rate limits](/docs/api/api-reference/rate-limits). |
+| `api_error`               | `500`       | Something went wrong on our end. Safe to retry with backoff.         |
+
+## Retrying
+
+`api_error` and `rate_limit_error` are safe to retry with exponential backoff. `invalid_request_error`,
+`authentication_error`, `insufficient_balance`, and `compliance_error` won't succeed on retry without changing the
+request itself.
+
+<Callout title="Idempotency" type="info">
+  `POST /v1/videos` and `POST /v1/images` accept an optional `Idempotency-Key` header. Retrying the same request with
+  the same key returns the original generation instead of creating a duplicate — safe to always send one on retries.
+</Callout>

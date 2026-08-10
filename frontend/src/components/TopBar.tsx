@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import Icon from "./Icon";
 
 export default function TopBar() {
@@ -13,6 +14,11 @@ export default function TopBar() {
           <span className="topbar__demo-dot" />
           Demo Mode
         </span>
+        {/* Public, no visitor gate — see App.tsx's "/docs/*" route. */}
+        <Link className="topbar__docs-link" to="/docs">
+          <Icon name="book-open" size={14} />
+          Documentation
+        </Link>
         <button className="topbar__org">
           <span>Roche</span>
           <span className="topbar__org-flag">🇮🇳</span>

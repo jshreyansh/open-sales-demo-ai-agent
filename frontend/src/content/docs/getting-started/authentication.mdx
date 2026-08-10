@@ -1,0 +1,44 @@
+---
+title: Authentication
+description: API keys, headers, and how to keep them safe.
+---
+
+Every request must include your API key as a Bearer token:
+
+```bash
+Authorization: Bearer sx_live_1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d
+```
+
+Requests without a valid key, or with a revoked one, return `401 Unauthorized`:
+
+```json
+{
+  "error": {
+    "type": "authentication_error",
+    "code": "invalid_api_key",
+    "message": "The provided API key is invalid or has been revoked."
+  }
+}
+```
+
+## Key format
+
+Keys are prefixed `sx_live_` followed by 32 hex characters. There is no separate test-mode key prefix — every key
+draws against your account's real balance, so there's nothing to accidentally leave in "test mode."
+
+## Creating and revoking keys
+
+Manage keys from the [API Keys page](https://swishx-api-platform.vercel.app/api-keys) on the API Platform. A key's full value is
+shown exactly once, at creation — after that, only a masked form (`sx_live_••••••••••••••••••••••••abcd`) is ever
+displayed. If a key is compromised, revoke it immediately; revocation takes effect on the next request.
+
+<Callout title="Treat keys like passwords" type="warn">
+  Anyone with a live key can spend against your account's balance. Don't commit keys to source control, don't embed
+  them in client-side code, and rotate a key the moment you suspect it's leaked.
+</Callout>
+
+## Organization vs. project scope
+
+Every SwishX account has exactly one project, identified by a `proj_` id (visible on your
+[Dashboard](https://swishx-api-platform.vercel.app/dashboard)). All API keys, balance, and usage are scoped to that project —
+there's currently no multi-project support within a single account.

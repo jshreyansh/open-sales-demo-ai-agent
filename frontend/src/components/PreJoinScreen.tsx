@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { PERSONAS } from "../lib/personas";
+import { getVisitorId, getVisitorProfile } from "../lib/session";
+import type { VisitorProfile } from "../lib/session";
 import MeetIcon from "./MeetIcons";
+import VisitorGateForm from "./VisitorGateForm";
 
 interface PreJoinScreenProps {
   // Returns false when someone else is already on the call (see
   // server.py's _active_call) — this screen shows the busy message instead
   // of assuming the join succeeded.
-  onJoin: (name: string) => Promise<boolean>;
+  onJoin: (name: string, company: string, email: string) => Promise<boolean>;
 }
 
 // Only personas with a real agent behind them render here — right now
@@ -17,30 +20,23 @@ interface PreJoinScreenProps {
 const AVAILABLE_PERSONAS = PERSONAS.filter((p) => p.available);
 
 // Meeting Mode's first screen — before the join countdown, not instead of
-// it. Capturing the visitor's name here — instead of waiting for them to
-// volunteer it mid-call — lets the opening greeting address them by name
-// from the very first word, which reads as a much more "real" call.
+// it. Identity capture (email → name/company, or straight through for a
+// returning email) is delegated to VisitorGateForm, shared with the
+// dashboard gate — this component just supplies the video-call chrome
+// around it and what happens once someone's actually gated (claim the
+// voice lock, or show the busy screen).
 //
-// Side-by-side layout (persona card left, name/join right) rather than the
+// Side-by-side layout (persona card left, form right) rather than an
 // earlier stacked one: with a single persona to show, a whole horizontal
 // scroll lane above the form was doing a lot of layout work for one card.
 // Still designed to fit one viewport with no page scroll.
 export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
   const persona = AVAILABLE_PERSONAS[0];
-  const [name, setName] = useState("");
-  const [joining, setJoining] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const canJoin = name.trim().length > 0 && !joining;
-
-  async function handleJoin() {
-    if (!canJoin) return;
-    setJoining(true);
-    const ok = await onJoin(name.trim());
-    if (!ok) {
-      setBusy(true);
-      setJoining(false);
-    }
+  async function handleGated(profile: VisitorProfile) {
+    const ok = await onJoin(profile.name, profile.company, profile.email);
+    if (!ok) setBusy(true);
     // On success the parent unmounts this screen, nothing left to reset here.
   }
 
@@ -107,25 +103,16 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
           </div>
 
           <div className="prejoin__form">
-            <div className="prejoin__name">
-              <label htmlFor="prejoin-name">Your name</label>
-              <input
-                id="prejoin-name"
-                type="text"
-                placeholder="e.g. Alex"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleJoin();
-                }}
-                autoFocus
-              />
-            </div>
+            <VisitorGateForm
+              visitorId={getVisitorId()}
+              path="meet"
+              submitLabel="Join Product Demo"
+              submittingLabel="Checking…"
+              onGated={handleGated}
+              initialProfile={getVisitorProfile() ?? undefined}
+            />
 
             <div className="prejoin__actions">
-              <button type="button" className="prejoin__join" disabled={!canJoin} onClick={handleJoin}>
-                {joining ? "Checking…" : "Join Product Demo"}
-              </button>
               <button type="button" className="prejoin__schedule" disabled title="Coming soon">
                 Schedule for later
               </button>

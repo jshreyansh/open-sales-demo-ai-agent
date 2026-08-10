@@ -1,0 +1,109 @@
+---
+title: Create a video generation
+description: POST /v1/videos
+---
+
+Starts a video generation. Runs asynchronously through all six reasoning-pipeline stages — this returns immediately
+with the generation in a `queued` state; poll [Retrieve a video generation](/docs/api/api-reference/videos/retrieve)
+for the result.
+
+```
+POST https://swishx-api-platform.vercel.app/v1/videos
+```
+
+## Request body
+
+| Parameter          | Type    | Required | Description                                                                          |
+| -------------------- | ------- | -------- | -------------------------------------------------------------------------------------- |
+| `model`              | string  | Yes      | A `finsen-3.x` version. See [Models](/docs/api/concepts/models).                          |
+| `prompt`             | string  | Yes      | What the shot should show. 25–500 characters recommended.                              |
+| `negative_prompt`    | string  | No       | What to avoid. Merged with account-level defaults, not a replacement for them.         |
+| `duration_seconds`   | integer | No       | `4`–`16`. Defaults to `8`.                                                             |
+| `resolution`         | string  | No       | `"720p"` or `"1080p"`. Defaults to `"1080p"`.                                          |
+| `keyframe_id`        | string  | No       | Reuse an existing keyframe image instead of generating a new one. See [Images](/docs/api/api-reference/images/create). |
+
+<Tabs items={['cURL', 'Node.js', 'Python']}>
+<Tab value="cURL">
+
+```bash
+curl https://swishx-api-platform.vercel.app/v1/videos \
+  -H "Authorization: Bearer $SWISHX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "finsen-3.2",
+    "prompt": "A pharma rep opens with a warm, confident smile.",
+    "duration_seconds": 8,
+    "resolution": "1080p"
+  }'
+```
+
+</Tab>
+<Tab value="Node.js">
+
+```js
+const response = await fetch("https://swishx-api-platform.vercel.app/v1/videos", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.SWISHX_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    model: "finsen-3.2",
+    prompt: "A pharma rep opens with a warm, confident smile.",
+    duration_seconds: 8,
+    resolution: "1080p",
+  }),
+});
+
+const video = await response.json();
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import os
+import requests
+
+response = requests.post(
+    "https://swishx-api-platform.vercel.app/v1/videos",
+    headers={"Authorization": f"Bearer {os.environ['SWISHX_API_KEY']}"},
+    json={
+        "model": "finsen-3.2",
+        "prompt": "A pharma rep opens with a warm, confident smile.",
+        "duration_seconds": 8,
+        "resolution": "1080p",
+    },
+)
+
+video = response.json()
+```
+
+</Tab>
+</Tabs>
+
+## Response
+
+```json
+{
+  "id": "vid_8f2c1a9b3d4e",
+  "object": "video",
+  "status": "queued",
+  "model": "finsen-3.2",
+  "prompt": "A pharma rep opens with a warm, confident smile.",
+  "negative_prompt": null,
+  "duration_seconds": 8,
+  "resolution": "1080p",
+  "routed_model": null,
+  "keyframe": null,
+  "compliance": null,
+  "output": null,
+  "error": null,
+  "cost_cents": null,
+  "created_at": "2026-08-07T18:22:04Z",
+  "completed_at": null
+}
+```
+
+`routed_model`, `keyframe`, `compliance`, `output`, and `cost_cents` are only populated once the request has
+progressed far enough through the pipeline — see [the video object's field reference](/docs/api/api-reference/videos/retrieve).

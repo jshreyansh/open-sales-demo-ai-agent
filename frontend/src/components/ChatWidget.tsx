@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRTVIClientEvent } from "@pipecat-ai/client-react";
 import { RTVIEvent } from "@pipecat-ai/client-js";
-import { sendMessage, type AgentAction } from "../lib/api";
-import { getVisitorId } from "../lib/session";
+import { sendMessage, startSession, type AgentAction } from "../lib/api";
+import { getVisitorId, getVisitorProfile } from "../lib/session";
 import { useVoiceSession } from "../lib/useVoiceSession";
 import MeetIcon from "./MeetIcons";
 import Icon from "./Icon";
@@ -48,6 +48,17 @@ export default function ChatWidget({ currentPage, onAction }: ChatWidgetProps) {
   const currentPageRef = useRef(currentPage);
   currentPageRef.current = currentPage;
 
+  // /demo/dashboard is gated the same way Meeting Mode's pre-join screen is
+  // (see DashboardGate/VisitorGateForm) — by the time this widget mounts,
+  // the visitor's name/company/email are already in sessionStorage. Seeding
+  // the REST API's session store here (same call MeetingShell.handleJoin
+  // already makes) is what lets a personalized reply/MEDDIC context work in
+  // Product Mode too, not just Meeting Mode.
+  useEffect(() => {
+    const profile = getVisitorProfile();
+    if (profile) void startSession(visitorId, profile.name, profile.company, profile.email);
+  }, []);
+
   const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = listRef.current;
@@ -84,7 +95,8 @@ export default function ChatWidget({ currentPage, onAction }: ChatWidgetProps) {
   async function startTalk() {
     setTalkMode(true);
     try {
-      const connected = await connect();
+      const profile = getVisitorProfile();
+      const connected = await connect(profile?.name, profile?.company, profile?.email);
       if (!connected) {
         // Someone else is already on the line — the voicebot handles one
         // real call at a time (see server.py's _active_call).

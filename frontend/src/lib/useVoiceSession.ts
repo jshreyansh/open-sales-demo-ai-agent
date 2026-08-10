@@ -38,7 +38,7 @@ export function useVoiceSession(onAction: (action: AgentAction) => void, onReply
    * server.py's _active_call) — callers need to check this and show that
    * instead of assuming the call connected.
    */
-  async function connect(name?: string): Promise<boolean> {
+  async function connect(name?: string, company?: string, email?: string): Promise<boolean> {
     // Connect only once — reconnecting fires the client library's own
     // "Connected" handler, which wipes the whole conversation history as a
     // side effect. Once connected, treat further "connect" calls as just
@@ -46,7 +46,7 @@ export function useVoiceSession(onAction: (action: AgentAction) => void, onReply
     if (transportState === "disconnected") {
       const claimed = await claimVoiceLock(visitorId);
       if (!claimed) return false;
-      await connectVoice(visitorId, name);
+      await connectVoice(visitorId, name, company, email);
     }
     enableMic(true);
     return true;

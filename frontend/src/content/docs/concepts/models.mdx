@@ -1,0 +1,57 @@
+---
+title: Models
+description: SwishX's model history, and how to pick a version.
+---
+
+The reasoning model behind every SwishX request — the thing that decodes briefs, harnesses context, links claims,
+routes to a downstream generator, and verifies output — is what people mean when they say "the SwishX API."
+
+SwishX names each model generation after a Nobel laureate in Physiology or Medicine, rotating to a new name every
+two or three versions:
+
+| Generation           | Versions | Named for                                              |
+| --------------------- | -------- | ------------------------------------------------------- |
+| Behring               | 1.0–1.5  | Emil von Behring, 1901 laureate                          |
+| Ross                  | 2.0–2.5  | Ronald Ross, 1902 laureate                               |
+| **Finsen** (current)  | 3.0–     | Niels Ryberg Finsen, 1903 laureate                       |
+
+## Current version
+
+```
+finsen-3.2
+```
+
+Pass this as the `model` field on any request. Sharper claim-grounding accuracy and lower multi-model routing
+latency than 3.1 — see the [changelog](/docs/api/changelog) for what changed.
+
+## Choosing a version
+
+Most integrations should just use the current version and move forward as new ones ship — the request/response
+shape has been stable since Finsen 3.0. Pin an older version only if:
+
+- You've validated a specific version's compliance behavior for a submission already in flight, and don't want
+  generation behavior to shift mid-review.
+- You're comparing output quality across versions before upgrading a production integration.
+
+```bash
+curl https://swishx-api-platform.vercel.app/v1/videos \
+  -H "Authorization: Bearer $SWISHX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "finsen-3.1",
+    "prompt": "..."
+  }'
+```
+
+<Callout title="Deprecation policy" type="warn">
+  Versions prior to Finsen 3.0 (Behring 1.0 through Ross 2.5) predate the current reasoning pipeline and are no
+  longer accessible for new requests — they're listed in the changelog for historical context only. Any
+  `finsen-3.x` version remains callable indefinitely; there's no forced migration off 3.0 or 3.1 once you're on them.
+</Callout>
+
+## Keyframe model
+
+Video generations that use keyframe-first rendering (see [Model routing](/docs/api/concepts/model-routing)) also invoke
+a paired image model for the opening still, `finsen-3.2-keyframe`. You don't call this directly — it's invoked
+automatically as part of a `/v1/videos` request — but its own [rate limits](/docs/api/api-reference/rate-limits) are
+tracked separately.

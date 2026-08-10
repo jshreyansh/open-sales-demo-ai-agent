@@ -1,0 +1,58 @@
+---
+title: Create a keyframe image
+description: POST /v1/images
+---
+
+Generates a standalone photoreal still, using `finsen-3.2-keyframe`. Called automatically as part of most
+`/v1/videos` requests (see [Model routing](/docs/api/concepts/model-routing)) — call it directly when you want to review
+or regenerate a keyframe before spending on the video render itself.
+
+```
+POST https://swishx-api-platform.vercel.app/v1/images
+```
+
+## Request body
+
+| Parameter       | Type   | Required | Description                                            |
+| ---------------- | ------ | -------- | -------------------------------------------------------- |
+| `prompt`         | string | Yes      | The still-frame description.                             |
+| `aspect_ratio`   | string | No       | `"16:9"`, `"9:16"`, or `"1:1"`. Defaults to `"16:9"`.     |
+
+```bash
+curl https://swishx-api-platform.vercel.app/v1/images \
+  -H "Authorization: Bearer $SWISHX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Hyper-detailed macro photograph of a hand holding a tablet, warm clinical lighting.",
+    "aspect_ratio": "16:9"
+  }'
+```
+
+## Response
+
+```json
+{
+  "id": "img_3a9c1f2b8e7d",
+  "object": "image",
+  "status": "ready",
+  "model": "finsen-3.2-keyframe",
+  "prompt": "Hyper-detailed macro photograph of a hand holding a tablet, warm clinical lighting.",
+  "url": "https://cdn.swishx.com/images/img_3a9c1f2b8e7d.png",
+  "cost_cents": 40,
+  "created_at": "2026-08-07T18:21:50Z"
+}
+```
+
+To use a generated keyframe in a video generation instead of letting one be generated automatically, pass its `id`
+as `keyframe_id` on [Create a video generation](/docs/api/api-reference/videos/create):
+
+```json
+{
+  "model": "finsen-3.2",
+  "prompt": "The tablet screen lights up as the hand taps it.",
+  "keyframe_id": "img_3a9c1f2b8e7d"
+}
+```
+
+A regenerated keyframe costs cents, not dollars — this is the whole point of keeping the still and the motion prompt
+separate: fix a bad frame without re-rendering a clip that was otherwise fine.

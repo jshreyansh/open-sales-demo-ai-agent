@@ -1,0 +1,50 @@
+---
+title: Setting up a brand dossier
+description: What the context-harness stage actually reasons over.
+---
+
+Your brand dossier is what the [context-harnessed stage](/docs/api/concepts/reasoning-pipeline) merges with every
+brief. Requests aren't checked against generic "is this true" logic — they're checked against your dossier's
+specific, pre-approved claims. No dossier means no claim-linking to do, which means every claim implied by a prompt
+gets flagged as unlinked.
+
+<Callout title="Where to configure this" type="info">
+  Brand dossiers are managed through your SwishX account team today, not a public API endpoint — reach out at
+  [partnerships@swishx.com](mailto:partnerships@swishx.com) to set one up or request a change. A direct
+  `/v1/dossiers` endpoint is planned; it isn't live yet.
+</Callout>
+
+## What goes in a dossier
+
+- **Approved claims** — the specific efficacy, safety, and comparative statements your legal/regulatory team has
+  cleared, each tied to its source citation.
+- **Regulatory ruleset** — ISI placement and duration requirements, fair-balance language, and any label constraints
+  specific to your therapeutic area or market.
+- **Tone and prior assets** — reference material the prompt-layering stage draws on, so generated copy sounds like
+  your brand instead of a generic pharma ad.
+
+## How it affects requests
+
+A prompt like:
+
+```
+"Show a patient feeling immediate relief within minutes of taking the medication."
+```
+
+...implies a specific efficacy claim ("immediate relief," "within minutes"). If your dossier has an approved claim
+that matches that language, the request proceeds. If it doesn't — even if the claim is true — it's rejected at the
+claims-linked stage:
+
+```json
+{
+  "error": {
+    "type": "compliance_error",
+    "code": "unlinked_claim",
+    "message": "The prompt implies a claim ('immediate relief within minutes') with no matching entry in the account's approved claim set.",
+    "stage": "claims_linked"
+  }
+}
+```
+
+The fix is almost never to reword the prompt around the system — it's to get the claim added to the dossier if
+it's genuinely approved, or to rewrite the brief to only imply claims that already are.
