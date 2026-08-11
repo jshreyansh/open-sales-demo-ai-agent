@@ -1794,6 +1794,24 @@ body {
 }
 
 
+.meet__controls-hint {
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #9aa0a6;
+  padding-top: 6px;
+  flex-shrink: 0;
+}
+
+.meet__controls-hint kbd {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  font-family: inherit;
+  font-size: 11px;
+}
+
 .meet__controls {
   display: flex;
   justify-content: center;
@@ -1910,6 +1928,19 @@ body {
   gap: 12px;
 }
 
+.landing__buttons--secondary {
+  flex-direction: row;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.landing__buttons--secondary .landing__btn-secondary {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
 .landing__btn-secondary {
   min-width: 260px;
   padding: clamp(12px, 1.8vh, 16px) 40px;
@@ -1926,26 +1957,6 @@ body {
 .landing__btn-secondary:hover {
   transform: translateY(-1px);
   background: rgba(255, 255, 255, 0.1);
-}
-
-.landing__docs-link {
-  display: block;
-  width: 100%;
-  margin-top: 18px;
-  padding: 4px;
-  border: none;
-  background: none;
-  color: #9aa0a6;
-  font-size: 13px;
-  font-weight: 600;
-  text-decoration: underline;
-  text-decoration-color: rgba(154, 160, 166, 0.4);
-  cursor: pointer;
-}
-
-.landing__docs-link:hover {
-  color: #fff;
-  text-decoration-color: currentColor;
 }
 
 .prejoin__inner {

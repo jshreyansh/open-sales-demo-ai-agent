@@ -57,7 +57,6 @@ function TileAvatar({
 
 export default function MeetingShell({ children, onLeave, onAction }: MeetingShellProps) {
   const time = useClock();
-  const [cameraOn, setCameraOn] = useState(true);
   const [handRaised, setHandRaised] = useState(false);
   const [countdown, setCountdown] = useState(JOIN_COUNTDOWN_SECS);
   // Gates the join countdown (and, transitively, the voice connect effect
@@ -133,6 +132,23 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
       onLeave();
     }
   }, [voiceConnected, onLeave]);
+
+  // Spacebar toggles mute, same convention as Google Meet/Zoom — but only
+  // once actually connected, and never while focus is in a text field (the
+  // chat input rendered in `children`), where a space is just a space.
+  useEffect(() => {
+    if (!voiceConnected) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.code !== "Space") return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      e.preventDefault();
+      enableMic(!isMicEnabled);
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [voiceConnected, isMicEnabled, enableMic]);
 
   // A real toggle, not a momentary press: the visitor raises their hand and
   // it stays raised — same as actually raising a hand in a room — until they
@@ -232,21 +248,19 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
         </div>
       </div>
 
+      {/* Only mic, hand-raise, and hangup are actually wired to real
+          behavior right now — camera, screen-share, captions, and the
+          overflow menu were removed rather than left as dead, unusable
+          buttons (see the "remove useless controls" task). */}
+      <div className="meet__controls-hint">
+        Tip: press <kbd>Space</kbd> to mute or unmute
+      </div>
       <div className="meet__controls">
         <button
           className={`meet__ctrl ${!isMicEnabled ? "meet__ctrl--off" : ""}`}
           onClick={() => enableMic(!isMicEnabled)}
         >
           <MeetIcon name={isMicEnabled ? "mic" : "mic-off"} />
-        </button>
-        <button className={`meet__ctrl ${!cameraOn ? "meet__ctrl--off" : ""}`} onClick={() => setCameraOn((v) => !v)}>
-          <MeetIcon name={cameraOn ? "camera" : "camera-off"} />
-        </button>
-        <button className="meet__ctrl meet__ctrl--active">
-          <MeetIcon name="screen-share" />
-        </button>
-        <button className="meet__ctrl">
-          <MeetIcon name="captions" />
         </button>
         <button
           className={`meet__ctrl ${handRaised ? "meet__ctrl--pressed" : ""}`}
@@ -258,9 +272,6 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
           }
         >
           <MeetIcon name="hand" />
-        </button>
-        <button className="meet__ctrl">
-          <MeetIcon name="dots" />
         </button>
         <button className="meet__ctrl meet__ctrl--hangup" onClick={onLeave}>
           <MeetIcon name="hangup" />

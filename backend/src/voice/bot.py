@@ -171,9 +171,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     #
     # stop_secs defaults to 0.2 — short enough that a normal mid-sentence
     # pause reads as "stopped speaking," chopping one utterance into several
-    # segments each sent to the agent as an independent message. 0.8 gives
-    # room for a natural breath without making replies feel sluggish.
-    vad = VADProcessor(vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.8)))
+    # segments each sent to the agent as an independent message. 1.0 gives
+    # more room than the original 0.8 for a natural breath (or a second
+    # voice chiming in) to land inside the same segment instead of becoming
+    # its own separate transcript — see AgentRuntimeProcessor's turn-lock,
+    # which is the other half of handling overlapping speech; this just
+    # reduces how often it needs to kick in.
+    vad = VADProcessor(vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=1.0)))
     stt = GroqSTTService(api_key=os.getenv("GROQ_API_KEY"))
     tts = CartesiaTTSService(
         api_key=os.getenv("CARTESIA_API_KEY"),

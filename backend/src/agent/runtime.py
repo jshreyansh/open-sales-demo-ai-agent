@@ -1,8 +1,9 @@
 import glob
+import json
 import os
 import time
 from datetime import datetime
-from typing import Optional, TypedDict
+from typing import AsyncIterator, Optional, TypedDict
 from zoneinfo import ZoneInfo
 
 import anthropic
@@ -61,6 +62,7 @@ _provider = _pick_provider()
 
 if _provider == "anthropic":
     _client = anthropic.Anthropic(api_key=_anthropic_key)
+    _async_client = anthropic.AsyncAnthropic(api_key=_anthropic_key)
     _model = "claude-sonnet-5"
 elif _provider == "deepseek":
     # DeepSeek's Anthropic-compatible endpoint — same SDK, same tool_use
@@ -71,9 +73,11 @@ elif _provider == "deepseek":
     # rejects a forced tool_choice ("Thinking mode does not support this
     # tool_choice") — confirmed by the actual 400 response, not guessed.
     _client = anthropic.Anthropic(api_key=_deepseek_key, base_url="https://api.deepseek.com/anthropic")
+    _async_client = anthropic.AsyncAnthropic(api_key=_deepseek_key, base_url="https://api.deepseek.com/anthropic")
     _model = "deepseek-v4-flash"
 else:
     _client = None
+    _async_client = None
     _model = None
 
 logger.info(f"agent runtime LLM: {_model or 'none (keyword-matcher fallback only — no API key found)'} (provider={_provider or 'auto/none'})")
@@ -155,6 +159,153 @@ def _is_valid_action(action: AgentAction) -> bool:
         a.page == action["page"] and a.component == action["component"] and a.method == action["method"]
         for a in FLAT_ACTIONS
     )
+
+
+def _tool_schema() -> dict:
+    """The single tool_use schema both _select_with_claude (blocking) and
+    _stream_with_claude (streaming, see run_turn_stream) send — identical
+    either way, so there's exactly one schema to keep in sync, not two.
+
+    "action" and "lead_in" are defined BEFORE "reply", even though the
+    conversation-facing docs/comments elsewhere describe reply first — this
+    is deliberate and load-bearing for streaming, not arbitrary. Property
+    order in a JSON Schema has no effect on validation (data.get() calls
+    read fields by name regardless of order), but it does empirically
+    influence the order a model fills fields in when constructing a tool
+    call — and this order also matches the ALREADY-existing intended
+    reasoning sequence in the system prompt (decide action → lead_in →
+    fire it → THEN explain via reply). Putting action/lead_in first means
+    that by the time reply's text starts streaming in, whether an action
+    precedes it is already known — which is what lets run_turn_stream()
+    safely start speaking reply's sentences as they arrive instead of
+    waiting for the whole object to close. See _StreamingFieldExtractor
+    and _stream_with_claude for how this gets used.
+    """
+    return {
+        "name": TOOL_NAME,
+        "description": "Reply to the prospect and, if relevant, trigger a UI action in the demo.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "object",
+                    "description": "Omit this field entirely if no listed component matches the request, or if you already did this action and the prospect is asking a follow-up question instead.",
+                    "properties": {
+                        "page": {"type": "string"},
+                        "component": {"type": "string"},
+                        "method": {"type": "string"},
+                    },
+                    "required": ["page", "component", "method"],
+                },
+                "lead_in": {
+                    "type": "string",
+                    "description": (
+                        "Required whenever 'action' is set, omitted otherwise. A short (5-10 word) "
+                        "spoken transition said right before the screen changes, e.g. 'Let me pull "
+                        "that up' or 'Let's take a look at that.' No content or destination detail — "
+                        "just the transition."
+                    ),
+                },
+                "reply": {
+                    "type": "string",
+                    "description": (
+                        f"Spoken as {AGENT_NAME}. One or two short sentences by default; longer only if "
+                        "the prospect explicitly asked to elaborate/explain in detail. If 'action' is "
+                        "set, this is spoken AFTER the screen has already changed, so it can talk about "
+                        "what's now visible instead of what you're about to go look at."
+                    ),
+                },
+                "prospect_name": {
+                    "type": "string",
+                    "description": (
+                        "The prospect's first name — ONLY set this on the turn where they just told "
+                        "you it for the first time (e.g. introducing themselves in response to the "
+                        "opening question). Omit on every other turn."
+                    ),
+                },
+                "meddic_metrics": {
+                    "type": "string",
+                    "description": "The concrete result/metric they're trying to move — ONLY set on the turn where this genuinely came up. See instruction 8.",
+                },
+                "meddic_economic_buyer": {
+                    "type": "string",
+                    "description": "Who owns budget / signs off on this purchase — ONLY set on the turn where this genuinely came up. See instruction 8.",
+                },
+                "meddic_decision_criteria": {
+                    "type": "string",
+                    "description": "What they're evaluating this against (other tools, internal criteria) — ONLY set on the turn where this genuinely came up. See instruction 8.",
+                },
+                "meddic_decision_process": {
+                    "type": "string",
+                    "description": "Steps/timeline to an actual decision — ONLY set on the turn where this genuinely came up. See instruction 8.",
+                },
+                "meddic_pain": {
+                    "type": "string",
+                    "description": "The real underlying problem driving this evaluation — ONLY set on the turn where this genuinely came up. See instruction 8.",
+                },
+                "meddic_champion": {
+                    "type": "string",
+                    "description": "Who internally wants this to happen / would advocate for it — ONLY set on the turn where this genuinely came up. See instruction 8.",
+                },
+            },
+            "required": ["reply"],
+        },
+    }
+
+
+def _parse_tool_result(data: dict, stop_reason: Optional[str] = None) -> AgentResult:
+    """Shared by both _select_with_claude (blocking) and _stream_with_claude
+    (streaming, via its final authoritative parse) — the exact same
+    field-validation/recovery logic either way, so there's one place this
+    can go wrong, not two independently-maintained copies."""
+    action = data.get("action")
+    if action and not _is_valid_action(action):
+        action = None
+
+    reply = data.get("reply")
+    if not reply:
+        # Observed in production (DeepSeek): the model sometimes returns a
+        # perfectly valid action + lead_in but omits "reply" entirely, even
+        # though the schema marks it required. This used to be a hard
+        # `data["reply"]` subscript, which raised a KeyError caught by
+        # run_turn()'s broad except — silently discarding a CORRECT action in
+        # favor of the crude keyword matcher (the actual cause of the
+        # MagicReel/MagicAvatar -> MLR Approvals misfire). Recovering here
+        # keeps the model's real navigation decision instead of throwing it
+        # away.
+        logger.warning(f"tool_use missing 'reply' (stop_reason={stop_reason!r}), recovering: {data!r}")
+        if action:
+            match = next(
+                (a for a in FLAT_ACTIONS if a.page == action["page"] and a.component == action["component"]),
+                None,
+            )
+            reply = f"This is the {match.component_label}." if match else "Here it is."
+        else:
+            reply = "Sorry, could you say that again?"
+
+    # prospect_name plus the six MEDDIC fields all follow the identical
+    # "only set on the turn it was just learned" pattern — collected here in
+    # one pass rather than six near-identical if-blocks.
+    captured_fields = {
+        key: data[key]
+        for key in ("prospect_name", *_MEDDIC_LABELS)
+        if data.get(key)
+    }
+
+    if not action:
+        result: AgentResult = {"reply": reply, **captured_fields}
+        return result
+    # Guaranteed non-empty even if the model forgets it — the ordering this
+    # enables (transition, then action, then explanation) is the whole point;
+    # a missing lead_in shouldn't silently fall back to the old "act instantly"
+    # behavior.
+    result: AgentResult = {
+        "reply": reply,
+        "action": action,
+        "lead_in": data.get("lead_in") or DEFAULT_LEAD_IN,
+        **captured_fields,
+    }
+    return result
 
 
 SYSTEM_TEMPLATE = """You are {agent_name} — one of the best reps SwishX has, on a live call with someone evaluating ContentIQ, an AI content platform for pharma marketing teams. You sell the way top consultative reps actually sell: genuinely curious about the prospect's world before you pitch anything, confident without being pushy, and every single thing you show or say ties back to what THEY told you they care about — never a generic feature tour. Talk like a sharp, attentive person having a real conversation, not someone reading from a deck.
@@ -318,78 +469,7 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
         system=system,
         thinking={"type": "disabled"},
         messages=[{"role": "user", "content": f'Prospect just said: "{message}"'}],
-        tools=[
-            {
-                "name": TOOL_NAME,
-                "description": "Reply to the prospect and, if relevant, trigger a UI action in the demo.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "reply": {
-                            "type": "string",
-                            "description": (
-                                f"Spoken as {AGENT_NAME}. One or two short sentences by default; longer only if "
-                                "the prospect explicitly asked to elaborate/explain in detail. If 'action' is "
-                                "set, this is spoken AFTER the screen has already changed, so it can talk about "
-                                "what's now visible instead of what you're about to go look at."
-                            ),
-                        },
-                        "lead_in": {
-                            "type": "string",
-                            "description": (
-                                "Required whenever 'action' is set, omitted otherwise. A short (5-10 word) "
-                                "spoken transition said right before the screen changes, e.g. 'Let me pull "
-                                "that up' or 'Let's take a look at that.' No content or destination detail — "
-                                "just the transition."
-                            ),
-                        },
-                        "action": {
-                            "type": "object",
-                            "description": "Omit this field entirely if no listed component matches the request, or if you already did this action and the prospect is asking a follow-up question instead.",
-                            "properties": {
-                                "page": {"type": "string"},
-                                "component": {"type": "string"},
-                                "method": {"type": "string"},
-                            },
-                            "required": ["page", "component", "method"],
-                        },
-                        "prospect_name": {
-                            "type": "string",
-                            "description": (
-                                "The prospect's first name — ONLY set this on the turn where they just told "
-                                "you it for the first time (e.g. introducing themselves in response to the "
-                                "opening question). Omit on every other turn."
-                            ),
-                        },
-                        "meddic_metrics": {
-                            "type": "string",
-                            "description": "The concrete result/metric they're trying to move — ONLY set on the turn where this genuinely came up. See instruction 8.",
-                        },
-                        "meddic_economic_buyer": {
-                            "type": "string",
-                            "description": "Who owns budget / signs off on this purchase — ONLY set on the turn where this genuinely came up. See instruction 8.",
-                        },
-                        "meddic_decision_criteria": {
-                            "type": "string",
-                            "description": "What they're evaluating this against (other tools, internal criteria) — ONLY set on the turn where this genuinely came up. See instruction 8.",
-                        },
-                        "meddic_decision_process": {
-                            "type": "string",
-                            "description": "Steps/timeline to an actual decision — ONLY set on the turn where this genuinely came up. See instruction 8.",
-                        },
-                        "meddic_pain": {
-                            "type": "string",
-                            "description": "The real underlying problem driving this evaluation — ONLY set on the turn where this genuinely came up. See instruction 8.",
-                        },
-                        "meddic_champion": {
-                            "type": "string",
-                            "description": "Who internally wants this to happen / would advocate for it — ONLY set on the turn where this genuinely came up. See instruction 8.",
-                        },
-                    },
-                    "required": ["reply"],
-                },
-            }
-        ],
+        tools=[_tool_schema()],
         tool_choice={"type": "tool", "name": TOOL_NAME},
     )
 
@@ -397,70 +477,26 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
     if tool_use is None:
         raise RuntimeError("no tool use in response")
 
-    data = tool_use.input
-    action = data.get("action")
-    if action and not _is_valid_action(action):
-        action = None
-
-    reply = data.get("reply")
-    if not reply:
-        # Observed in production (DeepSeek): the model sometimes returns a
-        # perfectly valid action + lead_in but omits "reply" entirely, even
-        # though the schema marks it required. This used to be a hard
-        # `data["reply"]` subscript, which raised a KeyError caught by
-        # run_turn()'s broad except — silently discarding a CORRECT action in
-        # favor of the crude keyword matcher (the actual cause of the
-        # MagicReel/MagicAvatar -> MLR Approvals misfire). Recovering here
-        # keeps the model's real navigation decision instead of throwing it
-        # away.
-        logger.warning(f"tool_use missing 'reply' (stop_reason={msg.stop_reason!r}), recovering: {data!r}")
-        if action:
-            match = next(
-                (a for a in FLAT_ACTIONS if a.page == action["page"] and a.component == action["component"]),
-                None,
-            )
-            reply = f"This is the {match.component_label}." if match else "Here it is."
-        else:
-            reply = "Sorry, could you say that again?"
-
-    # prospect_name plus the six MEDDIC fields all follow the identical
-    # "only set on the turn it was just learned" pattern — collected here in
-    # one pass rather than six near-identical if-blocks.
-    captured_fields = {
-        key: data[key]
-        for key in ("prospect_name", *_MEDDIC_LABELS)
-        if data.get(key)
-    }
-
-    if not action:
-        result: AgentResult = {"reply": reply, **captured_fields}
-        return result
-    # Guaranteed non-empty even if the model forgets it — the ordering this
-    # enables (transition, then action, then explanation) is the whole point;
-    # a missing lead_in shouldn't silently fall back to the old "act instantly"
-    # behavior.
-    result: AgentResult = {
-        "reply": reply,
-        "action": action,
-        "lead_in": data.get("lead_in") or DEFAULT_LEAD_IN,
-        **captured_fields,
-    }
-    return result
+    return _parse_tool_result(tool_use.input, msg.stop_reason)
 
 
-def run_turn(message: str, session: SessionState) -> AgentResult:
+def _begin_turn(session: SessionState, message: str) -> None:
+    """Shared start-of-turn bookkeeping — logging the prospect's own message
+    onto session history/gate_log before any reply is generated. Called
+    exactly once per turn by whichever strategy run_turn() ends up using
+    (run_turn itself, or run_turn_stream's streaming-with-fallback path) —
+    never twice for the same turn, which is why run_turn_stream's own
+    fallback-to-non-streaming branch does NOT call this again."""
     session.history.append(HistoryEntry(role="user", text=message))
     if session.visitor_id:
         gate_log.append_transcript_turn(session.visitor_id, "user", message)
 
-    if _client is not None:
-        try:
-            result = _select_with_claude(message, session)
-        except Exception:
-            logger.exception("LLM call failed, falling back to keyword matcher")
-            result = _fallback_reply(_keyword_match(message))
-    else:
-        result = _fallback_reply(_keyword_match(message))
+
+def _finalize_turn(session: SessionState, result: AgentResult) -> AgentResult:
+    """Shared end-of-turn bookkeeping — persisting anything the model just
+    captured (prospect_name, MEDDIC fields) onto the session, updating
+    current_page if an action fired, and logging the agent's reply. Shared
+    by run_turn() and run_turn_stream() so this only exists in one place."""
     # Consumed for this turn's prompt already — clear so it doesn't leak
     # into a later, unrelated turn.
     session.was_interrupted = False
@@ -480,3 +516,389 @@ def run_turn(message: str, session: SessionState) -> AgentResult:
     if session.visitor_id:
         gate_log.append_transcript_turn(session.visitor_id, "agent", result["reply"])
     return result
+
+
+def run_turn(message: str, session: SessionState) -> AgentResult:
+    _begin_turn(session, message)
+    if _client is not None:
+        try:
+            result = _select_with_claude(message, session)
+        except Exception:
+            logger.exception("LLM call failed, falling back to keyword matcher")
+            result = _fallback_reply(_keyword_match(message))
+    else:
+        result = _fallback_reply(_keyword_match(message))
+    return _finalize_turn(session, result)
+
+
+# ---------------------------------------------------------------------------
+# Streaming turn — run_turn_stream(), used only by the voice pipeline
+# (agent_processor.py) so TTS can start speaking "reply" as it's generated
+# instead of waiting for the whole tool-call JSON object to finish. Text
+# chat keeps using the plain run_turn() above, completely unchanged — a
+# REST response has no equivalent benefit from this.
+#
+# The hand-rolled extractors below exist because a streaming tool call
+# arrives as raw, not-yet-valid JSON text fragments (Anthropic's
+# input_json_delta events) — standard json.loads() can't touch it until the
+# whole object closes. They're scoped narrowly to this one known schema
+# (find a specific key, decode its value) rather than a general streaming
+# JSON parser, matching how this codebase already avoids adding a
+# dependency for a narrow, well-understood need (see the typing-sound
+# effect's ffmpeg shell-out, before it was removed).
+#
+# Only ever a speed optimization, never a second source of truth: the
+# authoritative AgentResult always comes from the SDK's own final, fully
+# guaranteed-correct parse (via stream.get_final_message()) once the stream
+# ends — exactly the same parse _select_with_claude already does. If the
+# incremental decode ever disagrees with that authoritative text, the
+# mismatch is caught and the turn falls back to speaking the whole reply
+# the old way (see run_turn_stream's done_streamed/done_fallback split)
+# rather than trusting a possibly-corrupted fast path.
+# ---------------------------------------------------------------------------
+
+
+def _decode_json_string_prefix(s: str) -> tuple[str, bool]:
+    """Decode as much of a JSON string's content as is unambiguously
+    decodable from `s` (the raw text starting right after the value's
+    opening quote — may be incomplete, may run past the closing quote if
+    more has already arrived than one field's worth).
+
+    Returns (decoded_text, closed) — closed is True once an unescaped
+    closing quote was found. If `s` ends mid-escape-sequence (e.g. a lone
+    trailing backslash, or a \\uXXXX cut short by a chunk boundary),
+    decoding stops right before the incomplete escape rather than guessing
+    — the next feed() call (see _StreamingFieldExtractor) will have more
+    text and pick up from there via a fresh full redecode, which is safe
+    since `s` only ever grows, never changes retroactively.
+
+    Doesn't handle UTF-16 surrogate pairs for astral-plane characters
+    (\\uD800-\\uDBFF + \\uDC00-\\uDFFF) — spoken sales-call replies aren't
+    expected to contain them, and if one ever appears, the authoritative
+    final parse (not this decoder) is still what actually gets spoken and
+    logged; see the module note above.
+    """
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c == '"':
+            return "".join(out), True
+        if c == "\\":
+            if i + 1 >= n:
+                break  # escape cut off by a chunk boundary -- wait for more
+            nxt = s[i + 1]
+            simple = {'"': '"', "\\": "\\", "/": "/", "n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f"}
+            if nxt in simple:
+                out.append(simple[nxt])
+                i += 2
+                continue
+            if nxt == "u":
+                if i + 6 > n:
+                    break  # \uXXXX cut off by a chunk boundary -- wait for more
+                try:
+                    out.append(chr(int(s[i + 2 : i + 6], 16)))
+                except ValueError:
+                    break  # malformed escape -- stop; authoritative parse is still correct
+                i += 6
+                continue
+            break  # unrecognized escape -- stop conservatively
+        out.append(c)
+        i += 1
+    return "".join(out), False
+
+
+class _StreamingFieldExtractor:
+    """Incrementally decodes one known top-level string field's value (e.g.
+    "reply" or "lead_in") out of a growing, still-invalid raw JSON buffer.
+    Feed it raw text chunks as they arrive; it reports newly-decoded plain
+    text since the last feed() call, becoming .closed once that field's
+    value has fully arrived.
+
+    Assumes the key appears at most once and searches for the literal
+    `"<key>":` marker anywhere in the accumulated buffer — safe here because
+    this schema's field names are all distinct and none of them nest inside
+    another field's string value (the other fields are short, plain
+    identifiers with no embedded quotes)."""
+
+    def __init__(self, key: str):
+        self._key_marker = f'"{key}"'
+        self._raw = ""
+        self._value_start: Optional[int] = None
+        self._decoded = ""
+        self._closed = False
+
+    def feed(self, chunk: str) -> str:
+        if self._closed:
+            return ""
+        self._raw += chunk
+        if self._value_start is None:
+            key_idx = self._raw.find(self._key_marker)
+            if key_idx == -1:
+                return ""
+            i = key_idx + len(self._key_marker)
+            while i < len(self._raw) and self._raw[i] in " \t\r\n":
+                i += 1
+            if i >= len(self._raw) or self._raw[i] != ":":
+                return ""
+            i += 1
+            while i < len(self._raw) and self._raw[i] in " \t\r\n":
+                i += 1
+            if i >= len(self._raw) or self._raw[i] != '"':
+                return ""  # opening quote hasn't arrived yet
+            self._value_start = i + 1
+
+        decoded, closed = _decode_json_string_prefix(self._raw[self._value_start :])
+        new_text = decoded[len(self._decoded) :]
+        self._decoded = decoded
+        if closed:
+            self._closed = True
+        return new_text
+
+    @property
+    def started(self) -> bool:
+        return self._value_start is not None
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    @property
+    def value(self) -> str:
+        return self._decoded
+
+
+class _BalancedObjectExtractor:
+    """Finds a known top-level object field's raw JSON span (e.g.
+    "action": {...}) once it's balanced-complete, tracking brace depth while
+    respecting string boundaries so a literal "{" or "}" inside one of
+    action's own string values (page/component/method — plain identifiers,
+    but defensive here costs nothing) doesn't miscount. Once closed, the
+    span is handed to json.loads() — this class only finds WHERE to cut,
+    the actual parsing is still real, tested stdlib JSON parsing."""
+
+    def __init__(self, key: str):
+        self._key_marker = f'"{key}"'
+        self._raw = ""
+        self._span_start: Optional[int] = None
+        self._depth = 0
+        self._in_string = False
+        self._escape_next = False
+        self._closed = False
+        self._value: Optional[str] = None
+
+    def feed(self, chunk: str) -> None:
+        if self._closed:
+            return
+        self._raw += chunk
+        if self._span_start is None:
+            key_idx = self._raw.find(self._key_marker)
+            if key_idx == -1:
+                return
+            i = key_idx + len(self._key_marker)
+            while i < len(self._raw) and self._raw[i] in " \t\r\n":
+                i += 1
+            if i >= len(self._raw) or self._raw[i] != ":":
+                return
+            i += 1
+            while i < len(self._raw) and self._raw[i] in " \t\r\n":
+                i += 1
+            if i >= len(self._raw) or self._raw[i] != "{":
+                return  # opening brace hasn't arrived yet
+            self._span_start = i
+            self._depth = 0
+
+        # Resume scanning from wherever we last left off, not from the
+        # start of the span every time -- unlike the string extractor above,
+        # brace-depth/in-string state can't be safely recomputed from
+        # scratch on a partial re-scan the same way (recomputing from the
+        # start each call would be equally correct here too, just wasteful;
+        # tracking a cursor is simple enough to do properly).
+        start = getattr(self, "_scan_from", self._span_start)
+        for idx in range(start, len(self._raw)):
+            ch = self._raw[idx]
+            if self._escape_next:
+                self._escape_next = False
+                continue
+            if self._in_string:
+                if ch == "\\":
+                    self._escape_next = True
+                elif ch == '"':
+                    self._in_string = False
+                continue
+            if ch == '"':
+                self._in_string = True
+            elif ch == "{":
+                self._depth += 1
+            elif ch == "}":
+                self._depth -= 1
+                if self._depth == 0:
+                    self._value = self._raw[self._span_start : idx + 1]
+                    self._closed = True
+                    self._scan_from = idx + 1
+                    return
+        self._scan_from = len(self._raw)
+
+    @property
+    def key_seen(self) -> bool:
+        return self._span_start is not None
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    @property
+    def value(self) -> Optional[str]:
+        return self._value
+
+
+async def _stream_with_claude(message: str, session: SessionState) -> AsyncIterator[tuple]:
+    if _async_client is None:
+        raise RuntimeError("no async client")
+
+    history = "\n".join(f"{h.role}: {h.text}" for h in session.history) or "(nothing yet — this is the first message)"
+    system = SYSTEM_TEMPLATE.format(
+        agent_name=AGENT_NAME,
+        agent_location=AGENT_LOCATION,
+        current_page=session.current_page,
+        current_time=_current_time_note(),
+        overview=PRODUCT_OVERVIEW,
+        registry=_registry_prompt(),
+        knowledge=KNOWLEDGE,
+        interruption_note=INTERRUPTION_NOTE if session.was_interrupted else "",
+        name_note=_name_note(session),
+        company_note=_company_note(session),
+        meddic_note=_meddic_note(session),
+        pacing_note=_pacing_note(session),
+        history=history,
+    )
+
+    action_extractor = _BalancedObjectExtractor("action")
+    lead_in_extractor = _StreamingFieldExtractor("lead_in")
+    reply_extractor = _StreamingFieldExtractor("reply")
+    lead_in_and_action_handled = False
+
+    async with _async_client.messages.stream(
+        model=_model,
+        max_tokens=700,
+        system=system,
+        thinking={"type": "disabled"},
+        messages=[{"role": "user", "content": f'Prospect just said: "{message}"'}],
+        tools=[_tool_schema()],
+        tool_choice={"type": "tool", "name": TOOL_NAME},
+    ) as stream:
+        async for event in stream:
+            if event.type != "content_block_delta" or event.delta.type != "input_json_delta":
+                continue
+            chunk = event.delta.partial_json
+
+            action_extractor.feed(chunk)
+            lead_in_extractor.feed(chunk)
+            reply_new_text = reply_extractor.feed(chunk)
+
+            if not lead_in_and_action_handled and lead_in_extractor.closed and (
+                not action_extractor.key_seen or action_extractor.closed
+            ):
+                lead_in_and_action_handled = True
+                if action_extractor.value:
+                    try:
+                        action_dict = json.loads(action_extractor.value)
+                    except Exception:
+                        action_dict = None
+                    if action_dict and _is_valid_action(action_dict):
+                        yield ("lead_in", lead_in_extractor.value)
+                        yield ("action", action_dict)
+                    # An action span that parsed but failed validation, or
+                    # didn't parse at all, is treated as "no action" for
+                    # streaming purposes too -- _parse_tool_result applies
+                    # the exact same validation to the authoritative result,
+                    # so the two can never disagree on whether an action
+                    # actually fires.
+
+            # Safe to start streaming reply's own text only once we know
+            # for certain nothing needs to be said before it: either there's
+            # a confirmed action+lead_in already spoken above, or "action"
+            # never appeared in the buffer at all despite reply's own key
+            # already having been found (meaning, given the reordered
+            # schema, it never will -- see _tool_schema's docstring).
+            reply_safe_to_stream = reply_extractor.started and (
+                lead_in_and_action_handled or not action_extractor.key_seen
+            )
+            if reply_safe_to_stream and reply_new_text:
+                yield ("reply_delta", reply_new_text)
+
+    final_message = await stream.get_final_message()
+    tool_use = next((b for b in final_message.content if b.type == "tool_use"), None)
+    if tool_use is None:
+        raise RuntimeError("no tool use in streamed response")
+    result = _parse_tool_result(tool_use.input, final_message.stop_reason)
+
+    # Only trust that reply's incremental text was genuinely fully spoken
+    # already if the fast decoder actually reached a clean close AND agrees
+    # exactly with the authoritative text -- see the module note above on
+    # why a mismatch here means "don't trust it," not "patch the
+    # difference."
+    reply_fully_streamed = reply_extractor.closed and reply_extractor.value == result.get("reply")
+    yield ("_reply_fully_streamed", reply_fully_streamed)
+    yield ("result", result)
+
+
+async def run_turn_stream(message: str, session: SessionState) -> AsyncIterator[tuple]:
+    """Streaming counterpart to run_turn(), used only by the voice pipeline
+    (agent_processor.py). Yields, in order:
+
+      ("lead_in", str)              -- only if the turn triggers an action
+      ("action", dict)              -- right after lead_in, same turn
+      ("reply_delta", str)          -- zero or more, raw incremental text as
+                                        "reply" streams in (NOT pre-split
+                                        into sentences -- the caller already
+                                        owns that pacing logic, see
+                                        agent_processor.py's _speak_reply)
+      ("done_streamed", AgentResult) -- reply's text was already fully
+                                        covered by the reply_delta events
+                                        above; nothing more needs speaking
+      ("done_fallback", AgentResult) -- streaming wasn't available, failed,
+                                        or couldn't be trusted end-to-end;
+                                        the caller must speak this result's
+                                        lead_in/action/reply the same way it
+                                        always has, from scratch
+
+    Exactly one of done_streamed/done_fallback is always the final event.
+    _begin_turn() runs exactly once regardless of which path is taken, so
+    the user's message is never double-logged."""
+    _begin_turn(session, message)
+
+    if _async_client is not None:
+        try:
+            reply_fully_streamed = False
+            result: Optional[AgentResult] = None
+            async for event in _stream_with_claude(message, session):
+                if event[0] == "_reply_fully_streamed":
+                    reply_fully_streamed = event[1]
+                elif event[0] == "result":
+                    result = event[1]
+                else:
+                    yield event
+            if result is not None:
+                final = _finalize_turn(session, result)
+                if reply_fully_streamed:
+                    yield ("done_streamed", final)
+                else:
+                    yield ("done_fallback", final)
+                return
+        except Exception:
+            logger.exception("Streaming LLM call failed, falling back to non-streaming path")
+
+    # Same fallback chain run_turn() itself uses -- deliberately NOT calling
+    # run_turn() directly here, since that would call _begin_turn() a
+    # second time for this same message.
+    if _client is not None:
+        try:
+            result = _select_with_claude(message, session)
+        except Exception:
+            logger.exception("LLM call failed, falling back to keyword matcher")
+            result = _fallback_reply(_keyword_match(message))
+    else:
+        result = _fallback_reply(_keyword_match(message))
+    yield ("done_fallback", _finalize_turn(session, result))
