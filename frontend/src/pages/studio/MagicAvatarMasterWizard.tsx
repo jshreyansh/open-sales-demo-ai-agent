@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Icon from "../../components/Icon";
 import StepBar from "../../components/studio/StepBar";
 import TeamDock from "../../components/studio/TeamDock";
 import SceneList from "../../components/studio/SceneList";
 import GenerationScreen from "../../components/studio/GenerationScreen";
+import AvatarResult from "../../components/studio/AvatarResult";
+import { applyPulse } from "../../lib/useHighlight";
 import { MUSIC_TRACKS, generateDummyScenes, type Scene } from "../../registry/studioData";
 
 const STEPS = ["Brief", "Scenes", "Options", "Generate"];
@@ -19,8 +21,16 @@ interface MagicAvatarMasterWizardProps {
   generating: boolean;
   onGeneratingChange: (generating: boolean) => void;
   registerSegmentAndDirect: (fn: (() => void) | null) => void;
+  // Same shape as registerSegmentAndDirect, for the same reason — the
+  // parent owns the always-mounted action registration, but the actual
+  // pulse-cue targets (StepBar pills, tier cards, the Next/Generate
+  // buttons) only exist here. Hands the parent a live "pulse whichever
+  // target matches this registry action id" function, re-registered every
+  // render so it never reads stale step/generating/tier values.
+  registerCue: (fn: ((actionId: string) => void) | null) => void;
   onBack: () => void;
-  onDone: () => void;
+  onBackToAssets: () => void;
+  onSubmitForReview: () => void;
 }
 
 /**
@@ -56,8 +66,10 @@ export default function MagicAvatarMasterWizard({
   generating,
   onGeneratingChange: setGenerating,
   registerSegmentAndDirect,
+  registerCue,
   onBack,
-  onDone,
+  onBackToAssets,
+  onSubmitForReview,
 }: MagicAvatarMasterWizardProps) {
   const [name, setName] = useState("");
   const [script, setScript] = useState("");
@@ -66,9 +78,19 @@ export default function MagicAvatarMasterWizard({
   const [segmenting, setSegmenting] = useState(false);
   const [addIntro, setAddIntro] = useState(true);
   const [addOutro, setAddOutro] = useState(true);
+  // Set once GenerationScreen's fake render finishes — mirrors
+  // MagicReelStudio's "result" view, just kept local here since this
+  // component (not its parent) already owns every field the result screen
+  // needs (name, persona, scenes, tier, cards).
+  const [showResult, setShowResult] = useState(false);
 
   const [musicTab, setMusicTab] = useState<MusicTab>("none");
   const [musicId, setMusicId] = useState<string | null>(null);
+
+  const stepRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const tierRefs = useRef<Map<"hd" | "cinematic", HTMLButtonElement>>(new Map());
+  const generateBreakdownRef = useRef<HTMLButtonElement>(null);
+  const generateButtonRef = useRef<HTMLButtonElement>(null);
 
   function segmentAndDirect() {
     setSegmenting(true);
@@ -89,6 +111,71 @@ export default function MagicAvatarMasterWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [persona, name]);
 
+  // Maps each registry action id to whichever DOM target it actually acts
+  // on right now — the in-place element if this step/generating state has
+  // it mounted, otherwise the always-mounted StepBar pill for the step
+  // that action lands on (same "navigation cues the always-mounted
+  // control" rule used everywhere else). No deps array — re-registers
+  // every render so it always reads current step/generating/tier, never a
+  // stale value from whenever it first mounted.
+  useEffect(() => {
+    function pulseCue(actionId: string) {
+      const stepPill = (i: number) => stepRefs.current.get(i) ?? null;
+      const onStep2 = step === 2 && !generating;
+      const onStep3 = step === 3 && !generating;
+      switch (actionId) {
+        case "step-brief":
+          applyPulse(stepPill(0));
+          break;
+        case "generate-breakdown":
+          applyPulse(step === 0 ? generateBreakdownRef.current : stepPill(0));
+          break;
+        case "step-scenes":
+          applyPulse(stepPill(1));
+          break;
+        case "step-options":
+          applyPulse(stepPill(2));
+          break;
+        case "select-tier-hd":
+          applyPulse(onStep2 ? tierRefs.current.get("hd") ?? null : stepPill(2));
+          break;
+        case "select-tier-cinematic":
+          applyPulse(onStep2 ? tierRefs.current.get("cinematic") ?? null : stepPill(2));
+          break;
+        case "step-generate":
+          applyPulse(stepPill(3));
+          break;
+        case "start-generation":
+          applyPulse(onStep3 ? generateButtonRef.current : stepPill(3));
+          break;
+      }
+    }
+    registerCue(pulseCue);
+    return () => registerCue(null);
+  });
+
+  if (showResult) {
+    return (
+      <div className="page studio">
+        <div className="studio__header">
+          <button className="studio__back" onClick={onBack}>
+            <Icon name="chevron-down" size={14} /> MagicAvatar
+          </button>
+          <h1 className="page__title">Digital Twin Master Video</h1>
+        </div>
+        <AvatarResult
+          name={name || "Untitled master"}
+          persona={persona || "your specialty"}
+          sceneCount={scenes.length}
+          tier={tier}
+          cards={[addIntro && "Intro", addOutro && "Outro"].filter(Boolean).join(", ") || "None"}
+          onBackToAssets={onBackToAssets}
+          onSubmitForReview={onSubmitForReview}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="page studio">
       <div className="studio__header">
@@ -99,7 +186,16 @@ export default function MagicAvatarMasterWizard({
         <p className="page__subtitle">Author the avatar's script, direct the visuals, pick music, and generate a silent cinematic master.</p>
       </div>
 
-      <StepBar steps={STEPS} currentIndex={step} onStepClick={setStep} locked={generating} />
+      <StepBar
+        steps={STEPS}
+        currentIndex={step}
+        onStepClick={setStep}
+        locked={generating}
+        onStepRef={(i, el) => {
+          if (el) stepRefs.current.set(i, el);
+          else stepRefs.current.delete(i);
+        }}
+      />
 
       <div className="studio__body">
         {step === 0 && (
@@ -151,7 +247,7 @@ export default function MagicAvatarMasterWizard({
             </div>
 
             <div className="studio__footer">
-              <button className="btn-primary" onClick={segmentAndDirect} disabled={segmenting}>
+              <button className="btn-primary" ref={generateBreakdownRef} onClick={segmentAndDirect} disabled={segmenting}>
                 <Icon name="sparkles" size={14} /> {segmenting ? "Directing visuals…" : "Next →"}
               </button>
             </div>
@@ -185,12 +281,26 @@ export default function MagicAvatarMasterWizard({
           <div className="studio-card">
             <div className="field-label">Video mode</div>
             <div className="tier-grid">
-              <button className={`tier-card ${tier === "hd" ? "tier-card--active" : ""}`} onClick={() => setTier("hd")}>
+              <button
+                ref={(el) => {
+                  if (el) tierRefs.current.set("hd", el);
+                  else tierRefs.current.delete("hd");
+                }}
+                className={`tier-card ${tier === "hd" ? "tier-card--active" : ""}`}
+                onClick={() => setTier("hd")}
+              >
                 <div className="tier-card__title">HD</div>
                 <div className="tier-card__desc">Lifelike motion — the standard master quality.</div>
                 <div className="tier-card__meta">4,500 credits · ~2 min</div>
               </button>
-              <button className={`tier-card ${tier === "cinematic" ? "tier-card--active" : ""}`} onClick={() => setTier("cinematic")}>
+              <button
+                ref={(el) => {
+                  if (el) tierRefs.current.set("cinematic", el);
+                  else tierRefs.current.delete("cinematic");
+                }}
+                className={`tier-card ${tier === "cinematic" ? "tier-card--active" : ""}`}
+                onClick={() => setTier("cinematic")}
+              >
                 <div className="tier-card__title">Cinematic 4K</div>
                 <div className="tier-card__desc">Ultra-realistic, fully generated scenes — for flagship masters.</div>
                 <div className="tier-card__meta">14,000 credits · ~4 min</div>
@@ -240,7 +350,7 @@ export default function MagicAvatarMasterWizard({
         {step === 3 &&
           (generating ? (
             <div className="studio-card">
-              <GenerationScreen subjectLabel="master video" sourceLabel={name || "Untitled master"} onDone={onDone} />
+              <GenerationScreen subjectLabel="master video" sourceLabel={name || "Untitled master"} onDone={() => setShowResult(true)} />
             </div>
           ) : (
             <div className="studio-card">
@@ -268,7 +378,7 @@ export default function MagicAvatarMasterWizard({
                 </div>
               </dl>
               <div className="studio__footer">
-                <button className="btn-primary" onClick={() => setGenerating(true)}>
+                <button className="btn-primary" ref={generateButtonRef} onClick={() => setGenerating(true)}>
                   Generate master →
                 </button>
               </div>

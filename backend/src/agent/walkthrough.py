@@ -62,7 +62,11 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
         guidance=(
             "Give a short, own-words 2-3 sentence overview of what ContentIQ does — pull from "
             "the product overview above, don't recite it verbatim. No navigation needed for "
-            "this step, you're already on the dashboard. Then move into the tour."
+            "this step, you're already on the dashboard — but don't frame that as a deliberate "
+            "stop either (no \"let's start on the dashboard\" or \"I'll walk you through the "
+            "dashboard first\") since nothing here actually gets toured or explained beyond this "
+            "overview; the dashboard's own explicit, deliberate visit is step 10's wrap-up, not "
+            "this one. Just give the overview and move straight into the tour."
         ),
     ),
     WalkthroughStep(
@@ -108,11 +112,33 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
         action={"page": "magicreel-studio", "component": "wizard", "method": "step-source"},
         guidance=(
             "Enter the MagicReel studio at the Source step and walk it end-to-end — Source, "
-            "Brief, Script, Scenes, Generate — using the normal one-stage-at-a-time wizard "
-            "pacing (narrate each stage, ask if they want you to continue, wait for their "
-            "go-ahead — same as you'd do outside the scripted tour). Once you've shown the "
-            "Generate step's result, this outer step is done — ask if they'd like you to "
-            "continue the platform tour, and only move to step 7 once they say yes."
+            "Brief, Script, Scenes, Generate — one stage at a time, narrating each before moving "
+            "on (see instruction 2c's active-walkthrough pacing: keep advancing stage to stage on "
+            "your own, only actually pausing for a genuine question, not a per-stage go-ahead "
+            "check). Source and Brief each have real sub-options underneath them — don't just "
+            "describe all of a stage's sub-options in one breath while sitting on only one of "
+            "them; actually click through each as you mention it, one per turn, same continuous "
+            "pacing as the outer stages. For Source: a turn each for \"select-source-dossier\", "
+            "\"select-source-news\", \"select-source-custom\" as you describe brand dossier, news "
+            "article, and custom brief in turn (land back on whichever you're actually using — "
+            "usually dossier — before moving to Brief). For Brief: a turn each for "
+            "\"brief-audience\", \"brief-voice-language\", \"brief-brand-product\" as you cover "
+            "audience configuration, voice/language, and brand/product in turn. Because each of "
+            "these sub-options gets its own real explanation a turn or two later, the turn that "
+            "first lands on Source or Brief (\"step-source\"/\"step-brief\") should be a brief, "
+            "one-sentence transition only — name the stage and that it has a few parts, don't "
+            "summarize what those parts do, since you're about to explain each one properly right "
+            "after; a content preview here just gets said twice. Generate is a "
+            "real, separate stage, not just something to mention while "
+            "wrapping up — when you get there, actually fire component \"wizard\" action "
+            "\"start-generation\" as this turn's action (after \"step-generate\" got you onto that "
+            "stage), and let your reply narrate what's about to render, e.g. \"let's generate this\" "
+            "— don't just talk about generating and jump straight to step 7 in the same breath, "
+            "that skips the step entirely and the prospect never sees it render. The render itself "
+            "takes several seconds — a short beat of narration bridging that wait is fine, or use "
+            "the next turn once it's ready. Only once the result has actually been shown (the "
+            "rendered reel, not just the button press) is this outer step done — move into step 7 "
+            "on the turn AFTER that, not the same one."
         ),
     ),
     WalkthroughStep(
@@ -122,8 +148,13 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
         guidance=(
             "Open the MagicAvatar Launchpad, then start the Master wizard (create-master) and "
             "walk it end-to-end the same way as MagicReel — Brief, Scenes, Options, Generate — "
-            "one stage at a time with the usual go-ahead pacing. Once you've shown the result, "
-            "ask if they'd like you to continue before moving to step 8."
+            "one stage at a time, same continuous active-walkthrough pacing as step 6. Generate is "
+            "a real, separate stage here too — when you get there, actually fire component "
+            "\"wizard\" action \"start-generation\" as this turn's action (after \"step-generate\"), "
+            "narrating what's about to render — don't just mention generating and jump straight to "
+            "step 8 in the same breath. The render takes several seconds; bridge it with a beat of "
+            "narration or use the next turn. Only once the result has actually been shown is this "
+            "outer step done — move into step 8 on the turn AFTER that, not the same one."
         ),
     ),
     WalkthroughStep(

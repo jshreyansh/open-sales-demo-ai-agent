@@ -196,7 +196,7 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
       {countdown > 0 && (
         <div className="meet__intro">
           <img src={AGENT_PHOTO} alt="" className="meet__intro-avatar meet__intro-avatar-img" />
-          <div className="meet__intro-text">{AGENT_NAME} is joining for the demo…</div>
+          <div className="meet__intro-text">{AGENT_NAME} is joining</div>
           <div className="meet__intro-count">{countdown}</div>
         </div>
       )}

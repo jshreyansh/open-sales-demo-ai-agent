@@ -1508,9 +1508,42 @@ body {
   transition: box-shadow 0.2s, border-color 0.2s;
 }
 
-.panel--highlighted {
+/* Dims the rest of the shared screen and glows the target — the 9999px
+   spread paints outward from the element's own box (no viewport coordinates
+   needed) and gets clipped to just the shared-screen pane for free, since
+   .meet__stage already has overflow: hidden. */
+.panel--spotlight {
+  position: relative;
+  z-index: 5;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-tint-30);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55), 0 0 0 3px var(--accent), 0 0 24px 4px var(--accent-tint-30);
+  transition: box-shadow 0.25s ease;
+}
+
+/* A quick expanding/fading ring anchored to the target's own box — the
+   "the agent just clicked this" cue for click/open/select-*/generate-*/
+   start-* actions, distinct from the lingering spotlight above. */
+.panel--pulse {
+  position: relative;
+}
+.panel--pulse::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border: 2px solid var(--accent);
+  border-radius: inherit;
+  animation: action-pulse 0.6s ease-out;
+  pointer-events: none;
+}
+@keyframes action-pulse {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.96);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.08);
+  }
 }
 
 .panel__note {

@@ -198,7 +198,17 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     # which is the other half of handling overlapping speech; this just
     # reduces how often it needs to kick in.
     vad = VADProcessor(vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=1.0)))
-    stt = GroqSTTService(api_key=os.getenv("GROQ_API_KEY"))
+    # `prompt` is Whisper's standard vocabulary-biasing hint — it doesn't
+    # force these words, just nudges ambiguous audio toward them. Added
+    # after a real call transcribed "give me a walkthrough" as "give me a
+    # vote" — nothing in the audio pipeline knew "walkthrough" was even a
+    # plausible word in this domain. Kept short and product-specific rather
+    # than a long list, since Whisper's prompt has real diminishing returns
+    # (and a hard length cap) past a short, high-value set.
+    stt = GroqSTTService(
+        api_key=os.getenv("GROQ_API_KEY"),
+        prompt="ContentIQ, SwishX, walkthrough, MagicReel, MagicAvatar, Content Studio, MLR, dossier",
+    )
     tts = CartesiaTTSService(
         api_key=os.getenv("CARTESIA_API_KEY"),
         settings=CartesiaTTSService.Settings(

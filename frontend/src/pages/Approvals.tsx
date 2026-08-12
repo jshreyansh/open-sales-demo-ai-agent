@@ -48,7 +48,7 @@ export default function Approvals() {
     getApprovals().then(setData).catch(() => setData(null));
   }, []);
 
-  useRegisterComponent("mlr-review", "queue", { highlight: queue.highlight });
+  useRegisterComponent("mlr-review", "queue", { highlight: queue.spotlight });
 
   const tabCounts = useMemo(() => {
     const counts: Record<Tab, number> = { pending: 0, approved: 0, rejected: 0, withdrawn: 0, all: data?.rows.length ?? 0 };

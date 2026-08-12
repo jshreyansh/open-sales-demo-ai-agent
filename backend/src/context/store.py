@@ -101,6 +101,13 @@ class SessionState:
     # position, unlike the MEDDIC/qual fields above which are set once and
     # never touched again.
     walkthrough_step: Optional[int] = None
+    # True on the turn the model just answered a REAL interruption mid-tour
+    # and asked "want me to continue?" — tells the voice pipeline's
+    # auto-continue scheduler (agent_processor.py) to pause and wait for a
+    # real answer instead of auto-advancing. Reset to False every turn (set
+    # only when the model explicitly asks it that turn), so a stale True
+    # from an earlier interruption never blocks continuation forever.
+    walkthrough_awaiting_answer: bool = False
     # The same id this session is keyed by in _sessions below — kept on the
     # object itself (not just as the dict key) so run_turn() can persist each
     # turn to the durable transcript log (see data/gate_log.py) without

@@ -27,8 +27,8 @@ export default function BrandKit() {
     });
   }, []);
 
-  useRegisterComponent("brand-kit", "logo", { highlight: logo.highlight });
-  useRegisterComponent("brand-kit", "palette", { highlight: palette.highlight });
+  useRegisterComponent("brand-kit", "logo", { highlight: logo.spotlight });
+  useRegisterComponent("brand-kit", "palette", { highlight: palette.spotlight });
 
   if (!data) {
     return (

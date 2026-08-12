@@ -17,7 +17,7 @@ export default function Analytics() {
     getAnalyticsOverview().then(setData).catch(() => setData(null));
   }, []);
 
-  useRegisterComponent("analytics", "funnel", { highlight: funnel.highlight });
+  useRegisterComponent("analytics", "funnel", { highlight: funnel.spotlight });
 
   if (!data) {
     return (

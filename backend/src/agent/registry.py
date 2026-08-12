@@ -248,19 +248,30 @@ def _scroll_component() -> RegistryComponent:
 
 
 def _content_studio_components() -> List[RegistryComponent]:
+    # "soon" formats get a deliberately short entry — the agent's only job for
+    # one of these is "that's on the roadmap, not live yet" (instruction 2b),
+    # so the full audience/stage/promo/lead/inputs breakdown a BUILT format
+    # needs to actually reason about is pure dead weight here. Measured:
+    # this was 11.1K of the system prompt's 22K registry block for the 22
+    # not-yet-built formats, vs 3.3K for the 8 that are actually interactive
+    # — cutting it is a real, low-risk shrink of exactly the content that
+    # dilutes attention on everything else without adding any real value.
+    # The literal phrase "not yet built in this workspace" must stay intact
+    # either way — instruction 2b keys off it verbatim.
     components = []
     for f in CONTENT_STUDIO_FORMATS:
-        availability = (
-            "available now"
-            if not f.soon
-            else "not yet built in this workspace — the agent can still open its spec to explain what it does and what it needs"
-        )
-        inputs_str = ", ".join(f.inputs)
-        description = (
-            f"{f.tool} ({f.engine_tab} engine). {f.description} Audience: {f.audience}. "
-            f"Objective stage: {f.stage}. Promotional class: {f.promo}. Lead role: {f.lead}. "
-            f"Required inputs: {inputs_str}. Status: {availability}."
-        )
+        if f.soon:
+            description = (
+                f"{f.tool} ({f.engine_tab} engine). {f.description} "
+                f"Status: not yet built in this workspace — the agent can still open its spec to explain what it does."
+            )
+        else:
+            inputs_str = ", ".join(f.inputs)
+            description = (
+                f"{f.tool} ({f.engine_tab} engine). {f.description} Audience: {f.audience}. "
+                f"Objective stage: {f.stage}. Promotional class: {f.promo}. Lead role: {f.lead}. "
+                f"Required inputs: {inputs_str}. Status: available now."
+            )
         components.append(
             RegistryComponent(
                 id=f.slug,

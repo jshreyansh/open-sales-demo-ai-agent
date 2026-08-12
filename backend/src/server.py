@@ -31,7 +31,7 @@ brand_kit_state = dict(brand_kit_data)
 # src/voice/bot.py), keyed by visitor_id. The frontend polls this while a
 # voice call is active — same {page, component, method} shape the chat's
 # /chat response already uses.
-_pending_voice_actions: Dict[str, dict] = {}
+_pending_voice_actions: Dict[str, List[dict]] = {}
 
 # Same idea for the reply text itself. Pipecat's own bot-transcription RTVI
 # event depends on pushing an LLMTextFrame through the pipeline; the voice
@@ -271,16 +271,26 @@ class VoiceActionReport(BaseModel):
 @app.post("/internal/voice-action")
 def report_voice_action(body: VoiceActionReport):
     """Called by the voice process (src/voice/bot.py) to hand off a UI
-    action for the frontend to pick up on its next poll."""
-    _pending_voice_actions[body.visitorId] = body.action
+    action for the frontend to pick up on its next poll. A per-visitor
+    queue, not a single overwritable slot — the walkthrough can report a
+    new action for a fresh beat well within the frontend's 800ms poll
+    window (see useVoiceSession.ts), and a single slot silently lost
+    whichever action hadn't been polled yet, which is exactly why the
+    walkthrough's on-screen highlighting kept going dark mid-tour. Mirrors
+    _pending_voice_replies' already-correct queue below."""
+    _pending_voice_actions.setdefault(body.visitorId, []).append(body.action)
     return {"ok": True}
 
 
 @app.get("/api/voice-action/{visitor_id}")
 def get_voice_action(visitor_id: str):
     """Polled by the frontend during an active voice call. Returns and
-    clears the pending action, or {} if there isn't one."""
-    return _pending_voice_actions.pop(visitor_id, {})
+    clears the oldest pending action, or {} if there isn't one — one per
+    poll, same pattern as get_voice_reply below."""
+    queue = _pending_voice_actions.get(visitor_id)
+    if not queue:
+        return {}
+    return queue.pop(0)
 
 
 class VoiceReplyReport(BaseModel):

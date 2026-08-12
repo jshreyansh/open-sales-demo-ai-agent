@@ -22,11 +22,31 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     TTSAudioRawFrame,
     VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from ..agent.runtime import run_turn_stream
+from ..agent.runtime import run_turn_stream, run_walkthrough_continuation
 from ..context.store import OPENING_GREETING, get_session
+
+# Short "breathing room" between one walkthrough beat finishing and the next
+# starting on its own — long enough that an interruption landing right after
+# the bot stops speaking still lands cleanly (see AgentRuntimeProcessor's
+# VADUserStartedSpeakingFrame handling, which cancels a pending auto-continue
+# the instant real speech starts), short enough that it still reads as one
+# continuous presenter talking, not "waiting for a response" silence.
+AUTO_CONTINUE_PAUSE_SECS = 0.1
+
+# Safety-net poll interval for _watch_auto_continue_stall (see that method's
+# docstring) — cheap (a few attribute reads), so this doesn't need to be
+# tight; it only affects how quickly a dead auto-continue chain gets
+# noticed and revived, not anything on the live speaking path.
+AUTO_CONTINUE_WATCHDOG_INTERVAL_SECS = 2.0
+# How long things must have been quiet (no VAD/turn activity) before the
+# watchdog will self-heal a stalled chain — long enough that a real
+# in-progress utterance (VAD fired, transcript still pending) isn't mistaken
+# for a dead chain.
+AUTO_CONTINUE_STALL_GRACE_SECS = 2.0
 
 REST_API_URL = "http://localhost:8787"
 
@@ -199,6 +219,31 @@ class AgentRuntimeProcessor(FrameProcessor):
         # timestamp write is the only per-frame cost, so tracking this adds
         # no measurable latency to the actual conversation.
         self._last_activity = time.monotonic()
+        # The scheduled "speak the next walkthrough beat on your own" task
+        # (see _maybe_schedule_auto_continue) — held so it can be cancelled
+        # the instant real speech starts (VADUserStartedSpeakingFrame below)
+        # or a real turn begins (TranscriptionFrame handler), rather than
+        # firing on top of/racing against something the prospect actually
+        # said. None whenever nothing is scheduled.
+        self._pending_auto_continue: Optional[asyncio.Task] = None
+        # See _watch_auto_continue_stall's docstring — self-healing safety
+        # net for the case above where a pending beat gets cancelled by a
+        # VAD trigger that never turns into a real transcript.
+        self._auto_continue_watchdog_task: Optional[asyncio.Task] = None
+        # True between VADUserStartedSpeakingFrame and VADUserStoppedSpeakingFrame —
+        # ground truth for "is the visitor currently mid-utterance," independent
+        # of _last_activity's timestamp. A real sentence can easily take
+        # several seconds to say and transcribe; _watch_auto_continue_stall
+        # must never reschedule while this is True, no matter how long it's
+        # been, or it races ahead of speech that just hasn't finished yet.
+        self._user_speaking = False
+        # A real interruption's transcript that queue_frame() had to drop
+        # because it landed while a beat was still mid-turn — see
+        # queue_frame's docstring. Stashed here instead of discarded, and
+        # replayed as a real turn the moment the in-flight beat finishes
+        # (see _maybe_replay_pending_interruption), so a genuine barge-in's
+        # actual words are never just thrown away.
+        self._pending_interruption_text: Optional[str] = None
 
     def _pick_filler(self, heard_text: str) -> str:
         pool = QUESTION_FILLERS + NEUTRAL_FILLERS if _is_question(heard_text) else NEUTRAL_FILLERS
@@ -221,7 +266,18 @@ class AgentRuntimeProcessor(FrameProcessor):
         # correct: it sees the true state at the moment the frame arrives,
         # not at the moment it's eventually processed.
         if isinstance(frame, TranscriptionFrame) and frame.text.strip() and self._turn_in_progress:
-            logger.info(f"[{self._visitor_id}] dropped overlapping transcript mid-turn: {frame.text!r}")
+            if self._interrupted_this_turn:
+                # This transcript exists BECAUSE a genuine barge-in already cut
+                # off the audio (see VADUserStartedSpeakingFrame below) — its
+                # content IS the interruption, not just incidental overlap.
+                # Stash instead of discarding: _advance_after_turn replays it
+                # as a real turn the instant the in-flight beat finishes, so
+                # the model actually gets to hear and respond to it instead of
+                # the system just moving on as if nothing was said.
+                logger.info(f"[{self._visitor_id}] stashing interruption transcript mid-turn: {frame.text!r}")
+                self._pending_interruption_text = frame.text
+            else:
+                logger.info(f"[{self._visitor_id}] dropped overlapping transcript mid-turn: {frame.text!r}")
             return
         await super().queue_frame(frame, direction, callback)
 
@@ -238,6 +294,7 @@ class AgentRuntimeProcessor(FrameProcessor):
             if not self._greeted:
                 self._greeted = True
                 self._hand_raise_poll_task = asyncio.create_task(self._poll_hand_raise())
+                self._auto_continue_watchdog_task = asyncio.create_task(self._watch_auto_continue_stall())
                 await self._greet(direction)
             return
 
@@ -256,6 +313,15 @@ class AgentRuntimeProcessor(FrameProcessor):
 
         if isinstance(frame, VADUserStartedSpeakingFrame):
             self._last_activity = time.monotonic()
+            self._user_speaking = True
+            # Real speech starting is the single clearest "abort whatever's
+            # scheduled" signal there is — cancel a pending auto-continue
+            # here regardless of whether the bot is currently mid-sentence
+            # (the _bot_speaking branch below) or was about to speak again
+            # after its pause (this branch also covers that case, since the
+            # pause is exactly when _bot_speaking is False but a beat is
+            # still queued up).
+            self._cancel_pending_auto_continue()
             if self._bot_speaking:
                 get_session(self._visitor_id).was_interrupted = True
                 self._interrupted_this_turn = True
@@ -263,62 +329,115 @@ class AgentRuntimeProcessor(FrameProcessor):
             await self.push_frame(frame, direction)
             return
 
+        if isinstance(frame, VADUserStoppedSpeakingFrame):
+            # Marks "no longer mid-utterance" for _watch_auto_continue_stall
+            # (see its docstring) — also re-bumps _last_activity so the
+            # watchdog's grace period restarts from when the person actually
+            # finished talking (covering STT's own processing lag) rather
+            # than from when they started, which is what let it race ahead
+            # of a still-in-progress sentence earlier tonight.
+            self._user_speaking = False
+            self._last_activity = time.monotonic()
+            await self.push_frame(frame, direction)
+            return
+
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
-            logger.info(f"[{self._visitor_id}] heard: {frame.text!r}")
-            session = get_session(self._visitor_id)
-            self._turn_in_progress = True
-            self._interrupted_this_turn = False
-
-            try:
-                filler = self._pick_filler(frame.text)
-                await self._speak(filler, direction)
-
-                try:
-                    result, already_spoken = await self._run_turn_streamed(frame.text, session, direction)
-                except Exception:
-                    logger.exception(f"run_turn_stream failed for visitor {self._visitor_id}")
-                    result = {"reply": "Sorry, I lost my train of thought — could you say that again?"}
-                    already_spoken = False
-
-                logger.info(f"[{self._visitor_id}] replying: {result!r}")
-
-                if not already_spoken:
-                    # Streaming never got far enough to speak anything at all
-                    # this turn (the exception above, or run_turn_stream
-                    # itself fell all the way back to done_fallback before
-                    # yielding a single event) — fall back to the exact same
-                    # one-shot speaking this pipeline always used before
-                    # streaming existed.
-                    action = result.get("action")
-                    lead_in = result.get("lead_in")
-                    reply = result["reply"]
-
-                    if action and lead_in:
-                        asyncio.create_task(self._report_reply(lead_in))
-                        await self._speak(lead_in, direction)
-                        asyncio.create_task(self._report_action(action))
-                        asyncio.create_task(self._report_reply(reply))
-                        await self._speak_reply(reply, direction)
-                    else:
-                        if action:
-                            asyncio.create_task(self._report_action(action))
-                        asyncio.create_task(self._report_reply(reply))
-                        await self._speak_reply(reply, direction)
-
-                if self._hand_raised and not self._hand_ack_sent:
-                    # Either a raise landed right as the last sentence
-                    # finished (too late for _speak_reply's own per-sentence
-                    # check to catch), or the whole reply was one sentence to
-                    # begin with. Either way, this is the natural end-of-turn
-                    # point to hand off — _speak_reply already handles the
-                    # mid-reply case by breaking early and handing off itself,
-                    # which sets _hand_ack_sent so this doesn't double-fire.
-                    await self._speak_hand_raise_handoff(direction)
-            finally:
-                self._turn_in_progress = False
+            await self._handle_real_turn(frame.text, direction)
             return
 
         await self.push_frame(frame, direction)
+
+    async def _handle_real_turn(self, text: str, direction: FrameDirection) -> None:
+        """Processes one real turn — the prospect's actual words — through
+        run_turn_stream and out to speech. Shared by the TranscriptionFrame
+        handler above (a transcript arriving live) and _advance_after_turn
+        below (a transcript that had to be stashed because it arrived mid-
+        beat — see queue_frame's docstring — replayed here the moment it's
+        safe to). Exactly the same handling either way: the model should
+        never be able to tell the difference from its own side."""
+        logger.info(f"[{self._visitor_id}] heard: {text!r}")
+        session = get_session(self._visitor_id)
+        # Defensive second cancellation point — VAD-start and an STT
+        # segment finalizing aren't the same frame/timing, so this isn't
+        # redundant with the VADUserStartedSpeakingFrame branch; a real turn
+        # starting for any reason must never race against a scheduled
+        # auto-continue.
+        self._cancel_pending_auto_continue()
+        self._turn_in_progress = True
+        self._interrupted_this_turn = False
+
+        try:
+            filler = self._pick_filler(text)
+            await self._speak(filler, direction)
+
+            try:
+                result, already_spoken = await self._consume_turn_stream(run_turn_stream(text, session), direction)
+            except Exception:
+                result, already_spoken = None, False
+
+            if result is None:
+                # Real turn, so unlike auto-continue this must always
+                # say something — either the try above raised, or
+                # run_turn_stream() somehow ended without a terminal
+                # event (shouldn't happen, but never leave a real
+                # prospect met with silence over it).
+                logger.exception(f"run_turn_stream failed for visitor {self._visitor_id}")
+                result = {"reply": "Sorry, I lost my train of thought — could you say that again?"}
+                already_spoken = False
+
+            logger.info(f"[{self._visitor_id}] replying: {result!r}")
+
+            if not already_spoken:
+                # Streaming never got far enough to speak anything at all
+                # this turn (the exception above, or run_turn_stream
+                # itself fell all the way back to done_fallback before
+                # yielding a single event) — fall back to the exact same
+                # one-shot speaking this pipeline always used before
+                # streaming existed.
+                action = result.get("action")
+                lead_in = result.get("lead_in")
+                reply = result["reply"]
+
+                if action and lead_in:
+                    asyncio.create_task(self._report_reply(lead_in))
+                    await self._speak(lead_in, direction)
+                    asyncio.create_task(self._report_action(action))
+                    asyncio.create_task(self._report_reply(reply))
+                    await self._speak_reply(reply, direction)
+                else:
+                    if action:
+                        asyncio.create_task(self._report_action(action))
+                    asyncio.create_task(self._report_reply(reply))
+                    await self._speak_reply(reply, direction)
+
+            if self._hand_raised and not self._hand_ack_sent:
+                # Either a raise landed right as the last sentence
+                # finished (too late for _speak_reply's own per-sentence
+                # check to catch), or the whole reply was one sentence to
+                # begin with. Either way, this is the natural end-of-turn
+                # point to hand off — _speak_reply already handles the
+                # mid-reply case by breaking early and handing off itself,
+                # which sets _hand_ack_sent so this doesn't double-fire.
+                await self._speak_hand_raise_handoff(direction)
+
+            await self._advance_after_turn(session, direction)
+        finally:
+            self._turn_in_progress = False
+
+    async def _advance_after_turn(self, session, direction: FrameDirection) -> None:
+        """Called at the end of every turn — real or auto-continued — instead
+        of calling _maybe_schedule_auto_continue directly. Checks for a
+        stashed dropped-interruption transcript first (see queue_frame's
+        docstring): if one landed while this turn was in flight, replay it
+        as the next real turn right now instead of scheduling the next
+        scripted beat, so a genuine barge-in never just gets silently
+        skipped over in favor of the tour continuing on schedule."""
+        pending = self._pending_interruption_text
+        if pending is not None:
+            self._pending_interruption_text = None
+            await self._handle_real_turn(pending, direction)
+            return
+        self._maybe_schedule_auto_continue(session, direction)
 
     async def _greet(self, direction: FrameDirection) -> None:
         # get_session() creates a brand-new session seeded with OPENING_GREETING
@@ -363,24 +482,37 @@ class AgentRuntimeProcessor(FrameProcessor):
                 await self._speak_hand_raise_handoff(direction)
                 return
 
-    async def _run_turn_streamed(self, text: str, session, direction: FrameDirection) -> tuple[dict, bool]:
-        """Consumes run_turn_stream() (see runtime.py) for one turn, speaking
-        (and reporting) lead_in/action/reply as their events arrive instead
-        of waiting for run_turn()'s old single blocking call to finish.
-        Preserves the exact same ordering guarantees the non-streaming path
-        always had — lead_in is fully spoken before the action is reported
-        (so the frontend's UI never changes mid-transition-phrase), and the
-        action is reported before the reply that explains it.
+    async def _consume_turn_stream(self, stream, direction: FrameDirection) -> tuple[Optional[dict], bool]:
+        """Consumes a run_turn_stream()/run_walkthrough_continuation() event
+        stream (see runtime.py — both share the exact same event contract)
+        for one turn, speaking (and reporting) lead_in/action/reply as their
+        events arrive instead of waiting for a single blocking call to
+        finish. Preserves the exact same ordering guarantees the
+        non-streaming path always had — lead_in is fully spoken before the
+        action is reported (so the frontend's UI never changes mid-
+        transition-phrase), and the action is reported before the reply
+        that explains it. Generalized from a real-turn-only helper (it used
+        to build `run_turn_stream(text, session)` itself) to also drive
+        auto-continue's `run_walkthrough_continuation(session)` — the
+        speaking/interruption logic below is identical either way, only
+        which generator produces the events differs, so the caller now
+        builds and passes that generator in.
 
         Returns (result, already_spoken). already_spoken is True whenever
         ANYTHING about this turn (lead_in, action, or any reply text) was
         already spoken/reported live during this call — the caller must NOT
         speak result's contents again in that case. It's False only when
         nothing was spoken at all (an immediate failure before any event
-        arrived, or run_turn_stream fell straight to done_fallback with
-        nothing having streamed) — the one case where it's safe for the
-        caller to speak result from scratch, the same one-shot way this
-        pipeline has always spoken a reply.
+        arrived, or the stream fell straight to done_fallback with nothing
+        having streamed) — the one case where it's safe for the caller to
+        speak result from scratch, the same one-shot way this pipeline has
+        always spoken a reply.
+
+        result can be None — unlike the old version, this no longer
+        manufactures a fallback apology itself, since that's the wrong
+        behavior for auto-continue (better to silently skip a beat than
+        speak an apology unprompted); each caller decides what None means
+        for it. See the two call sites.
 
         A stream that fails PARTWAY THROUGH — after lead_in/action, or some
         reply text, was already spoken — is deliberately NOT retried with a
@@ -440,12 +572,12 @@ class AgentRuntimeProcessor(FrameProcessor):
                     return True
             return False
 
-        async for event in run_turn_stream(text, session):
+        async for event in stream:
             kind = event[0]
             if stopped_speaking_early:
-                # Still need `result` from the terminal event below so
-                # run_turn_stream() reaches its own _finalize_turn() call —
-                # just don't speak or report anything more for this turn.
+                # Still need `result` from the terminal event below so the
+                # stream reaches its own _finalize_turn() call — just don't
+                # speak or report anything more for this turn.
                 if kind in ("done_streamed", "done_fallback"):
                     result = event[1]
                 continue
@@ -472,11 +604,6 @@ class AgentRuntimeProcessor(FrameProcessor):
                     else:
                         reply_fully_spoken_live = True
 
-        if result is None:
-            # Defensive only -- run_turn_stream() always yields exactly one
-            # terminal event, but never let a caller see a bare None.
-            result = {"reply": "Sorry, I lost my train of thought — could you say that again?"}
-
         if stopped_speaking_early or (any_speech_started and not reply_fully_spoken_live):
             logger.warning(
                 f"[{self._visitor_id}] streaming turn spoke something before falling back — "
@@ -485,6 +612,162 @@ class AgentRuntimeProcessor(FrameProcessor):
             return result, True
 
         return result, reply_fully_spoken_live
+
+    def _cancel_pending_auto_continue(self) -> None:
+        """Aborts a scheduled-but-not-yet-fired auto-continue beat (see
+        _maybe_schedule_auto_continue) — called the instant real speech
+        starts or a real turn begins, so a queued continuation never fires
+        on top of / races against something the prospect actually said.
+        Safe to call when nothing is pending."""
+        if self._pending_auto_continue is not None:
+            self._pending_auto_continue.cancel()
+            self._pending_auto_continue = None
+
+    def _maybe_schedule_auto_continue(self, session, direction: FrameDirection) -> None:
+        """Called at the end of every real AND auto-continued turn.
+        Schedules the next walkthrough beat to speak on its own after a
+        short pause, unless the tour just ended or the model is waiting on
+        a real answer to a genuine interruption (see
+        SessionState.walkthrough_awaiting_answer and _walkthrough_note's
+        interruption rule in runtime.py) — this is what makes "give me a
+        walkthrough" keep going without the prospect needing to prompt
+        every single beat, while still actually pausing for a real question
+        instead of talking over it."""
+        if session.walkthrough_step is None or session.walkthrough_awaiting_answer:
+            return
+        # Only one continuation is ever in flight/pending at a time — a
+        # fresh schedule call (from the auto-continue turn that's about to
+        # finish and chain into the next one) replacing an old reference is
+        # fine, since the old task, by definition, already fired by the
+        # time this runs again.
+        self._pending_auto_continue = asyncio.create_task(self._auto_continue_after_pause(session, direction))
+
+    async def _watch_auto_continue_stall(self) -> None:
+        """Self-healing safety net for the auto-continue chain.
+
+        _cancel_pending_auto_continue() (called from the VADUserStartedSpeakingFrame
+        handler above) fires eagerly on ANY VAD trigger, including ones that
+        never turn into a real TranscriptionFrame — background noise, a
+        breath, a cough, mic bleed. That eagerness is correct: it's what
+        keeps a genuine barge-in from racing against a queued beat. But it
+        means a false trigger cancels the pending continuation with nothing
+        left to reschedule it — every reschedule point (_maybe_schedule_auto_continue)
+        only runs at the end of a turn that actually happened, and a false
+        trigger produces no turn at all. Without this, that one false
+        positive silently ends the tour for the rest of the call, with
+        nothing to show for it until the 120s idle timeout (bot.py's
+        _watch_idle) finally hangs up.
+
+        Polls the same way _watch_idle does: cheap, infrequent, just a
+        handful of attribute reads. Only reschedules when everything reads
+        as genuinely idle — walkthrough active, not waiting on a real
+        interruption answer, no turn running, bot not speaking, nothing
+        already pending, and quiet for a full grace period (so a real
+        utterance still being transcribed is never mistaken for a dead
+        chain)."""
+        try:
+            while True:
+                await asyncio.sleep(AUTO_CONTINUE_WATCHDOG_INTERVAL_SECS)
+                session = get_session(self._visitor_id)
+                if session.walkthrough_step is None or session.walkthrough_awaiting_answer:
+                    continue
+                if self._turn_in_progress or self._bot_speaking:
+                    continue
+                if self._pending_auto_continue is not None:
+                    continue
+                if self._user_speaking:
+                    # VAD still thinks someone's mid-utterance — a real
+                    # sentence can easily run past the grace period below,
+                    # and racing ahead here is exactly what silently
+                    # discarded a real interruption earlier tonight (see
+                    # queue_frame's docstring). Wait for VADUserStoppedSpeakingFrame,
+                    # however long that takes, before ever reconsidering.
+                    continue
+                if time.monotonic() - self._last_activity < AUTO_CONTINUE_STALL_GRACE_SECS:
+                    continue
+                logger.warning(f"[{self._visitor_id}] auto-continue chain stalled at step {session.walkthrough_step}, self-healing")
+                self._maybe_schedule_auto_continue(session, FrameDirection.DOWNSTREAM)
+        except asyncio.CancelledError:
+            pass
+
+    async def _auto_continue_after_pause(self, session, direction: FrameDirection) -> None:
+        try:
+            await asyncio.sleep(AUTO_CONTINUE_PAUSE_SECS)
+        except asyncio.CancelledError:
+            return
+        # Re-check right before firing, not just at schedule time — real
+        # speech (or a real turn starting for any other reason) between
+        # scheduling and now must win. _cancel_pending_auto_continue already
+        # covers the common case (it cancels this task outright); this is a
+        # defensive second check for the narrow window where the task is
+        # already past its cancellation point but hasn't started speaking.
+        if self._turn_in_progress or self._bot_speaking:
+            # Bail without firing this beat, but still clear the reference —
+            # this task is done either way, and leaving a stale non-None
+            # reference here would permanently convince
+            # _watch_auto_continue_stall something is still pending when
+            # nothing actually is, blocking it from ever self-healing.
+            self._pending_auto_continue = None
+            return
+        self._pending_auto_continue = None
+        await self.auto_continue_walkthrough(session, direction)
+
+    async def auto_continue_walkthrough(self, session, direction: FrameDirection) -> None:
+        """Speaks the next walkthrough beat on the agent's own initiative —
+        the auto-continue counterpart to the TranscriptionFrame handler's
+        real-turn path above, driving run_walkthrough_continuation() (see
+        runtime.py) through the same _consume_turn_stream() both paths
+        share. Unlike a real turn: no "heard:" log (nothing was heard), no
+        opening filler phrase (there's no "prospect just spoke" moment to
+        bridge from — it should just start talking), and a None result
+        means silently skip this beat rather than speak an apology (see
+        _consume_turn_stream's docstring). Sets _turn_in_progress the same
+        way a real turn does, so the existing barge-in path (which gates on
+        _bot_speaking, not on how the speech started) interrupts an
+        auto-continued beat exactly the same as it would a real one — no
+        new interruption logic needed for this case."""
+        self._turn_in_progress = True
+        self._interrupted_this_turn = False
+        try:
+            try:
+                result, already_spoken = await self._consume_turn_stream(
+                    run_walkthrough_continuation(session), direction
+                )
+            except Exception:
+                logger.exception(f"[{self._visitor_id}] walkthrough auto-continue failed, skipping this beat")
+                return
+
+            if result is None:
+                # Both the streaming and non-streaming paths inside
+                # run_walkthrough_continuation() failed (already logged
+                # there). Silently skip rather than speak anything wrong or
+                # retry in a tight loop.
+                return
+
+            logger.info(f"[{self._visitor_id}] auto-continuing: {result!r}")
+
+            if not already_spoken:
+                action = result.get("action")
+                lead_in = result.get("lead_in")
+                reply = result["reply"]
+                if action and lead_in:
+                    asyncio.create_task(self._report_reply(lead_in))
+                    await self._speak(lead_in, direction)
+                    asyncio.create_task(self._report_action(action))
+                    asyncio.create_task(self._report_reply(reply))
+                    await self._speak_reply(reply, direction)
+                else:
+                    if action:
+                        asyncio.create_task(self._report_action(action))
+                    asyncio.create_task(self._report_reply(reply))
+                    await self._speak_reply(reply, direction)
+
+            if self._hand_raised and not self._hand_ack_sent:
+                await self._speak_hand_raise_handoff(direction)
+
+            await self._advance_after_turn(session, direction)
+        finally:
+            self._turn_in_progress = False
 
     async def _report_action(self, action: dict) -> None:
         try:
@@ -607,6 +890,14 @@ class AgentRuntimeProcessor(FrameProcessor):
             self._hand_raise_poll_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._hand_raise_poll_task
+        if self._auto_continue_watchdog_task is not None:
+            self._auto_continue_watchdog_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._auto_continue_watchdog_task
+        # Same reasoning as the hand-raise poll task above — a walkthrough
+        # left mid-tour when the call ends shouldn't leave a dangling task
+        # trying to speak into a torn-down pipeline.
+        self._cancel_pending_auto_continue()
         await super().cleanup()
 
 

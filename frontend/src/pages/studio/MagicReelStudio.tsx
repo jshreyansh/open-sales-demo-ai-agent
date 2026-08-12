@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useRegisterComponent } from "../../lib/uiRegistry";
+import { applyPulse } from "../../lib/useHighlight";
 import Icon from "../../components/Icon";
 import StepBar from "../../components/studio/StepBar";
 import TeamDock from "../../components/studio/TeamDock";
@@ -69,8 +70,34 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
 
   // Read via a ref (not the closed-over state) so the agent-registered
   // actions below — captured once at mount — always see current values.
-  const latest = useRef({ scenes, topics, brandName });
-  latest.current = { scenes, topics, brandName };
+  // step/generating are included so the pulse-cue logic below can tell
+  // whether a given in-place target (a lane pill, a tier card, the Generate
+  // button, ...) is actually mounted right now before trying to pulse it.
+  const latest = useRef({ scenes, topics, brandName, step, generating });
+  latest.current = { scenes, topics, brandName, step, generating };
+
+  // Always-mounted step pills (StepBar) — the fallback cue target for any
+  // step-jump/in-place action whose real target isn't mounted yet (the
+  // destination step's own content only exists after the next render).
+  const stepRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  function pulseStep(i: number) {
+    applyPulse(stepRefs.current.get(i) ?? null);
+  }
+
+  // In-place targets: only mounted while their own step is showing, so each
+  // action checks latest.current.step/generating before trusting the ref,
+  // falling back to pulseStep() otherwise — same pattern as ContentStudio's
+  // format-card-or-tab fallback.
+  const laneRefs = useRef<Map<Lane, HTMLButtonElement>>(new Map());
+  const briefSubRefs = useRef<Map<number, HTMLElement>>(new Map());
+  const generateScriptRef = useRef<HTMLButtonElement>(null);
+  const tierRefs = useRef<Map<"hd" | "cinematic", HTMLButtonElement>>(new Map());
+  const generateReelRef = useRef<HTMLButtonElement>(null);
+
+  function pulseInPlaceOrStep(el: HTMLElement | null | undefined, fallbackStep: number) {
+    if (el) applyPulse(el);
+    else pulseStep(fallbackStep);
+  }
 
   function goToStep(target: number) {
     setView("wizard");
@@ -85,48 +112,76 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
   }
 
   useRegisterComponent("magicreel-studio", "wizard", {
-    "step-source": () => goToStep(0),
+    "step-source": () => {
+      pulseStep(0);
+      goToStep(0);
+    },
     "select-source-dossier": () => {
+      pulseInPlaceOrStep(latest.current.step === 0 ? laneRefs.current.get("dossier") : null, 0);
       goToStep(0);
       setLane("dossier");
     },
     "select-source-news": () => {
+      pulseInPlaceOrStep(latest.current.step === 0 ? laneRefs.current.get("news") : null, 0);
       goToStep(0);
       setLane("news");
     },
     "select-source-custom": () => {
+      pulseInPlaceOrStep(latest.current.step === 0 ? laneRefs.current.get("custom") : null, 0);
       goToStep(0);
       setLane("custom");
     },
-    "step-brief": () => goToStep(1),
+    "step-brief": () => {
+      pulseStep(1);
+      goToStep(1);
+    },
     "brief-audience": () => {
+      pulseInPlaceOrStep(latest.current.step === 1 ? briefSubRefs.current.get(0) : null, 1);
       goToStep(1);
       setBriefSub(0);
     },
     "brief-voice-language": () => {
+      pulseInPlaceOrStep(latest.current.step === 1 ? briefSubRefs.current.get(1) : null, 1);
       goToStep(1);
       setBriefSub(1);
     },
     "brief-brand-product": () => {
+      pulseInPlaceOrStep(latest.current.step === 1 ? briefSubRefs.current.get(2) : null, 1);
       goToStep(1);
       setBriefSub(2);
     },
-    "step-script": () => goToStep(2),
+    "step-script": () => {
+      pulseStep(2);
+      goToStep(2);
+    },
     "generate-script": () => {
+      pulseInPlaceOrStep(latest.current.step === 2 ? generateScriptRef.current : null, 2);
       goToStep(2);
       generateScript();
     },
-    "step-scenes": () => goToStep(3),
-    "step-generate": () => goToStep(4),
+    "step-scenes": () => {
+      pulseStep(3);
+      goToStep(3);
+    },
+    "step-generate": () => {
+      pulseStep(4);
+      goToStep(4);
+    },
     "select-tier-hd": () => {
+      const mounted = latest.current.step === 4 && !latest.current.generating;
+      pulseInPlaceOrStep(mounted ? tierRefs.current.get("hd") : null, 4);
       goToStep(4);
       setTier("hd");
     },
     "select-tier-cinematic": () => {
+      const mounted = latest.current.step === 4 && !latest.current.generating;
+      pulseInPlaceOrStep(mounted ? tierRefs.current.get("cinematic") : null, 4);
       goToStep(4);
       setTier("cinematic");
     },
     "start-generation": () => {
+      const mounted = latest.current.step === 4 && !latest.current.generating;
+      pulseInPlaceOrStep(mounted ? generateReelRef.current : null, 4);
       goToStep(4);
       setGenerating(true);
     },
@@ -204,7 +259,16 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
         <h1 className="page__title">MagicReel™ Studio</h1>
       </div>
 
-      <StepBar steps={STEPS} currentIndex={step} onStepClick={goToStep} locked={generating} />
+      <StepBar
+        steps={STEPS}
+        currentIndex={step}
+        onStepClick={goToStep}
+        locked={generating}
+        onStepRef={(i, el) => {
+          if (el) stepRefs.current.set(i, el);
+          else stepRefs.current.delete(i);
+        }}
+      />
 
       <div className="studio__body">
         {step === 0 && (
@@ -212,7 +276,15 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
             <TeamDock activeRole="Content Strategist" message="Pick a source — the team drafts only from what it can verify." />
             <div className="lane-switch">
               {(["dossier", "news", "custom"] as Lane[]).map((l) => (
-                <button key={l} className={`lane-switch__pill ${lane === l ? "lane-switch__pill--active" : ""}`} onClick={() => setLane(l)}>
+                <button
+                  key={l}
+                  ref={(el) => {
+                    if (el) laneRefs.current.set(l, el);
+                    else laneRefs.current.delete(l);
+                  }}
+                  className={`lane-switch__pill ${lane === l ? "lane-switch__pill--active" : ""}`}
+                  onClick={() => setLane(l)}
+                >
                   {l === "dossier" ? "Brand Dossier" : l === "news" ? "News Article" : "Custom"}
                 </button>
               ))}
@@ -277,7 +349,14 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
           <div className="studio-card">
             <div className="breadcrumb">
               {BRIEF_SUBSTEPS.map((label, i) => (
-                <span key={label} className={`breadcrumb__item ${i === briefSub ? "breadcrumb__item--active" : i < briefSub ? "breadcrumb__item--done" : ""}`}>
+                <span
+                  key={label}
+                  ref={(el) => {
+                    if (el) briefSubRefs.current.set(i, el);
+                    else briefSubRefs.current.delete(i);
+                  }}
+                  className={`breadcrumb__item ${i === briefSub ? "breadcrumb__item--active" : i < briefSub ? "breadcrumb__item--done" : ""}`}
+                >
                   {label}
                   {i < BRIEF_SUBSTEPS.length - 1 && <Icon name="chevron-down" size={11} />}
                 </span>
@@ -451,7 +530,7 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
             </div>
 
             <div className="studio__footer" style={{ justifyContent: "flex-start", gap: 12 }}>
-              <button className="btn-primary" onClick={generateScript} disabled={scriptGenerating}>
+              <button className="btn-primary" ref={generateScriptRef} onClick={generateScript} disabled={scriptGenerating}>
                 <Icon name="sparkles" size={14} /> {scenes.length > 0 ? "Regenerate script" : "Generate script"}
               </button>
               {scriptGenerating && <span className="stub-page__note">Drafting script…</span>}
@@ -514,12 +593,26 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
 
               <div className="field-label">Video mode</div>
               <div className="tier-grid">
-                <button className={`tier-card ${tier === "hd" ? "tier-card--active" : ""}`} onClick={() => setTier("hd")}>
+                <button
+                  ref={(el) => {
+                    if (el) tierRefs.current.set("hd", el);
+                    else tierRefs.current.delete("hd");
+                  }}
+                  className={`tier-card ${tier === "hd" ? "tier-card--active" : ""}`}
+                  onClick={() => setTier("hd")}
+                >
                   <div className="tier-card__title">HD</div>
                   <div className="tier-card__desc">Lifelike motion that stops the scroll — for launches & big moments.</div>
                   <div className="tier-card__meta">5,000 credits · ~2 min</div>
                 </button>
-                <button className={`tier-card ${tier === "cinematic" ? "tier-card--active" : ""}`} onClick={() => setTier("cinematic")}>
+                <button
+                  ref={(el) => {
+                    if (el) tierRefs.current.set("cinematic", el);
+                    else tierRefs.current.delete("cinematic");
+                  }}
+                  className={`tier-card ${tier === "cinematic" ? "tier-card--active" : ""}`}
+                  onClick={() => setTier("cinematic")}
+                >
                   <div className="tier-card__title">Cinematic 4K</div>
                   <div className="tier-card__desc">Ultra-realistic, fully generated scenes — for flagship launches.</div>
                   <div className="tier-card__meta">15,000 credits · ~4 min</div>
@@ -547,7 +640,7 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
               </label>
 
               <div className="studio__footer">
-                <button className="btn-primary" onClick={() => setGenerating(true)}>
+                <button className="btn-primary" ref={generateReelRef} onClick={() => setGenerating(true)}>
                   Generate reel →
                 </button>
               </div>

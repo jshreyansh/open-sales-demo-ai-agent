@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatSlug, MAGIC_ENGINES, STAGE_LABELS, type ContentFormat, type MagicEngine, type Stage } from "../registry/contentStudio";
 import { registerComponent, unregisterComponent, useRegisterComponent } from "../lib/uiRegistry";
+import { applyPulse, useHighlight } from "../lib/useHighlight";
 import Icon from "../components/Icon";
 import FormatModal from "../components/FormatModal";
 
@@ -18,11 +19,35 @@ export default function ContentStudio({ initialTab, onOpenStudio }: ContentStudi
   const [audience, setAudience] = useState<string | null>(null);
   const [selected, setSelected] = useState<{ format: ContentFormat; engine: MagicEngine } | null>(null);
 
-  useRegisterComponent("content-studio", "video-tab", { click: () => setTab("Video") });
-  useRegisterComponent("content-studio", "aid-tab", { click: () => setTab("Aid") });
-  useRegisterComponent("content-studio", "mail-tab", { click: () => setTab("Mail") });
-  useRegisterComponent("content-studio", "canvas-tab", { click: () => setTab("Canvas") });
-  useRegisterComponent("content-studio", "doc-tab", { click: () => setTab("Doc") });
+  // One cue instance per engine tab (fixed, known set — same pattern as
+  // Dashboard's insights/activeCampaigns) so the agent's tab-click actions
+  // can pulse the actual tab button that was "clicked". Also the fallback
+  // target for a format-card open when the card itself isn't mounted yet
+  // (see the format-card ref map + open callback below).
+  const videoTabCue = useHighlight<HTMLButtonElement>();
+  const aidTabCue = useHighlight<HTMLButtonElement>();
+  const mailTabCue = useHighlight<HTMLButtonElement>();
+  const canvasTabCue = useHighlight<HTMLButtonElement>();
+  const docTabCue = useHighlight<HTMLButtonElement>();
+  const TAB_CUES: Record<string, ReturnType<typeof useHighlight<HTMLButtonElement>>> = {
+    Video: videoTabCue,
+    Aid: aidTabCue,
+    Mail: mailTabCue,
+    Canvas: canvasTabCue,
+    Doc: docTabCue,
+  };
+
+  // A dynamic ref map, not fixed hook instances — 30 possible targets, and
+  // only whichever are currently visible under the active tab/filter are
+  // ever actually mounted. Populated by each rendered format-card's ref
+  // callback below.
+  const formatCardRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+
+  useRegisterComponent("content-studio", "video-tab", { click: () => { videoTabCue.pulse(); setTab("Video"); } });
+  useRegisterComponent("content-studio", "aid-tab", { click: () => { aidTabCue.pulse(); setTab("Aid"); } });
+  useRegisterComponent("content-studio", "mail-tab", { click: () => { mailTabCue.pulse(); setTab("Mail"); } });
+  useRegisterComponent("content-studio", "canvas-tab", { click: () => { canvasTabCue.pulse(); setTab("Canvas"); } });
+  useRegisterComponent("content-studio", "doc-tab", { click: () => { docTabCue.pulse(); setTab("Doc"); } });
 
   // Every individual format gets its own registry component (id = its
   // MagicXxx tool name, slugified — see backend/src/agent/registry.py for
@@ -39,6 +64,19 @@ export default function ContentStudio({ initialTab, onOpenStudio }: ContentStudi
         ids.push(id);
         registerComponent("content-studio", id, {
           open: () => {
+            // The card is only mounted if it was already visible under the
+            // tab/filter state THIS render — switching tab below doesn't
+            // mount it until next render, so there's genuinely nothing to
+            // pulse yet in that case. Falling back to the tab button (always
+            // mounted) keeps the "something visibly reacted" cue honest
+            // instead of silently doing nothing — the modal opening right
+            // after is the rest of the visual confirmation.
+            const card = formatCardRefs.current.get(id);
+            if (card) {
+              applyPulse(card);
+            } else {
+              TAB_CUES[engine.tabId]?.pulse();
+            }
             setTab(engine.tabId);
             setSelected({ format, engine });
           },
@@ -90,7 +128,12 @@ export default function ContentStudio({ initialTab, onOpenStudio }: ContentStudi
 
       <div className="tabs-row">
         {["All", ...MAGIC_ENGINES.map((e) => e.tabId)].map((t) => (
-          <button key={t} className={`tab-item ${tab === t ? "tab-item--active" : ""}`} onClick={() => setTab(t)}>
+          <button
+            key={t}
+            ref={TAB_CUES[t]?.ref}
+            className={`tab-item ${tab === t ? "tab-item--active" : ""}`}
+            onClick={() => setTab(t)}
+          >
             {t}
           </button>
         ))}
@@ -138,7 +181,16 @@ export default function ContentStudio({ initialTab, onOpenStudio }: ContentStudi
             </div>
             <div className="format-grid">
               {formats.map((f) => (
-                <button key={f.title} className="format-card" onClick={() => setSelected({ format: f, engine })}>
+                <button
+                  key={f.title}
+                  ref={(el) => {
+                    const id = formatSlug(f.tool);
+                    if (el) formatCardRefs.current.set(id, el);
+                    else formatCardRefs.current.delete(id);
+                  }}
+                  className="format-card"
+                  onClick={() => setSelected({ format: f, engine })}
+                >
                   <div className="format-card__head">
                     <h4 className="format-card__title">{f.title}</h4>
                     {f.soon && <span className="format-card__soon-badge">SOON</span>}

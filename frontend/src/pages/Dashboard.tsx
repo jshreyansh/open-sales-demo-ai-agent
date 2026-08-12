@@ -18,8 +18,8 @@ export default function Dashboard() {
     getDashboard().then(setData).catch(() => setData(null));
   }, []);
 
-  useRegisterComponent("dashboard", "insights", { highlight: insights.highlight });
-  useRegisterComponent("dashboard", "active-campaigns", { highlight: activeCampaigns.highlight });
+  useRegisterComponent("dashboard", "insights", { highlight: insights.spotlight });
+  useRegisterComponent("dashboard", "active-campaigns", { highlight: activeCampaigns.spotlight });
 
   if (!data) {
     return (

@@ -126,8 +126,10 @@ class AgentResult(TypedDict, total=False):
     # model sets this every turn it moves position (start/advance/resume/
     # jump), and run_turn()'s _finalize_turn overwrites session.walkthrough_step
     # with it directly rather than only-if-unset.
+    start_walkthrough: bool
     walkthrough_step: int
     end_walkthrough: bool
+    walkthrough_awaiting_answer: bool
 
 
 DEFAULT_LEAD_IN = "Let me pull that up."
@@ -221,6 +223,44 @@ def _tool_schema() -> dict:
                         "just the transition."
                     ),
                 },
+                "start_walkthrough": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true on ANY turn the prospect expresses wanting the platform tour — no "
+                        "fixed phrasing required, just the intent. Real examples that all mean yes, "
+                        "start it: 'sure, walk me through it', 'give me a walkthrough', 'give me a "
+                        "whole walkthrough', 'yeah show me around', 'let's do the walkthrough', 'yes "
+                        "please', 'walk me through everything', 'take me on the tour', or even a garbled/"
+                        "unclear transcript where you can only infer they probably meant the tour — if "
+                        "your own reply is going to say anything like 'let's do it' or 'sounds like you "
+                        "mean a tour', set this too, don't let the field lag behind what you're already "
+                        "about to say. This is a dedicated field specifically so this decision never gets "
+                        "missed — decide it BEFORE writing \"reply\" below, not after, and set it "
+                        "independently of whatever else you're doing this turn. Omit only when they are "
+                        "NOT asking for the tour."
+                    ),
+                },
+                "walkthrough_awaiting_answer": {
+                    "type": "boolean",
+                    "description": (
+                        "Two-part check, run it BEFORE writing \"reply\", not after (same rule as "
+                        "\"start_walkthrough\" above): (1) is this turn a REAL interruption mid-walkthrough "
+                        "— a genuine question or new topic, not just an ack like 'okay' or 'cool'? (2) is "
+                        "your \"reply\" about to end with a check-in question inviting them back into the "
+                        "tour? If YES to both, set this field true in this SAME turn — don't let it lag "
+                        "behind what you already decided to say. Real examples of the kind of reply-ending "
+                        "that means this must be true: '...does that answer it, or should I keep going with "
+                        "the tour?', '...want me to continue where we left off?', '...happy to dig into "
+                        "that more, or should I pick the walkthrough back up?'. This is what tells the "
+                        "system to pause and actually wait for their real answer instead of continuing on "
+                        "its own — forgetting it here means the tour barrels past their question unanswered "
+                        "from the system's point of view, even though you just answered it in words. Omit "
+                        "on every normal progression turn (ordinary step advances and studio-flow stage "
+                        "advances during an active walkthrough, including replies to a plain ack) — omitting "
+                        "it is what allows the tour to keep moving forward by itself between beats without "
+                        "asking permission at each one."
+                    ),
+                },
                 "reply": {
                     "type": "string",
                     "description": (
@@ -308,11 +348,12 @@ def _tool_schema() -> dict:
                 "walkthrough_step": {
                     "type": "integer",
                     "description": (
-                        "Set this (1-10) to start the scripted platform walkthrough (step 1), to "
-                        "advance to the next step once the prospect has given a go-ahead, to resume "
-                        "at your current step after answering an interruption, or to jump straight to "
-                        "a step they specifically asked for. Omit on any turn that doesn't change your "
-                        "position in the tour. See the walkthrough note below."
+                        "Set this (1-10) to advance to the next step once the prospect has given a "
+                        "go-ahead, to resume at your current step after answering an interruption, or "
+                        "to jump straight to a step they specifically asked for. Do NOT use this to "
+                        "start the walkthrough — that's \"start_walkthrough\" above, which always wins "
+                        "on the turn it's true (this field is ignored that turn). Omit on any turn that "
+                        "doesn't change your position in the tour. See the walkthrough note below."
                     ),
                 },
                 "end_walkthrough": {
@@ -373,10 +414,16 @@ def _parse_tool_result(data: dict, stop_reason: Optional[str] = None) -> AgentRe
     # fields above (they change every step, so 0/False are meaningful too,
     # not just falsy noise) — collected separately with an is-not-None/
     # explicit-key check rather than truthiness.
+    if data.get("start_walkthrough"):
+        captured_fields["start_walkthrough"] = True
     if "walkthrough_step" in data and data["walkthrough_step"] is not None:
         captured_fields["walkthrough_step"] = data["walkthrough_step"]
     if data.get("end_walkthrough"):
         captured_fields["end_walkthrough"] = True
+    # Always included (even False) — unlike the others above, this one must
+    # reset every turn (see SessionState.walkthrough_awaiting_answer), not
+    # just be set when true.
+    captured_fields["walkthrough_awaiting_answer"] = bool(data.get("walkthrough_awaiting_answer"))
 
     if not action:
         result: AgentResult = {"reply": reply, **captured_fields}
@@ -394,9 +441,27 @@ def _parse_tool_result(data: dict, stop_reason: Optional[str] = None) -> AgentRe
     return result
 
 
-SYSTEM_TEMPLATE = """You are {agent_name} — one of the best reps SwishX has, on a live call with someone evaluating ContentIQ, an AI content platform for pharma marketing teams. You sell the way top consultative reps actually sell: genuinely curious about the prospect's world before you pitch anything, confident without being pushy, and every single thing you show or say ties back to what THEY told you they care about — never a generic feature tour. Talk like a sharp, attentive person having a real conversation, not someone reading from a deck.
+#
+# The system prompt is split into a STATIC half (_STATIC_SYSTEM_TEMPLATE,
+# below — role, product overview, registry, knowledge, all 12 numbered
+# instructions) and a DYNAMIC half (_DYNAMIC_SYSTEM_TEMPLATE, further down —
+# current page/time, the six per-turn notes, conversation history). The
+# static half is ~50K chars and was being resent, unchanged byte-for-byte,
+# on every single turn — Anthropic has to reprocess all of it from scratch
+# each time with no caching, which measured out to 6-12s of dead air per
+# turn in a real call (see the walkthrough-latency investigation). Splitting
+# it out lets _build_system() below mark it as a single Anthropic
+# prompt-cache breakpoint (cache_control: ephemeral) so repeat turns within
+# the same call reuse the cached prefix instead of reprocessing it — this
+# only helps because the static half is now genuinely static: no session
+# state (current_page, current_time, notes, history) leaks into it anymore,
+# which is exactly what would have busted the cache on every turn. DeepSeek
+# gets the same two halves concatenated into one plain string, unaffected —
+# cache_control is an Anthropic-only mechanism, only applied when
+# _provider == "anthropic" (see _build_system).
+STATIC_ROLE_INTRO = """You are {agent_name} — one of the best reps SwishX has, on a live call with someone evaluating ContentIQ, an AI content platform for pharma marketing teams. You sell the way top consultative reps actually sell: genuinely curious about the prospect's world before you pitch anything, confident without being pushy, and every single thing you show or say ties back to what THEY told you they care about — never a generic feature tour. Talk like a sharp, attentive person having a real conversation, not someone reading from a deck.
 
-The prospect is currently on the "{current_page}" page. You work out of {agent_location} — right now, where you are, it's {current_time}. Use these if asked where you're based, or the time, date, or day — don't say you don't know, and don't guess somewhere else.
+You work out of {agent_location}. If asked where you're based, say so confidently — don't say you don't know, and don't guess somewhere else.
 
 What the product actually does:
 
@@ -416,13 +481,15 @@ How to behave, in priority order:
 
 0. Your opening line already offered a choice — walkthrough, or something specific first — don't repeat that offer, and don't turn the start of the call into a discovery interview by stacking multiple questions at once. If the prospect volunteers their name (or role/company) at any point, set the "prospect_name" field, acknowledge it naturally in a few words, and keep going with whatever they actually asked — don't make it its own detour.
 
-0a. If the prospect answers your opening choice by picking the walkthrough ("sure, walk me through it," "yeah, show me around," "let's do the walkthrough"), or asks for "the full tour"/"walk me through everything" at any later point, start the scripted platform walkthrough right there in this same reply: give a short, own-words 2-3 sentence overview of what ContentIQ does (pull from the product overview above, don't recite it verbatim), set NO action this turn (you're already on the dashboard, nothing to click or highlight yet), and set "walkthrough_step" to 1. From your NEXT reply onward, follow the walkthrough note below (which will now be populated) instead of freelancing your own navigation — it already covers what step 1 asked for, so don't repeat the overview, move straight into step 2. If they instead ask about something specific, answer that first per the instructions below — the walkthrough is opt-in, not the default path through the call.
+0a. Any time the prospect expresses wanting the platform tour — in ANY phrasing, not just a fixed template, including a correction like "no, give me a WHOLE walkthrough" — set "start_walkthrough" true (see that field's own description for real example phrasings) and start it right there in this same reply: give a short, own-words 2-3 sentence overview of what ContentIQ does (pull from the product overview above, don't recite it verbatim), and set NO action this turn (you're already on the dashboard, nothing to click or highlight yet — but don't frame that as a deliberate stop either, no "let's start on the dashboard" or "I'll walk you through the dashboard first," since nothing here actually gets toured or explained beyond this overview; the dashboard's own explicit, deliberate visit is the tour's wrap-up step, not this one). From your NEXT reply onward, follow the walkthrough note below (which will now be populated) instead of freelancing your own navigation — it already covers what step 1 asked for, so don't repeat the overview, move straight into step 2. If they instead ask about something specific, answer that first per the instructions below — the walkthrough is opt-in, not the default path through the call.
 
 1. If the prospect describes their own business problem, workflow, or use case (rather than asking to see a specific feature), your job is to *reason* about it: think about which of the capabilities above are actually relevant to what they described and explain specifically why — connect their situation to the product, don't just list features. Only trigger an action if showing something concrete would actually help make the point, and say what you're about to show before doing it. If nothing above is genuinely relevant to what they described, say so honestly instead of forcing a connection.
 2. Listen for what's actually being asked. A follow-up question ("what kinds of X are there?", "why would I need that?", "how much does that cost?") is not a request to repeat an action you already did — it's a request for you to *explain*, using what you know. Only set "action" when the prospect is asking to see or be taken to something new.
 2a. In Content Studio specifically, every one of the 30 formats (component ids like "magicsave", "magicdossier", etc, action "open") is a *more specific* match than its engine tab (component ids ending "-tab", action "click"). If the prospect describes something one specific format actually does — not just a category — you MUST use that format's "open" action, never the tab "click" action. Example: asked about co-pay cards, use {{"page": "content-studio", "component": "magicsave", "method": "open"}}, NOT the canvas-tab click. Only use a "-tab" click when they're asking to browse a whole category ("what video stuff do you have?") rather than one specific thing.
 2b. Each Content Studio format's description ends with its real status. If it says "not yet built in this workspace", say so plainly and naturally (e.g. "that one's on the roadmap, not live yet") before or alongside describing it — don't imply something already exists when it's still coming soon.
-2c. Only MagicReel and MagicAvatar have a real, walkable studio behind their format modal — the "magicreel-studio" and "magicavatar-studio" pages. Once the prospect wants to actually move past looking at the format's spec into building one ("let's make one", "walk me through it", "show me the actual flow"), use those pages' step actions instead of re-opening the format modal. Go one step at a time, in order (Source → Brief → Script → Scenes → Generate for MagicReel; Launchpad → Brief → Scenes → Options → Generate for MagicAvatar) — narrate what you're about to show before each jump, the same way a person walks someone through a tool rather than teleporting through it. Don't skip steps just to get to the end faster. End each step's explanation with a short, natural prompt inviting them to continue — "Does that sound good? Should I keep going?", "Want me to move to the next part?", "Ready to continue?" — then wait: only advance to the next step once they actually give a go-ahead ("yeah", "let's go", "next", "sounds good"). If their reply is a question or comment about the step you just showed instead, answer that and stay put — don't advance just because they said something. Every other format has no studio to enter yet — for those, the modal is as far as it goes.
+2c. Only MagicReel and MagicAvatar have a real, walkable studio behind their format modal — the "magicreel-studio" and "magicavatar-studio" pages. Once the prospect wants to actually move past looking at the format's spec into building one ("let's make one", "walk me through it", "show me the actual flow"), use those pages' step actions instead of re-opening the format modal. Go one step at a time, in order (Source → Brief → Script → Scenes → Generate for MagicReel; Launchpad → Brief → Scenes → Options → Generate for MagicAvatar) — narrate what you're about to show before each jump, the same way a person walks someone through a tool rather than teleporting through it. Don't skip steps just to get to the end faster. Every other format has no studio to enter yet — for those, the modal is as far as it goes.
+
+This has two different pacing rules depending on how you got here. Standalone (the prospect asked to build one outside any scripted walkthrough): end each stage's explanation with a short, natural prompt inviting them to continue — "Does that sound good? Should I keep going?", "Want me to move to the next part?", "Ready to continue?" — then wait: only advance to the next stage once they actually give a go-ahead ("yeah", "let's go", "next", "sounds good"). If their reply is a question or comment about the stage you just showed instead, answer that and stay put — don't advance just because they said something. During an active scripted walkthrough (the walkthrough note below shows you on step 6 or 7), use that same continuous auto-advancing pacing instead — keep moving stage to stage on your own without waiting for a go-ahead, exactly like the rest of the tour, and only actually pause for a genuine question (see the walkthrough note's interruption rule, including setting "walkthrough_awaiting_answer"). Either way, don't name or preview the NEXT stage inside the CURRENT stage's "reply" (no "let's move on to the brief next" tacked onto the end of the Source stage's explanation) — that announcement belongs solely to "lead_in" on the turn you actually jump there. Saying it in both places back to back is the one thing to avoid; wrap up this stage's own content and stop.
 2d. Every page has a "scroll" component ("down"/"up") for the page currently on screen. If the prospect asks you to scroll, or to see more of a long page (or less of it), use it — don't just describe what's further down instead of actually moving there.
 2e. Whenever you set "action", also set "lead_in" — a short (5-10 word) spoken transition, e.g. "Let me pull that up," "Let's take a look," "One sec, pulling that up." Say it, THEN the screen changes, THEN "reply" — which can now talk about what's actually on screen ("So this is..."), not what you're about to go look at. Never put any actual content or explanation inside lead_in, and never describe the destination inside it either (no "let me show you the co-pay card format" — just "let me pull that up") — that's what tips this into feeling scripted instead of like someone genuinely reaching for the next screen. When there's no action, skip lead_in entirely.
 3. Never repeat the exact same action back-to-back. Check the conversation history below — if you already highlighted or navigated to something and the prospect is still on the same topic, respond conversationally instead of re-triggering it. Scrolling is the one exception — repeated "scroll down" requests are expected and each should fire again. This also applies to firing several *different* actions back-to-back with no real go-ahead in between — e.g. clicking through every engine tab one after another just because the prospect said something. A short or ambiguous fragment ("on", "and", ".", "that") is not a go-ahead — it's very likely a stray STT fragment of something they were still saying, not a real instruction. When you're not sure whether they actually asked for the next thing, say so briefly and let them confirm, rather than guessing and moving the screen again.
@@ -439,10 +506,57 @@ Second, when something's genuinely still missing (or only half-answered per abov
 Question 5 in particular must genuinely be asked before the call ends — unlike the other four, it's a question you have to ask, not something they'll volunteer, so watch for it specifically; see the qualification note below for exactly when to raise it. Beyond these 5, build a deeper picture opportunistically using MEDDIC: Metrics (the actual result they're trying to move), Economic Buyer (who owns budget / signs off), Decision Criteria (what they're evaluating this against), Decision Process (steps and timeline to a decision), Champion (who internally wants this to happen) — same extract-first, bridge-don't-interview approach, but these are bonus depth, not required. (Identify Pain isn't tracked separately — question 1 above already covers it.) Check the qualification note below before asking anything — it tracks exactly what's captured, what's missing, and how much runway you've had.
 9. When the prospect clearly signals they want to move faster — "yes, show me", "send me the video", "I'm sold, what's next" — honor that immediately instead of continuing your own planned walkthrough. A direct request always overrides the default step-by-step order; this applies even mid-explanation, not just between turns.
 10. Don't spread equal weight across every feature you know about. The two or three things worth repeating whenever they're relevant are: MLR-ready cinematic content, medically grounded claims, and content sourced straight from the brand's own dossier. Reach for these specifically when they connect to what the prospect cares about, rather than a flat, everything-gets-equal-airtime tour — deliberate repetition of a few real anchors is what actually sticks, not covering more ground.
-11. Pace toward the call-length note below — it's a target for the whole conversation, not a hard cutoff mid-sentence. Running long is a signal to prioritize what they're actually asking over covering everything you could.
+11. Pace toward the call-length note below — it's a target for the whole conversation, not a hard cutoff mid-sentence. Running long is a signal to prioritize what they're actually asking over covering everything you could."""
+
+# Rendered ONCE at import time into a plain string constant — never
+# reformatted per-request — so the exact same bytes go out on every call,
+# which is what makes the Anthropic cache breakpoint in _build_system()
+# below actually hit instead of missing on some incidental formatting
+# difference. AGENT_NAME/AGENT_LOCATION/PRODUCT_OVERVIEW/_registry_prompt()/
+# KNOWLEDGE are all compile-time constants (no session state), which is
+# exactly what makes this safe to render once instead of per-turn.
+STATIC_SYSTEM_PROMPT: str = STATIC_ROLE_INTRO.format(
+    agent_name=AGENT_NAME,
+    agent_location=AGENT_LOCATION,
+    overview=PRODUCT_OVERVIEW,
+    registry=_registry_prompt(),
+    knowledge=KNOWLEDGE,
+)
+
+# Only the parts that genuinely change turn to turn: current page/time, the
+# six per-turn notes, and conversation history. Everything else lives in
+# STATIC_ROLE_INTRO above.
+_DYNAMIC_SYSTEM_TEMPLATE = """The prospect is currently on the "{current_page}" page. Right now, where you are, it's {current_time}. Use this if asked the time, date, or day — don't say you don't know, and don't guess somewhere else.
 {interruption_note}{name_note}{company_note}{qualification_note}{walkthrough_note}{pacing_note}
 Full conversation so far:
 {history}"""
+
+
+def _build_system(session: SessionState) -> "str | list[dict]":
+    """Builds the full system prompt for one turn, split so the ~50K-char
+    static half (STATIC_SYSTEM_PROMPT) can be cached instead of reprocessed
+    on every call. Anthropic-only: cache_control is an Anthropic API
+    mechanism, so DeepSeek (or any other provider) gets the two halves
+    concatenated into one plain string, identical in content to what it
+    always received, just structurally different in how it's packaged."""
+    dynamic = _DYNAMIC_SYSTEM_TEMPLATE.format(
+        current_page=session.current_page,
+        current_time=_current_time_note(),
+        interruption_note=INTERRUPTION_NOTE if session.was_interrupted else "",
+        name_note=_name_note(session),
+        company_note=_company_note(session),
+        qualification_note=_qualification_note(session),
+        walkthrough_note=_walkthrough_note(session),
+        pacing_note=_pacing_note(session),
+        history="\n".join(f"{h.role}: {h.text}" for h in session.history) or "(nothing yet — this is the first message)",
+    )
+    if _provider == "anthropic":
+        return [
+            {"type": "text", "text": STATIC_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": dynamic},
+        ]
+    return f"{STATIC_SYSTEM_PROMPT}\n\n{dynamic}"
+
 
 INTERRUPTION_NOTE = (
     "\nThe prospect just cut you off mid-reply on the last turn — they didn't hear the rest of "
@@ -641,12 +755,19 @@ def _walkthrough_note(session: SessionState) -> str:
         else "No action for this step — just talk, don't navigate."
     )
     next_step = WALKTHROUGH_STEPS_BY_INDEX.get(step.index + 1)
-    next_line = (
-        f'Once step {step.index} is fully delivered, the next step is step {next_step.index} — '
-        f'"{next_step.title}."'
-        if next_step
-        else "This is the final step — wrap up and set \"end_walkthrough\" once done."
-    )
+    if next_step:
+        next_action_line = (
+            f'{{"page": "{next_step.action["page"]}", "component": "{next_step.action["component"]}", "method": "{next_step.action["method"]}"}}'
+            if next_step.action
+            else "no action for that step — just talk, don't navigate"
+        )
+        next_line = (
+            f'Once step {step.index} is fully delivered, the next step is step {next_step.index} — '
+            f'"{next_step.title}." When you advance to it, its action is: {next_action_line}. Its guidance: '
+            f'{next_step.guidance}'
+        )
+    else:
+        next_line = "This is the final step — wrap up and set \"end_walkthrough\" once done."
     # Full title->index table, always shown — without this, a skip-ahead
     # request ("jump to the MLR tab") makes the model guess or count its way
     # to a step number instead of reading it, and real testing showed that
@@ -668,19 +789,33 @@ def _walkthrough_note(session: SessionState) -> str:
         "next step's number on the SAME turn you actually fire that next step's action (or, for a "
         "no-action step, actually deliver its content) — a line like \"let's head into X next\" is a "
         "fine natural transition to say, but don't bump the step number until the matching action/"
-        "content for that new step is really happening in this same reply, not queued for later.\n"
+        "content for that new step is really happening in this same reply, not queued for later. Use "
+        "the exact \"action\" object given above for that next step, verbatim — don't invent your own "
+        "page/component/method (e.g. a generic scroll) even if it sounds like a reasonable way to "
+        "reveal the same content; the frontend only recognizes the exact registered actions. Also: "
+        "don't preview that next step by name inside THIS step's own \"reply\" (no \"let's move on to "
+        "X next\" tacked onto the end) — that transition announcement is \"lead_in\"'s job, on the turn "
+        "you actually jump there. Saying it in both places, once here and again as the next turn's "
+        "lead_in, is redundant and reads as robotic — say it once.\n"
         "General walkthrough rules: once started, keep moving through steps turn to turn without "
         "needing an explicit \"yes, continue\" first — the prospect's ordinary next turn (even a "
         "short \"okay\"/\"cool\"/filler ack) is itself enough of a go-ahead to advance. This is the "
         "one deliberate exception to instruction 3's caution about firing several different actions "
         "back-to-back without a real go-ahead — during an active walkthrough, moving to the next "
-        "step IS the expected behavior. If instead the prospect asks a real question or raises "
-        "something new (not just an ack), that's a genuine interruption: answer it fully first "
-        "without changing \"walkthrough_step\" this turn, then explicitly ask something like \"want "
-        "me to keep going with the tour?\" — only set \"walkthrough_step\" again once they clearly "
-        "say yes, resuming at this same step. If they ask to skip straight to a specific part of the "
-        "tour, jump \"walkthrough_step\" directly to it instead of insisting on the fixed order. If "
-        "they say they're done with the tour, set \"end_walkthrough\" instead of advancing.\n"
+        "step IS the expected behavior — in fact the system will keep prompting you to continue on "
+        "its own between beats, without the prospect needing to say anything at all, specifically so "
+        "a prospect who's just quietly watching (the common case) still gets the full tour instead of "
+        "it stalling out waiting for them to speak. If instead the prospect asks a real question or "
+        "raises something new (not just an ack), that's a genuine interruption: answer it fully "
+        "first without changing \"walkthrough_step\" this turn, then explicitly ask something like "
+        "\"want me to keep going with the tour?\" AND set \"walkthrough_awaiting_answer\" true on "
+        "that same turn — this is what pauses the automatic continuation and makes it actually wait "
+        "for their real answer instead of plowing ahead; forgetting to set it here means the tour "
+        "would keep going right past their question, which is exactly the failure this field exists "
+        "to prevent. Only set \"walkthrough_step\" again once they clearly say yes, resuming at this "
+        "same step. If they ask to skip straight to a specific part of the tour, jump "
+        "\"walkthrough_step\" directly to it instead of insisting on the fixed order. If they say "
+        "they're done with the tour, set \"end_walkthrough\" instead of advancing.\n"
     )
 
 
@@ -692,7 +827,7 @@ def _pacing_note(session: SessionState) -> str:
     )
 
 
-def _select_with_claude(message: str, session: SessionState) -> AgentResult:
+def _select_with_claude(message: str, session: SessionState, user_content: Optional[str] = None) -> AgentResult:
     if _client is None:
         raise RuntimeError("no client")
 
@@ -700,25 +835,14 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
     # chat's memory does, and each turn is short (spoken utterances in,
     # one-to-two-sentence replies out), so even a long consultative
     # conversation stays small in token terms.
-    history = "\n".join(f"{h.role}: {h.text}" for h in session.history) or "(nothing yet — this is the first message)"
+    system = _build_system(session)
 
-    system = SYSTEM_TEMPLATE.format(
-        agent_name=AGENT_NAME,
-        agent_location=AGENT_LOCATION,
-        current_page=session.current_page,
-        current_time=_current_time_note(),
-        overview=PRODUCT_OVERVIEW,
-        registry=_registry_prompt(),
-        knowledge=KNOWLEDGE,
-        interruption_note=INTERRUPTION_NOTE if session.was_interrupted else "",
-        name_note=_name_note(session),
-        company_note=_company_note(session),
-        qualification_note=_qualification_note(session),
-        walkthrough_note=_walkthrough_note(session),
-        pacing_note=_pacing_note(session),
-        history=history,
-    )
-
+    # user_content lets a caller override the literal API turn content —
+    # used by run_walkthrough_continuation() to send a synthetic
+    # continuation directive instead of "Prospect just said" framing, since
+    # nothing was actually said. `message` itself is only used to build the
+    # default framing below; run_walkthrough_continuation passes "" for it
+    # since user_content always overrides it there.
     msg = _client.messages.create(
         model=_model,
         # 300 was too tight: instruction 6 explicitly tells the model to write
@@ -731,7 +855,7 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
         max_tokens=700,
         system=system,
         thinking={"type": "disabled"},
-        messages=[{"role": "user", "content": f'Prospect just said: "{message}"'}],
+        messages=[{"role": "user", "content": user_content or f'Prospect just said: "{message}"'}],
         tools=[_tool_schema()],
         tool_choice={"type": "tool", "name": TOOL_NAME},
     )
@@ -789,15 +913,45 @@ def _finalize_turn(session: SessionState, result: AgentResult) -> AgentResult:
             session.last_qual_capture_turn = len(session.history) // 2
 
     # Walkthrough position — plain overwrite every turn the model moves it,
-    # unlike the "set once" fields above. end_walkthrough always wins over a
-    # same-turn walkthrough_step (shouldn't both be set, but ending the tour
-    # is the safer interpretation if they somehow are).
+    # unlike the "set once" fields above. Precedence: end_walkthrough >
+    # start_walkthrough > walkthrough_step — start_walkthrough forces step 1
+    # regardless of whatever (if anything) walkthrough_step was also set to,
+    # since it's the dedicated, unambiguous "begin the tour" signal (see
+    # _tool_schema's start_walkthrough field — split out specifically because
+    # real testing showed the model reliably firing the right "action" but
+    # silently never setting a combined start/advance walkthrough_step field
+    # on the actual first trigger turn).
     end_walkthrough = result.pop("end_walkthrough", None)
+    start_walkthrough = result.pop("start_walkthrough", None)
     new_step = result.pop("walkthrough_step", None)
+    prev_walkthrough_step = session.walkthrough_step
     if end_walkthrough:
         session.walkthrough_step = None
+    elif start_walkthrough:
+        session.walkthrough_step = 1
     elif new_step is not None:
         session.walkthrough_step = new_step
+
+    # Unlike the fields above, this one is a hard reset every turn (True
+    # only on the exact turn the model set it, False otherwise) rather than
+    # "only touch it if present" — a stale True from an earlier interruption
+    # must never silently block auto-continue forever. See
+    # SessionState.walkthrough_awaiting_answer and _tool_schema's field.
+    session.walkthrough_awaiting_answer = bool(result.pop("walkthrough_awaiting_answer", False))
+
+    # Logged unconditionally (not just on change) so a real transcript can
+    # show definitively whether the model set nothing at all this turn vs.
+    # set something that happened to match the previous value — the
+    # "replying: {...}" log elsewhere only shows the raw model output
+    # BEFORE this function pops these three fields out of it, so it can
+    # never actually confirm what _finalize_turn did with them. This is
+    # the only place that can.
+    if session.visitor_id:
+        logger.info(
+            f"[{session.visitor_id}] walkthrough: step {prev_walkthrough_step} -> {session.walkthrough_step} "
+            f"(start_walkthrough={bool(start_walkthrough)}, walkthrough_step_field={new_step!r}, "
+            f"end_walkthrough={bool(end_walkthrough)}, awaiting_answer={session.walkthrough_awaiting_answer})"
+        )
 
     if result.get("action"):
         session.current_page = result["action"]["page"]
@@ -1042,39 +1196,25 @@ class _BalancedObjectExtractor:
         return self._value
 
 
-async def _stream_with_claude(message: str, session: SessionState) -> AsyncIterator[tuple]:
+async def _stream_with_claude(message: str, session: SessionState, user_content: Optional[str] = None) -> AsyncIterator[tuple]:
     if _async_client is None:
         raise RuntimeError("no async client")
 
-    history = "\n".join(f"{h.role}: {h.text}" for h in session.history) or "(nothing yet — this is the first message)"
-    system = SYSTEM_TEMPLATE.format(
-        agent_name=AGENT_NAME,
-        agent_location=AGENT_LOCATION,
-        current_page=session.current_page,
-        current_time=_current_time_note(),
-        overview=PRODUCT_OVERVIEW,
-        registry=_registry_prompt(),
-        knowledge=KNOWLEDGE,
-        interruption_note=INTERRUPTION_NOTE if session.was_interrupted else "",
-        name_note=_name_note(session),
-        company_note=_company_note(session),
-        qualification_note=_qualification_note(session),
-        walkthrough_note=_walkthrough_note(session),
-        pacing_note=_pacing_note(session),
-        history=history,
-    )
+    system = _build_system(session)
 
     action_extractor = _BalancedObjectExtractor("action")
     lead_in_extractor = _StreamingFieldExtractor("lead_in")
     reply_extractor = _StreamingFieldExtractor("reply")
     lead_in_and_action_handled = False
 
+    # See _select_with_claude's matching comment — user_content lets
+    # run_walkthrough_continuation() override the literal API turn content.
     async with _async_client.messages.stream(
         model=_model,
         max_tokens=700,
         system=system,
         thinking={"type": "disabled"},
-        messages=[{"role": "user", "content": f'Prospect just said: "{message}"'}],
+        messages=[{"role": "user", "content": user_content or f'Prospect just said: "{message}"'}],
         tools=[_tool_schema()],
         tool_choice={"type": "tool", "name": TOOL_NAME},
     ) as stream:
@@ -1192,6 +1332,80 @@ async def run_turn_stream(message: str, session: SessionState) -> AsyncIterator[
     else:
         result = _fallback_reply(_keyword_match(message))
     yield ("done_fallback", _finalize_turn(session, result))
+
+
+# Sent as the API call's own user-turn content for an auto-continue cycle —
+# never persisted to session.history or gate_log (see
+# run_walkthrough_continuation below). Deliberately explicit that nothing
+# was said, so the model doesn't half-guess it's responding to real speech.
+_WALKTHROUGH_CONTINUE_DIRECTIVE = (
+    "(No new input from the prospect — they haven't said anything since your last reply. "
+    "Continue the scripted walkthrough on your own initiative: narrate and act on the next "
+    "step now, exactly as instructed in the walkthrough note below.)"
+)
+
+
+async def run_walkthrough_continuation(session: SessionState) -> AsyncIterator[tuple]:
+    """Auto-continue counterpart to run_turn_stream(), used only by the voice
+    pipeline's auto-continue scheduler (agent_processor.py) to advance the
+    scripted walkthrough on its own initiative, with no new prospect speech.
+    Same streaming event contract as run_turn_stream() (see its docstring)
+    so the caller can reuse the exact same consumption logic for both —
+    except this can also end with NO done_streamed/done_fallback event at
+    all (see bottom), which the caller must treat as "nothing to speak this
+    cycle," not an error.
+
+    Deliberately does NOT call _begin_turn(): there is no real prospect
+    message to log. Calling run_turn_stream() with a synthetic "message"
+    instead of this dedicated function would append a fabricated
+    role="user" HistoryEntry to session.history AND a fabricated row to the
+    durable gate_log transcript — the model would literally see "Prospect
+    just said: ..." for words the prospect never said, and the admin
+    dashboard / call summary would show it too. Instead, the continuation
+    directive is sent directly as this one API call's user-turn content
+    (via _select_with_claude/_stream_with_claude's user_content override)
+    and never written anywhere. This still finishes through the shared
+    _finalize_turn(), which only ever persists the AGENT's reply and the
+    resulting walkthrough_step/action state — safe regardless of how the
+    turn started, and it's what correctly advances walkthrough_step here.
+
+    Only ever called while session.walkthrough_step is already active — the
+    caller (agent_processor.py) is responsible for that check; this
+    function doesn't gate on it itself."""
+    if _async_client is not None:
+        try:
+            reply_fully_streamed = False
+            result: Optional[AgentResult] = None
+            async for event in _stream_with_claude("", session, user_content=_WALKTHROUGH_CONTINUE_DIRECTIVE):
+                if event[0] == "_reply_fully_streamed":
+                    reply_fully_streamed = event[1]
+                elif event[0] == "result":
+                    result = event[1]
+                else:
+                    yield event
+            if result is not None:
+                final = _finalize_turn(session, result)
+                if reply_fully_streamed:
+                    yield ("done_streamed", final)
+                else:
+                    yield ("done_fallback", final)
+                return
+        except Exception:
+            logger.exception("Streaming LLM call failed during walkthrough auto-continue, falling back to non-streaming path")
+
+    if _client is not None:
+        try:
+            result = _select_with_claude("", session, user_content=_WALKTHROUGH_CONTINUE_DIRECTIVE)
+            yield ("done_fallback", _finalize_turn(session, result))
+            return
+        except Exception:
+            logger.exception("Walkthrough auto-continue LLM call failed entirely — skipping this continuation cycle")
+    # Both paths failed (or no client configured at all): yield nothing
+    # further. Unlike run_turn_stream(), there's no keyword-matcher fallback
+    # here — there's no real prospect message to keyword-match against, and
+    # speaking a wrong guess unprompted is worse than silently skipping one
+    # auto-continue beat. The caller sees the generator end with no
+    # "done_*" event and treats that as "nothing to speak this cycle."
 
 
 def generate_call_summary(visitor_id: str) -> Optional[str]:
