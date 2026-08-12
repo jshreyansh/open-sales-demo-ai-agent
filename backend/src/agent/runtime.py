@@ -130,6 +130,9 @@ class AgentResult(TypedDict, total=False):
     walkthrough_step: int
     end_walkthrough: bool
     walkthrough_awaiting_answer: bool
+    # Set-once, like the MEDDIC/qual fields — see SessionState.farewell_question_asked
+    # for why this needs to persist across turns instead of resetting.
+    farewell_question_asked: bool
 
 
 DEFAULT_LEAD_IN = "Let me pull that up."
@@ -261,6 +264,23 @@ def _tool_schema() -> dict:
                         "asking permission at each one."
                     ),
                 },
+                "farewell_question_asked": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true on the exact turn your \"reply\" is about to ask a closing/qualifying "
+                        "question (a MEDDIC/qualification question, or 'want me to connect you with a "
+                        "rep') specifically because the prospect just indicated they're leaving or "
+                        "ending the call soon ('I have to go', 'I'm out of time', 'gotta run', etc). "
+                        "Decide this BEFORE writing \"reply\", same rule as \"start_walkthrough\" above. "
+                        "This is a one-time-per-call flag: once it's already true (check the note in "
+                        "the prompt above — it tells you plainly if this already happened), do NOT ask "
+                        "ANOTHER question the next time they indicate leaving, even if it feels like a "
+                        "clean opening — just give a short, warm goodbye with no question this time, and "
+                        "omit this field entirely on that turn (it's already true, nothing to set). Two "
+                        "closing questions across two separate 'I have to go' moments reads as not "
+                        "listening, even though each one alone would've been reasonable."
+                    ),
+                },
                 "reply": {
                     "type": "string",
                     "description": (
@@ -359,8 +379,21 @@ def _tool_schema() -> dict:
                 "end_walkthrough": {
                     "type": "boolean",
                     "description": (
-                        "Set true the turn the prospect declines to continue the walkthrough, or once "
-                        "you've wrapped up step 10. Omit otherwise."
+                        "Set true the turn the prospect declines to continue the walkthrough, once "
+                        "you've wrapped up step 10, OR the prospect indicates they're leaving or ending "
+                        "the call soon — 'I have to go', 'I have to drop', 'I'm out of time', 'gotta "
+                        "run', etc. This last case is easy to miss because your own \"reply\" that turn "
+                        "is a normal, warm goodbye rather than something that sounds like ending a tour "
+                        "— set this anyway, in that same turn, decided BEFORE writing \"reply\" (same "
+                        "rule as \"start_walkthrough\"/\"farewell_question_asked\" above). Forgetting it "
+                        "here is the single biggest failure mode observed live: the prospect says "
+                        "goodbye, you reply warmly, but without this field the auto-continue scheduler "
+                        "has no idea the tour should stop and just keeps firing the next beat anyway — "
+                        "on top of a goodbye that already happened, which reads as not listening at all. "
+                        "If it turns out to be a false alarm and they keep talking, a fresh \"give me the "
+                        "walkthrough\" request naturally restarts it via \"start_walkthrough\" — that's a "
+                        "fine tradeoff against risking the tour steamrolling a real goodbye. Omit "
+                        "otherwise."
                     ),
                 },
             },
@@ -424,6 +457,11 @@ def _parse_tool_result(data: dict, stop_reason: Optional[str] = None) -> AgentRe
     # reset every turn (see SessionState.walkthrough_awaiting_answer), not
     # just be set when true.
     captured_fields["walkthrough_awaiting_answer"] = bool(data.get("walkthrough_awaiting_answer"))
+    # "Set once" like the MEDDIC/qual fields above (only captured when true —
+    # see SessionState.farewell_question_asked for why this must never be
+    # explicitly reset back to False by a later turn).
+    if data.get("farewell_question_asked"):
+        captured_fields["farewell_question_asked"] = True
 
     if not action:
         result: AgentResult = {"reply": reply, **captured_fields}
@@ -527,7 +565,7 @@ STATIC_SYSTEM_PROMPT: str = STATIC_ROLE_INTRO.format(
 # six per-turn notes, and conversation history. Everything else lives in
 # STATIC_ROLE_INTRO above.
 _DYNAMIC_SYSTEM_TEMPLATE = """The prospect is currently on the "{current_page}" page. Right now, where you are, it's {current_time}. Use this if asked the time, date, or day — don't say you don't know, and don't guess somewhere else.
-{interruption_note}{name_note}{company_note}{qualification_note}{walkthrough_note}{pacing_note}
+{interruption_note}{name_note}{company_note}{qualification_note}{walkthrough_note}{farewell_note}{pacing_note}
 Full conversation so far:
 {history}"""
 
@@ -547,6 +585,7 @@ def _build_system(session: SessionState) -> "str | list[dict]":
         company_note=_company_note(session),
         qualification_note=_qualification_note(session),
         walkthrough_note=_walkthrough_note(session),
+        farewell_note=_farewell_note(session),
         pacing_note=_pacing_note(session),
         history="\n".join(f"{h.role}: {h.text}" for h in session.history) or "(nothing yet — this is the first message)",
     )
@@ -815,7 +854,34 @@ def _walkthrough_note(session: SessionState) -> str:
         "to prevent. Only set \"walkthrough_step\" again once they clearly say yes, resuming at this "
         "same step. If they ask to skip straight to a specific part of the tour, jump "
         "\"walkthrough_step\" directly to it instead of insisting on the fixed order. If they say "
-        "they're done with the tour, set \"end_walkthrough\" instead of advancing.\n"
+        "they're done with the tour, set \"end_walkthrough\" instead of advancing. Same field, "
+        "different trigger: if the prospect indicates they're LEAVING the call itself (\"I have to "
+        "go\", \"I have to drop\", out of time, etc), set \"end_walkthrough\" true on that same turn "
+        "too, even though your reply is just a warm goodbye rather than anything that sounds like "
+        "wrapping up a tour — this is NOT the same as the genuine-interruption case above (don't set "
+        "\"walkthrough_awaiting_answer\" for a goodbye, and don't ask another question if "
+        "\"farewell_question_asked\" is already true), it's a real stop. Without this, the "
+        "auto-continue scheduler has no signal at all that the call is ending and will keep firing "
+        "the next beat right past your own goodbye — confirmed live as the single worst failure mode "
+        "of this whole feature, worse than any individual missed field elsewhere.\n"
+    )
+
+
+def _farewell_note(session: SessionState) -> str:
+    """See SessionState.farewell_question_asked — surfaces the "already used
+    my one closing question" state directly rather than expecting the model
+    to infer it correctly from prose history under time pressure. Empty
+    string once nothing's happened yet, so this costs nothing on a normal
+    call that never gets cut short."""
+    if not session.farewell_question_asked:
+        return ""
+    return (
+        "\nYou already asked a closing/qualifying question the last time the prospect indicated "
+        "they were leaving this call. If they indicate leaving again now, do NOT ask another "
+        "question — no qualification question, no \"want me to connect you with a rep\" ask, "
+        "nothing, even if it feels like a natural opening. Just give a short, warm goodbye and let "
+        "them go. Two closing questions across two separate \"I have to go\" moments reads as not "
+        "listening, even though each one alone would've been reasonable.\n"
     )
 
 
@@ -938,6 +1004,11 @@ def _finalize_turn(session: SessionState, result: AgentResult) -> AgentResult:
     # must never silently block auto-continue forever. See
     # SessionState.walkthrough_awaiting_answer and _tool_schema's field.
     session.walkthrough_awaiting_answer = bool(result.pop("walkthrough_awaiting_answer", False))
+
+    # Set-once, same pattern as the MEDDIC/qual fields above — never reset
+    # back to False by a later turn. See SessionState.farewell_question_asked.
+    if result.pop("farewell_question_asked", None):
+        session.farewell_question_asked = True
 
     # Logged unconditionally (not just on change) so a real transcript can
     # show definitively whether the model set nothing at all this turn vs.

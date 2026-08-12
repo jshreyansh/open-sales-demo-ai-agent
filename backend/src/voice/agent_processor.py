@@ -266,18 +266,23 @@ class AgentRuntimeProcessor(FrameProcessor):
         # correct: it sees the true state at the moment the frame arrives,
         # not at the moment it's eventually processed.
         if isinstance(frame, TranscriptionFrame) and frame.text.strip() and self._turn_in_progress:
-            if self._interrupted_this_turn:
-                # This transcript exists BECAUSE a genuine barge-in already cut
-                # off the audio (see VADUserStartedSpeakingFrame below) — its
-                # content IS the interruption, not just incidental overlap.
-                # Stash instead of discarding: _advance_after_turn replays it
-                # as a real turn the instant the in-flight beat finishes, so
-                # the model actually gets to hear and respond to it instead of
-                # the system just moving on as if nothing was said.
-                logger.info(f"[{self._visitor_id}] stashing interruption transcript mid-turn: {frame.text!r}")
-                self._pending_interruption_text = frame.text
-            else:
-                logger.info(f"[{self._visitor_id}] dropped overlapping transcript mid-turn: {frame.text!r}")
+            # Always stash, never drop — this used to be conditional on
+            # self._interrupted_this_turn (only stash if THIS turn was the
+            # one VAD marked as interrupted), which sounds right but isn't:
+            # _interrupted_this_turn resets at the start of every new turn,
+            # while the transcript that explains a barge-in routinely arrives
+            # several seconds later (STT lag) — long enough, especially at
+            # today's fast auto-continue pacing, for a fresh, never-interrupted
+            # beat to already be running by the time it lands. The flag was
+            # answering "was THIS turn interrupted" when the real question is
+            # "did the person say something that hasn't been answered yet" —
+            # true regardless of which turn happens to be running when it
+            # finally arrives. Any transcript reaching here at all means real
+            # speech happened while we were mid-turn; _advance_after_turn
+            # replays it as a real turn the instant the in-flight beat ends,
+            # so it's always heard and answered instead of silently skipped.
+            logger.info(f"[{self._visitor_id}] stashing transcript mid-turn: {frame.text!r}")
+            self._pending_interruption_text = frame.text
             return
         await super().queue_frame(frame, direction, callback)
 

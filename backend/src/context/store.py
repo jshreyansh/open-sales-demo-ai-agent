@@ -108,6 +108,15 @@ class SessionState:
     # only when the model explicitly asks it that turn), so a stale True
     # from an earlier interruption never blocks continuation forever.
     walkthrough_awaiting_answer: bool = False
+    # True once the model has asked a closing/qualifying question in
+    # response to the prospect indicating they're leaving the call — set
+    # once and never reset (same "set once" pattern as the MEDDIC/qual
+    # fields above), so if they indicate leaving AGAIN later in the same
+    # call, the model has a real signal to just say goodbye instead of
+    # asking yet another question. Without this, each "I have to go" is
+    # independently treated as a fresh opening for one more question,
+    # which reads as not listening when the prospect says it twice in a row.
+    farewell_question_asked: bool = False
     # The same id this session is keyed by in _sessions below — kept on the
     # object itself (not just as the dict key) so run_turn() can persist each
     # turn to the durable transcript log (see data/gate_log.py) without
