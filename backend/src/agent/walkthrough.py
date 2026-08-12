@@ -1,0 +1,162 @@
+from dataclasses import dataclass
+from typing import List, Optional, TypedDict
+
+
+class WalkthroughAction(TypedDict):
+    page: str
+    component: str
+    method: str
+
+
+@dataclass
+class WalkthroughStep:
+    index: int
+    title: str
+    action: Optional[WalkthroughAction]
+    guidance: str
+
+
+# The scripted platform tour's fixed sequence and target actions, hardcoded
+# here rather than left to the model to decide turn-by-turn — the same
+# reasoning as CONTENT_STUDIO_FORMATS in registry.py and the qualification
+# system's SessionState fields: letting the model freely reconstruct its own
+# position/order from prose alone is exactly what caused drift (skipped or
+# reordered steps) earlier in this project.
+#
+# Load-bearing design rule, learned the hard way from real testing: ONE STATE
+# INDEX = ONE ATOMIC ACTION, ALWAYS. An earlier version of this file had a
+# single "Format pop-ups" step whose guidance prose asked the model to fire
+# THREE different actions (MagicReel, MagicAvatar, MagicChart opens) across
+# several turns while tracking "which have I already shown" purely by
+# rereading its own conversation history — real testing (both DeepSeek and
+# Claude) showed this is exactly the kind of multi-item bookkeeping LLMs get
+# wrong under real conversational pressure: wrong item picked, an item
+# skipped outright, or the step stalling with no progress at all. Splitting
+# that one step into three separate single-action beats removes the memory
+# burden entirely — each beat's note ever asks for exactly one deterministic
+# action, never "the next one in a mental list." See runtime.py's
+# _walkthrough_note for how a beat gets surfaced to the model each turn.
+#
+# The two studio-flow beats (MagicReel, MagicAvatar) are the one deliberate
+# exception: they each stay on their own single index for many turns while
+# the ALREADY-existing, already-verified-reliable wizard step-by-step pacing
+# (system prompt instruction 2c) handles the internal sub-navigation. That
+# mechanism doesn't share this bug because it doesn't ask the model to track
+# a set of interchangeable items — it's a strictly ordered, one-directional
+# progression (Source -> Brief -> Script -> Scenes -> Generate) with an
+# explicit go-ahead gate at each hop, a different and already-proven pattern
+# left untouched here.
+#
+# Beat 1 fires no action: the prospect is already on the dashboard (session's
+# default current_page) when the call starts, so the overview just talks —
+# it's not a deliberate visit. The dashboard only gets one deliberate,
+# explicit visit, as the final wrap-up (beat 10), not bookending the tour.
+#
+# Every action below already exists in registry.py's UI_REGISTRY — this
+# feature needed no new registry actions and no frontend changes.
+WALKTHROUGH_STEPS: List[WalkthroughStep] = [
+    WalkthroughStep(
+        index=1,
+        title="Overview",
+        action=None,
+        guidance=(
+            "Give a short, own-words 2-3 sentence overview of what ContentIQ does — pull from "
+            "the product overview above, don't recite it verbatim. No navigation needed for "
+            "this step, you're already on the dashboard. Then move into the tour."
+        ),
+    ),
+    WalkthroughStep(
+        index=2,
+        title="Content Studio",
+        action={"page": "content-studio", "component": "video-tab", "method": "click"},
+        guidance=(
+            "Land on Content Studio generally and mention it covers 30 formats across 5 Magic "
+            "Engines — Video, Aid, Mail, Canvas, Doc. Don't click through every engine tab "
+            "individually, just land here and describe it."
+        ),
+    ),
+    WalkthroughStep(
+        index=3,
+        title="MagicReel pop-up",
+        action={"page": "content-studio", "component": "magicreel", "method": "open"},
+        guidance=(
+            "Open a quick pop-up preview of MagicReel (short-form video) with a short beat of "
+            "narration — don't linger, this is a glance, not the deep dive (that's beat 6)."
+        ),
+    ),
+    WalkthroughStep(
+        index=4,
+        title="MagicAvatar pop-up",
+        action={"page": "content-studio", "component": "magicavatar", "method": "open"},
+        guidance=(
+            "Open a quick pop-up preview of MagicAvatar (the digital-twin presenter video) with "
+            "a short beat of narration — again, a glance, not the deep dive (that's beat 7)."
+        ),
+    ),
+    WalkthroughStep(
+        index=5,
+        title="Infographic pop-up",
+        action={"page": "content-studio", "component": "magicchart", "method": "open"},
+        guidance=(
+            "Open a quick pop-up preview of the Infographic format (component \"magicchart\") as "
+            "your Magic Canvas example — a short beat of narration, then move on."
+        ),
+    ),
+    WalkthroughStep(
+        index=6,
+        title="MagicReel flow",
+        action={"page": "magicreel-studio", "component": "wizard", "method": "step-source"},
+        guidance=(
+            "Enter the MagicReel studio at the Source step and walk it end-to-end — Source, "
+            "Brief, Script, Scenes, Generate — using the normal one-stage-at-a-time wizard "
+            "pacing (narrate each stage, ask if they want you to continue, wait for their "
+            "go-ahead — same as you'd do outside the scripted tour). Once you've shown the "
+            "Generate step's result, this outer step is done — ask if they'd like you to "
+            "continue the platform tour, and only move to step 7 once they say yes."
+        ),
+    ),
+    WalkthroughStep(
+        index=7,
+        title="MagicAvatar flow",
+        action={"page": "magicavatar-studio", "component": "launchpad", "method": "open"},
+        guidance=(
+            "Open the MagicAvatar Launchpad, then start the Master wizard (create-master) and "
+            "walk it end-to-end the same way as MagicReel — Brief, Scenes, Options, Generate — "
+            "one stage at a time with the usual go-ahead pacing. Once you've shown the result, "
+            "ask if they'd like you to continue before moving to step 8."
+        ),
+    ),
+    WalkthroughStep(
+        index=8,
+        title="MLR tab",
+        action={"page": "mlr-review", "component": "queue", "method": "highlight"},
+        guidance=(
+            "Show the MLR approvals queue and connect it back to what they just saw: content "
+            "built in Content Studio arrives here already MLR-ready, so it moves through Brand, "
+            "Medical, Legal, and Compliance review faster and with fewer bounce-backs."
+        ),
+    ),
+    WalkthroughStep(
+        index=9,
+        title="Analytics tab",
+        action={"page": "analytics", "component": "funnel", "method": "highlight"},
+        guidance=(
+            "Show the engagement funnel — Sent, Viewed, Played, Completed, Shared — how they'd "
+            "track performance once content is live."
+        ),
+    ),
+    WalkthroughStep(
+        index=10,
+        title="Dashboard wrap-up",
+        action={"page": "dashboard", "component": "insights", "method": "highlight"},
+        guidance=(
+            "This is the only dashboard stop in the tour — cover both the insight cards and the "
+            "active campaigns list here as the closing 'this is home base' moment. Wrap up the "
+            "tour, ask if they have any other questions, and if question 5 (connecting with a "
+            "rep for next steps) still hasn't come up, this is a natural moment to ask it. Set "
+            "\"end_walkthrough\" once you've wrapped up."
+        ),
+    ),
+]
+
+WALKTHROUGH_STEPS_BY_INDEX = {s.index: s for s in WALKTHROUGH_STEPS}

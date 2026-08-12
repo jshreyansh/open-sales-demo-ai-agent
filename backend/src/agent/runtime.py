@@ -13,6 +13,7 @@ from ..context.store import SessionState, HistoryEntry
 from ..data import gate_log
 from ..persona import AGENT_LOCATION, AGENT_NAME, AGENT_TIMEZONE
 from .registry import PRODUCT_OVERVIEW, UI_REGISTRY, flatten_registry, FlatAction
+from .walkthrough import WALKTHROUGH_STEPS_BY_INDEX
 
 
 def _load_knowledge() -> str:
@@ -120,6 +121,13 @@ class AgentResult(TypedDict, total=False):
     qual_daily_users: str
     qual_past_attempts: str
     qual_next_step_response: str
+    # Scripted platform walkthrough position (see walkthrough.py +
+    # _walkthrough_note) — unlike the fields above, NOT "set once": the
+    # model sets this every turn it moves position (start/advance/resume/
+    # jump), and run_turn()'s _finalize_turn overwrites session.walkthrough_step
+    # with it directly rather than only-if-unset.
+    walkthrough_step: int
+    end_walkthrough: bool
 
 
 DEFAULT_LEAD_IN = "Let me pull that up."
@@ -297,6 +305,23 @@ def _tool_schema() -> dict:
                         "certainty than they actually gave. See instruction 8."
                     ),
                 },
+                "walkthrough_step": {
+                    "type": "integer",
+                    "description": (
+                        "Set this (1-10) to start the scripted platform walkthrough (step 1), to "
+                        "advance to the next step once the prospect has given a go-ahead, to resume "
+                        "at your current step after answering an interruption, or to jump straight to "
+                        "a step they specifically asked for. Omit on any turn that doesn't change your "
+                        "position in the tour. See the walkthrough note below."
+                    ),
+                },
+                "end_walkthrough": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true the turn the prospect declines to continue the walkthrough, or once "
+                        "you've wrapped up step 10. Omit otherwise."
+                    ),
+                },
             },
             "required": ["reply"],
         },
@@ -344,6 +369,15 @@ def _parse_tool_result(data: dict, stop_reason: Optional[str] = None) -> AgentRe
         if data.get(key)
     }
 
+    # Walkthrough position fields follow a different rule than the "set once"
+    # fields above (they change every step, so 0/False are meaningful too,
+    # not just falsy noise) — collected separately with an is-not-None/
+    # explicit-key check rather than truthiness.
+    if "walkthrough_step" in data and data["walkthrough_step"] is not None:
+        captured_fields["walkthrough_step"] = data["walkthrough_step"]
+    if data.get("end_walkthrough"):
+        captured_fields["end_walkthrough"] = True
+
     if not action:
         result: AgentResult = {"reply": reply, **captured_fields}
         return result
@@ -382,6 +416,8 @@ How to behave, in priority order:
 
 0. Your opening line already offered a choice — walkthrough, or something specific first — don't repeat that offer, and don't turn the start of the call into a discovery interview by stacking multiple questions at once. If the prospect volunteers their name (or role/company) at any point, set the "prospect_name" field, acknowledge it naturally in a few words, and keep going with whatever they actually asked — don't make it its own detour.
 
+0a. If the prospect answers your opening choice by picking the walkthrough ("sure, walk me through it," "yeah, show me around," "let's do the walkthrough"), or asks for "the full tour"/"walk me through everything" at any later point, start the scripted platform walkthrough right there in this same reply: give a short, own-words 2-3 sentence overview of what ContentIQ does (pull from the product overview above, don't recite it verbatim), set NO action this turn (you're already on the dashboard, nothing to click or highlight yet), and set "walkthrough_step" to 1. From your NEXT reply onward, follow the walkthrough note below (which will now be populated) instead of freelancing your own navigation — it already covers what step 1 asked for, so don't repeat the overview, move straight into step 2. If they instead ask about something specific, answer that first per the instructions below — the walkthrough is opt-in, not the default path through the call.
+
 1. If the prospect describes their own business problem, workflow, or use case (rather than asking to see a specific feature), your job is to *reason* about it: think about which of the capabilities above are actually relevant to what they described and explain specifically why — connect their situation to the product, don't just list features. Only trigger an action if showing something concrete would actually help make the point, and say what you're about to show before doing it. If nothing above is genuinely relevant to what they described, say so honestly instead of forcing a connection.
 2. Listen for what's actually being asked. A follow-up question ("what kinds of X are there?", "why would I need that?", "how much does that cost?") is not a request to repeat an action you already did — it's a request for you to *explain*, using what you know. Only set "action" when the prospect is asking to see or be taken to something new.
 2a. In Content Studio specifically, every one of the 30 formats (component ids like "magicsave", "magicdossier", etc, action "open") is a *more specific* match than its engine tab (component ids ending "-tab", action "click"). If the prospect describes something one specific format actually does — not just a category — you MUST use that format's "open" action, never the tab "click" action. Example: asked about co-pay cards, use {{"page": "content-studio", "component": "magicsave", "method": "open"}}, NOT the canvas-tab click. Only use a "-tab" click when they're asking to browse a whole category ("what video stuff do you have?") rather than one specific thing.
@@ -404,7 +440,7 @@ Question 5 in particular must genuinely be asked before the call ends — unlike
 9. When the prospect clearly signals they want to move faster — "yes, show me", "send me the video", "I'm sold, what's next" — honor that immediately instead of continuing your own planned walkthrough. A direct request always overrides the default step-by-step order; this applies even mid-explanation, not just between turns.
 10. Don't spread equal weight across every feature you know about. The two or three things worth repeating whenever they're relevant are: MLR-ready cinematic content, medically grounded claims, and content sourced straight from the brand's own dossier. Reach for these specifically when they connect to what the prospect cares about, rather than a flat, everything-gets-equal-airtime tour — deliberate repetition of a few real anchors is what actually sticks, not covering more ground.
 11. Pace toward the call-length note below — it's a target for the whole conversation, not a hard cutoff mid-sentence. Running long is a signal to prioritize what they're actually asking over covering everything you could.
-{interruption_note}{name_note}{company_note}{qualification_note}{pacing_note}
+{interruption_note}{name_note}{company_note}{qualification_note}{walkthrough_note}{pacing_note}
 Full conversation so far:
 {history}"""
 
@@ -579,6 +615,75 @@ def _qualification_note(session: SessionState) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _walkthrough_note(session: SessionState) -> str:
+    """Mirrors _qualification_note's shape: grounds the model in exactly
+    where it is in the scripted platform walkthrough (see walkthrough.py),
+    since relying on the model to reconstruct its own multi-turn position
+    from prose alone is exactly what caused drift (skipped/reordered steps)
+    in earlier, looser prompt-only designs this session. Returns "" when no
+    tour is active — nothing to ground.
+
+    Deliberately thin: this function's only job is to say "you are here,
+    here's this step's guidance." Whether the CURRENT turn is a continuation,
+    an interruption, or a resume is left to the model's own judgment from the
+    actual conversation history already in the prompt (the same judgment
+    instruction 2c already relies on for wizard-internal step pacing) rather
+    than adding more tracked state — a "did I already ask to continue"
+    boolean would just be more state to keep in sync for a distinction the
+    model can already read directly out of its own last reply."""
+    step = WALKTHROUGH_STEPS_BY_INDEX.get(session.walkthrough_step) if session.walkthrough_step else None
+    if step is None:
+        return ""
+
+    action_line = (
+        f'Action for this step: {{"page": "{step.action["page"]}", "component": "{step.action["component"]}", "method": "{step.action["method"]}"}}.'
+        if step.action
+        else "No action for this step — just talk, don't navigate."
+    )
+    next_step = WALKTHROUGH_STEPS_BY_INDEX.get(step.index + 1)
+    next_line = (
+        f'Once step {step.index} is fully delivered, the next step is step {next_step.index} — '
+        f'"{next_step.title}."'
+        if next_step
+        else "This is the final step — wrap up and set \"end_walkthrough\" once done."
+    )
+    # Full title->index table, always shown — without this, a skip-ahead
+    # request ("jump to the MLR tab") makes the model guess or count its way
+    # to a step number instead of reading it, and real testing showed that
+    # guess can land one off (firing the right action but reporting the
+    # wrong index), which then desyncs every step after it. Same fix as the
+    # rest of this file: give the model the lookup table, don't make it infer
+    # one.
+    full_list = "; ".join(f"{s.index}={s.title}" for s in WALKTHROUGH_STEPS_BY_INDEX.values())
+
+    return (
+        f"\nFull walkthrough step list (for resolving skip-ahead requests by name — always use "
+        f"the exact number listed here, never estimate or count): {full_list}.\n"
+        f"You're currently giving the scripted platform walkthrough — step {step.index} of 10: "
+        f'"{step.title}." {action_line} Guidance for this step: {step.guidance} {next_line}\n'
+        "If this step's content was already fully delivered in your own last reply (check the "
+        "conversation history below) and the prospect's message just now was an ordinary "
+        "acknowledgment rather than a real question, move on to the next step now instead of "
+        "repeating or expanding on what you already said. Only set \"walkthrough_step\" to the "
+        "next step's number on the SAME turn you actually fire that next step's action (or, for a "
+        "no-action step, actually deliver its content) — a line like \"let's head into X next\" is a "
+        "fine natural transition to say, but don't bump the step number until the matching action/"
+        "content for that new step is really happening in this same reply, not queued for later.\n"
+        "General walkthrough rules: once started, keep moving through steps turn to turn without "
+        "needing an explicit \"yes, continue\" first — the prospect's ordinary next turn (even a "
+        "short \"okay\"/\"cool\"/filler ack) is itself enough of a go-ahead to advance. This is the "
+        "one deliberate exception to instruction 3's caution about firing several different actions "
+        "back-to-back without a real go-ahead — during an active walkthrough, moving to the next "
+        "step IS the expected behavior. If instead the prospect asks a real question or raises "
+        "something new (not just an ack), that's a genuine interruption: answer it fully first "
+        "without changing \"walkthrough_step\" this turn, then explicitly ask something like \"want "
+        "me to keep going with the tour?\" — only set \"walkthrough_step\" again once they clearly "
+        "say yes, resuming at this same step. If they ask to skip straight to a specific part of the "
+        "tour, jump \"walkthrough_step\" directly to it instead of insisting on the fixed order. If "
+        "they say they're done with the tour, set \"end_walkthrough\" instead of advancing.\n"
+    )
+
+
 def _pacing_note(session: SessionState) -> str:
     elapsed_min = (time.monotonic() - session.started_at) / 60
     return (
@@ -609,6 +714,7 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
         name_note=_name_note(session),
         company_note=_company_note(session),
         qualification_note=_qualification_note(session),
+        walkthrough_note=_walkthrough_note(session),
         pacing_note=_pacing_note(session),
         history=history,
     )
@@ -681,6 +787,17 @@ def _finalize_turn(session: SessionState, result: AgentResult) -> AgentResult:
             # which reads this to know how many turns have passed since
             # anything was last captured.
             session.last_qual_capture_turn = len(session.history) // 2
+
+    # Walkthrough position — plain overwrite every turn the model moves it,
+    # unlike the "set once" fields above. end_walkthrough always wins over a
+    # same-turn walkthrough_step (shouldn't both be set, but ending the tour
+    # is the safer interpretation if they somehow are).
+    end_walkthrough = result.pop("end_walkthrough", None)
+    new_step = result.pop("walkthrough_step", None)
+    if end_walkthrough:
+        session.walkthrough_step = None
+    elif new_step is not None:
+        session.walkthrough_step = new_step
 
     if result.get("action"):
         session.current_page = result["action"]["page"]
@@ -942,6 +1059,7 @@ async def _stream_with_claude(message: str, session: SessionState) -> AsyncItera
         name_note=_name_note(session),
         company_note=_company_note(session),
         qualification_note=_qualification_note(session),
+        walkthrough_note=_walkthrough_note(session),
         pacing_note=_pacing_note(session),
         history=history,
     )

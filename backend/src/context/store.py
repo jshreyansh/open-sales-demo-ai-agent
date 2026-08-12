@@ -95,6 +95,12 @@ class SessionState:
     # so it can pace itself toward the ~10 minute target instead of pacing
     # blind.
     started_at: float = field(default_factory=time.monotonic)
+    # Position (1-10) in the scripted platform walkthrough (see
+    # agent/walkthrough.py + runtime.py's _walkthrough_note) — None means no
+    # tour is currently active. A plain overwrite every turn the model moves
+    # position, unlike the MEDDIC/qual fields above which are set once and
+    # never touched again.
+    walkthrough_step: Optional[int] = None
     # The same id this session is keyed by in _sessions below — kept on the
     # object itself (not just as the dict key) so run_turn() can persist each
     # turn to the durable transcript log (see data/gate_log.py) without
