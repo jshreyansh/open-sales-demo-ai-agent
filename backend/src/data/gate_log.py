@@ -72,6 +72,38 @@ def init_db() -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_transcript_turns_visitor ON transcript_turns(visitor_id)")
+        # The qualification profile (5 required KPI questions + 4 bonus
+        # MEDDIC fields — see agent/runtime.py's _qualification_note),
+        # captured opportunistically over a call the same way transcript
+        # turns are: one row per field the moment it's learned, not batched
+        # at call-end. A flexible field_name/field_value shape (not one
+        # column per field) means adding a 10th tracked field later needs no
+        # migration, same reasoning as transcript_turns above.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS qualification_fields (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                visitor_id TEXT NOT NULL,
+                field_name TEXT NOT NULL,
+                field_value TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_qualification_fields_visitor ON qualification_fields(visitor_id)")
+        # One row per session — generated once (see bot.py's
+        # on_client_disconnected) and overwritten if ever regenerated, not
+        # append-only like the tables above, since there's only ever one
+        # current summary worth keeping per call.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS call_summaries (
+                visitor_id TEXT PRIMARY KEY,
+                summary TEXT NOT NULL,
+                generated_at TEXT NOT NULL
+            )
+            """
+        )
 
 
 class VisitorLookup(TypedDict):
@@ -210,6 +242,47 @@ def list_transcript(visitor_id: str) -> List[dict]:
             (visitor_id,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def save_qualification_field(visitor_id: str, field_name: str, value: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO qualification_fields (visitor_id, field_name, field_value, created_at) VALUES (?, ?, ?, ?)",
+            (visitor_id, field_name, value, datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def get_qualification_fields(visitor_id: str) -> dict:
+    """Latest value per field_name for this visitor_id — a field is only
+    ever written once per session (see runtime.py's "only set on the turn
+    it's learned" pattern), but this takes the most recent row per name
+    defensively rather than assuming that always holds."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT field_name, field_value FROM qualification_fields WHERE visitor_id = ? ORDER BY created_at ASC",
+            (visitor_id,),
+        ).fetchall()
+    return {r["field_name"]: r["field_value"] for r in rows}
+
+
+def save_call_summary(visitor_id: str, summary: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO call_summaries (visitor_id, summary, generated_at) VALUES (?, ?, ?)
+            ON CONFLICT(visitor_id) DO UPDATE SET summary = excluded.summary, generated_at = excluded.generated_at
+            """,
+            (visitor_id, summary, datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def get_call_summary(visitor_id: str) -> Optional[str]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT summary FROM call_summaries WHERE visitor_id = ?",
+            (visitor_id,),
+        ).fetchone()
+    return row["summary"] if row else None
 
 
 def get_stats() -> dict:

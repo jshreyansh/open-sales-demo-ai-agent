@@ -113,6 +113,13 @@ class AgentResult(TypedDict, total=False):
     meddic_decision_process: str
     meddic_pain: str
     meddic_champion: str
+    # Same pattern, one per qual_* field (see _QUAL_LABELS) — the 4 new
+    # fields behind the 5-question qualification KPI beyond meddic_pain
+    # (question 1) above.
+    qual_current_solution: str
+    qual_daily_users: str
+    qual_past_attempts: str
+    qual_next_step_response: str
 
 
 DEFAULT_LEAD_IN = "Let me pull that up."
@@ -247,6 +254,49 @@ def _tool_schema() -> dict:
                     "type": "string",
                     "description": "Who internally wants this to happen / would advocate for it — ONLY set on the turn where this genuinely came up. See instruction 8.",
                 },
+                "qual_current_solution": {
+                    "type": "string",
+                    "description": (
+                        "What they're ACTIVELY using right now to get by — even if informal. Test: "
+                        "would they still say this today if asked 'how do you currently handle this'? "
+                        "Example: 'We just email PDFs back and forth' -> current_solution. A single "
+                        "'we use X' statement with no signal they've moved on from something else is "
+                        "ONLY this field — do not also set qual_past_attempts from the same sentence. "
+                        "ONLY set on the turn where this genuinely came up. See instruction 8."
+                    ),
+                },
+                "qual_daily_users": {
+                    "type": "string",
+                    "description": (
+                        "Who would actually use this day to day — specific roles or team, e.g. 'brand "
+                        "managers and two MLR reviewers'. 'A few people' or 'the team' with no roles "
+                        "named is too vague — leave unset and ask who specifically instead of capturing "
+                        "a hedge. ONLY set on the turn where this genuinely came up. See instruction 8."
+                    ),
+                },
+                "qual_past_attempts": {
+                    "type": "string",
+                    "description": (
+                        "Something they TRIED, ADOPTED, OR EVALUATED BEFORE and moved away from — only "
+                        "counts if they signal it's no longer what they use, or that it failed/was "
+                        "rejected. Test: are they describing something in the past that isn't their "
+                        "current answer? Example: 'We tried a generic DAM tool last year but dropped "
+                        "it' -> past_attempts. Do NOT set this just because qual_current_solution "
+                        "sounds inadequate — inadequacy alone isn't a past attempt, it needs an actual "
+                        "prior/abandoned thing. ONLY set on the turn where this genuinely came up. See "
+                        "instruction 8."
+                    ),
+                },
+                "qual_next_step_response": {
+                    "type": "string",
+                    "description": (
+                        "ONLY set on the turn you ask whether they'd like to connect with a rep for "
+                        "next steps AND they give an actual answer — yes, no, or a real detail. A "
+                        "deflection like 'maybe later' or 'I'll think about it' with no clear yes/no is "
+                        "still worth capturing as-is (it IS their real answer) — just don't invent more "
+                        "certainty than they actually gave. See instruction 8."
+                    ),
+                },
             },
             "required": ["reply"],
         },
@@ -283,12 +333,14 @@ def _parse_tool_result(data: dict, stop_reason: Optional[str] = None) -> AgentRe
         else:
             reply = "Sorry, could you say that again?"
 
-    # prospect_name plus the six MEDDIC fields all follow the identical
-    # "only set on the turn it was just learned" pattern — collected here in
-    # one pass rather than six near-identical if-blocks.
+    # prospect_name, the six MEDDIC fields, and the 4 qual_* fields (question
+    # 1 of the 5-question KPI is meddic_pain itself, see _qualification_note)
+    # all follow the identical "only set on the turn it was just learned"
+    # pattern — collected here in one pass rather than ten near-identical
+    # if-blocks.
     captured_fields = {
         key: data[key]
-        for key in ("prospect_name", *_MEDDIC_LABELS)
+        for key in ("prospect_name", *_MEDDIC_LABELS, *_QUAL_LABELS)
         if data.get(key)
     }
 
@@ -328,7 +380,7 @@ as off-limits:
 
 How to behave, in priority order:
 
-0. Your opening line is already a short self-intro plus an open question ("what can I help you with?") — don't repeat it, and don't turn the start of the call into a discovery interview. If the prospect volunteers their name (or role/company) at any point, set the "prospect_name" field, acknowledge it naturally in a few words, and keep going with whatever they actually asked — don't make it its own detour.
+0. Your opening line already offered a choice — walkthrough, or something specific first — don't repeat that offer, and don't turn the start of the call into a discovery interview by stacking multiple questions at once. If the prospect volunteers their name (or role/company) at any point, set the "prospect_name" field, acknowledge it naturally in a few words, and keep going with whatever they actually asked — don't make it its own detour.
 
 1. If the prospect describes their own business problem, workflow, or use case (rather than asking to see a specific feature), your job is to *reason* about it: think about which of the capabilities above are actually relevant to what they described and explain specifically why — connect their situation to the product, don't just list features. Only trigger an action if showing something concrete would actually help make the point, and say what you're about to show before doing it. If nothing above is genuinely relevant to what they described, say so honestly instead of forcing a connection.
 2. Listen for what's actually being asked. A follow-up question ("what kinds of X are there?", "why would I need that?", "how much does that cost?") is not a request to repeat an action you already did — it's a request for you to *explain*, using what you know. Only set "action" when the prospect is asking to see or be taken to something new.
@@ -342,11 +394,17 @@ How to behave, in priority order:
 5. Vary your phrasing turn to turn. Don't reuse the same sentence template every time — talk the way a person actually talks in a real conversation. Vary lead_in the same way — don't say "let me pull that up" every single time.
 6. Keep "reply" short by default — one to two sentences, spoken out loud on a call, not a written paragraph. Right length: "It's mainly built for pharma marketing teams — content that needs medical sign-off before it ships." Too long: stacking three or four features into one answer before pausing for them. Only go longer when the prospect explicitly asks you to elaborate, explain in more depth, or walk them through something step by step — then take the space that actually needs, still spoken naturally rather than as a dense block, and look for a natural place to pause and ask them something rather than monologuing straight through it. Shorter default replies also mean fewer chances for them to want to jump in mid-sentence, and leave more room for the questions in instruction 8.
 7. Never invent a page, component, or method that isn't listed above.
-8. Beyond the two mechanical questions (team vs. individual, time-to-value), build a real qualification picture over the course of the call using MEDDIC: Metrics (the actual result they're trying to move), Economic Buyer (who owns budget / signs off), Decision Criteria (what they're evaluating this against), Decision Process (steps and timeline to a decision), Identify Pain (the real problem driving this), Champion (who internally wants this to happen). Ask about ONE of these at a time, only when it genuinely fits what's already being discussed — never back-to-back, never announced ("let me ask a qualifying question"), never as a checklist. Check the MEDDIC note below before asking anything — if a field is already captured, don't ask again, use it to go one level deeper instead. Not every call will cover all six, and that's fine; a natural conversation beats a completed form.
+8. Every call is scored against 5 required questions — this is a hard requirement, not optional color: (1) what problem brought them here, (2) how they solve it today, (3) who'd actually use this day to day, (4) what they've already tried, (5) whether they want to connect with a rep for next steps. Two priorities, in order — but they're not exclusive within a single reply: extracting something silently does NOT use up your only chance to also gather more. If the prospect's message contains a clean answer to one of these AND leaves a separate, genuine opening toward a different one, take both — capture the first silently, then still bridge to the second. Don't treat one successful silent capture as "enough for this turn" if a real second opening exists.
+
+First, EXTRACT before you ASK — if the prospect's own words already clearly and specifically answer one of these (this happens often, especially question 1, when they explain why they're here at all), just capture it silently. Never spend a question on something they basically already told you. Before setting ANY of these fields, apply this test: could you quote back a specific, complete fact from what they actually said? If you'd have to hedge, fill in a blank, or guess ("a few people," "some tools," "not yet specified") — don't set the field. A vague gesture toward a topic is NOT a clean capture. Instead, treat that exact vagueness as your strongest possible opening: the topic is already live in the conversation, so one specific, natural follow-up right there continues the thread instead of switching topics — prioritize firming up something they've already half-answered over asking cold about something untouched.
+
+Second, when something's genuinely still missing (or only half-answered per above), BRIDGE rather than interview: reflect back one clause of what they just said, then extend it into ONE open question that continues that exact thread — never a cold topic switch, never announced ("let me ask you a quick question"), never two qualifying questions back to back. For example, if they say "our claims review process is really slow, it delays every launch," a good bridge is "That review bottleneck sounds like it's hitting more than one launch — who's actually stuck doing that review day to day?" A cold topic switch ("Got it. Now, what have you tried to fix this?") or skipping the opening entirely to launch into a product pitch are both the failure mode to avoid. Their first substantive answer about their own situation is usually your single best opening for a bridge — look for it there before defaulting into a full walkthrough, not after.
+
+Question 5 in particular must genuinely be asked before the call ends — unlike the other four, it's a question you have to ask, not something they'll volunteer, so watch for it specifically; see the qualification note below for exactly when to raise it. Beyond these 5, build a deeper picture opportunistically using MEDDIC: Metrics (the actual result they're trying to move), Economic Buyer (who owns budget / signs off), Decision Criteria (what they're evaluating this against), Decision Process (steps and timeline to a decision), Champion (who internally wants this to happen) — same extract-first, bridge-don't-interview approach, but these are bonus depth, not required. (Identify Pain isn't tracked separately — question 1 above already covers it.) Check the qualification note below before asking anything — it tracks exactly what's captured, what's missing, and how much runway you've had.
 9. When the prospect clearly signals they want to move faster — "yes, show me", "send me the video", "I'm sold, what's next" — honor that immediately instead of continuing your own planned walkthrough. A direct request always overrides the default step-by-step order; this applies even mid-explanation, not just between turns.
 10. Don't spread equal weight across every feature you know about. The two or three things worth repeating whenever they're relevant are: MLR-ready cinematic content, medically grounded claims, and content sourced straight from the brand's own dossier. Reach for these specifically when they connect to what the prospect cares about, rather than a flat, everything-gets-equal-airtime tour — deliberate repetition of a few real anchors is what actually sticks, not covering more ground.
 11. Pace toward the call-length note below — it's a target for the whole conversation, not a hard cutoff mid-sentence. Running long is a signal to prioritize what they're actually asking over covering everything you could.
-{interruption_note}{name_note}{company_note}{meddic_note}{pacing_note}
+{interruption_note}{name_note}{company_note}{qualification_note}{pacing_note}
 Full conversation so far:
 {history}"""
 
@@ -405,21 +463,120 @@ _MEDDIC_LABELS = {
     "meddic_champion": "Champion",
 }
 
+# The 4 new fields behind the 5-question qualification KPI (see instruction
+# 8) — question 1, "what problem brought them here," has no field of its
+# own here; it's meddic_pain above, referenced directly in
+# _qualification_note below instead of asking a second, near-identical
+# question.
+_QUAL_LABELS = {
+    "qual_current_solution": "How they solve it today",
+    "qual_daily_users": "Who'd use it day to day",
+    "qual_past_attempts": "What they've already tried",
+    "qual_next_step_response": "Connect with a rep for next steps",
+}
 
-def _meddic_note(session: SessionState) -> str:
-    """See instruction 8 above — this is what lets the agent tell "already
-    captured, don't ask again" from "still genuinely unknown" for each of
-    the six MEDDIC fields, mirroring _name_note's pattern for a single field."""
-    known = {label: getattr(session, attr) for attr, label in _MEDDIC_LABELS.items() if getattr(session, attr)}
-    if not known:
-        return "\nYou haven't captured any MEDDIC fields yet — see instruction 8, one at a time, when it naturally fits.\n"
-    captured = "\n".join(f"- {label}: {value}" for label, value in known.items())
-    missing = [label for attr, label in _MEDDIC_LABELS.items() if not getattr(session, attr)]
-    missing_str = ", ".join(missing) if missing else "none — all six captured"
-    return (
-        f"\nMEDDIC captured so far:\n{captured}\nStill missing: {missing_str}. Don't re-ask what's "
-        "already captured above — use it to go deeper instead.\n"
+
+def _qualification_note(session: SessionState) -> str:
+    """See instruction 8 above — one unified note covering both halves: the
+    5 required qualification questions (question 1 is meddic_pain itself)
+    and the 4 bonus MEDDIC fields beyond them (pain excluded — question 1
+    already covers it). Same "already captured, don't ask again" pattern as
+    _name_note/_company_note, split into a required tier and an optional
+    bonus tier so the agent can tell which is which.
+
+    Escalation is turn-count-based, not wall-clock — a real call showed
+    wall-clock time doesn't distinguish "8 rapid exchanges in 2 minutes"
+    from "4 long exchanges over 20 minutes," and a single gate (the
+    original design: nudge only past 7 elapsed minutes) meant nothing ever
+    nudged the agent in most calls at all. Turn count directly measures how
+    many chances the agent has actually had, so a fast short call and a
+    slow long call both get pressure proportional to real missed
+    openings, not the clock. Only the greeting itself (spoken before any
+    real turn happens, via _greet()) is pressure-free — the first real
+    reply already carries a soft nudge if nothing's captured yet, since a
+    visit might only last a couple of turns and the whole point is
+    gathering something even then. Escalates to a firmer nudge only if
+    turns keep passing with nothing captured — still never a checklist,
+    still one question at a time (matches instruction 0's "don't turn the
+    opening into a discovery interview," which is about not stacking
+    multiple questions at once, not about staying silent)."""
+    required = {
+        "1. What problem brought them here": session.meddic_pain,
+        "2. How they solve it today": session.qual_current_solution,
+        "3. Who'd use it day to day": session.qual_daily_users,
+        "4. What they've already tried": session.qual_past_attempts,
+        "5. Connect with a rep for next steps": session.qual_next_step_response,
+    }
+    bonus = {label: getattr(session, attr) for attr, label in _MEDDIC_LABELS.items() if attr != "meddic_pain"}
+
+    req_captured = {k: v for k, v in required.items() if v}
+    req_missing = [k for k, v in required.items() if not v]
+    bonus_captured = {k: v for k, v in bonus.items() if v}
+    bonus_missing = [k for k, v in bonus.items() if not v]
+
+    lines = ["\nQualification profile so far:"]
+    if req_captured:
+        lines.append("Required questions (captured):")
+        lines.extend(f"- {k}: {v}" for k, v in req_captured.items())
+    if req_missing:
+        lines.append(f"Required questions (still missing — must cover all 5 by call end): {', '.join(req_missing)}.")
+    else:
+        lines.append("All 5 required questions captured.")
+    if bonus_captured:
+        lines.append("Bonus MEDDIC (captured):")
+        lines.extend(f"- {k}: {v}" for k, v in bonus_captured.items())
+    if bonus_missing:
+        lines.append(f"Bonus MEDDIC (optional, still missing): {', '.join(bonus_missing)}.")
+    lines.append(
+        "Don't re-ask anything captured above — and check first whether the prospect's own words "
+        "already answer something still missing (see instruction 8's extraction-first rule) before "
+        "spending a question on it."
     )
+
+    current_turn = len(session.history) // 2
+    turns_since_capture = current_turn - session.last_qual_capture_turn
+
+    if current_turn >= 1:
+        if req_missing:
+            # Naming ONE specific target, not the whole missing list — a
+            # concrete single target is what actually steers the next
+            # reply's question; a passive list left the agent free to
+            # default to a generic product-fit follow-up instead of one
+            # that closes an actual tracked field (confirmed via real
+            # testing). First missing item in question order is the
+            # target — simple and predictable rather than another
+            # judgment call for the model to make.
+            target = req_missing[0]
+            if turns_since_capture >= 3:
+                lines.append(
+                    f"Several turns have passed with nothing new captured — your next reply's "
+                    f"follow-up should be aimed specifically at {target}: reflect back something "
+                    f"they just said, then extend it into one open question toward exactly that "
+                    f"(see instruction 8) — don't ask it cold."
+                )
+            elif turns_since_capture >= 1:
+                lines.append(
+                    f"Nothing's been captured yet on this thread — if your next reply has a "
+                    f"natural opening (even a small one), aim it at {target} specifically rather "
+                    f"than a generic follow-up. This applies from the very first reply on — don't "
+                    f"wait for the conversation to build up first."
+                )
+
+        if not session.qual_next_step_response:
+            if current_turn >= 6:
+                lines.append(
+                    "Question 5 (connecting with a rep for next steps) still hasn't come up and the "
+                    "call has had plenty of turns — raise it naturally before the call ends, don't let "
+                    "it slip."
+                )
+            else:
+                lines.append(
+                    "Question 5 (connecting with a rep) hasn't come up yet — it's fine early on, but if "
+                    "the conversation reaches a natural satisfaction or wrap-up moment at ANY point, "
+                    "ask it right then rather than waiting for a cue below."
+                )
+
+    return "\n".join(lines) + "\n"
 
 
 def _pacing_note(session: SessionState) -> str:
@@ -451,7 +608,7 @@ def _select_with_claude(message: str, session: SessionState) -> AgentResult:
         interruption_note=INTERRUPTION_NOTE if session.was_interrupted else "",
         name_note=_name_note(session),
         company_note=_company_note(session),
-        meddic_note=_meddic_note(session),
+        qualification_note=_qualification_note(session),
         pacing_note=_pacing_note(session),
         history=history,
     )
@@ -494,9 +651,10 @@ def _begin_turn(session: SessionState, message: str) -> None:
 
 def _finalize_turn(session: SessionState, result: AgentResult) -> AgentResult:
     """Shared end-of-turn bookkeeping — persisting anything the model just
-    captured (prospect_name, MEDDIC fields) onto the session, updating
-    current_page if an action fired, and logging the agent's reply. Shared
-    by run_turn() and run_turn_stream() so this only exists in one place."""
+    captured (prospect_name, MEDDIC fields, qualification fields) onto the
+    session, updating current_page if an action fired, and logging the
+    agent's reply. Shared by run_turn() and run_turn_stream() so this only
+    exists in one place."""
     # Consumed for this turn's prompt already — clear so it doesn't leak
     # into a later, unrelated turn.
     session.was_interrupted = False
@@ -505,10 +663,24 @@ def _finalize_turn(session: SessionState, result: AgentResult) -> AgentResult:
     if prospect_name and not session.prospect_name:
         session.prospect_name = prospect_name
 
-    for field_name in _MEDDIC_LABELS:
+    # MEDDIC + qualification fields (see _MEDDIC_LABELS/_QUAL_LABELS) share
+    # the identical "set once, on the turn it's learned" pattern — persisted
+    # to gate_log immediately, the same "don't batch, write as you go"
+    # approach already used for transcript turns below, so this data
+    # survives a process restart or crash mid-call instead of living only in
+    # this in-memory SessionState.
+    for field_name in (*_MEDDIC_LABELS, *_QUAL_LABELS):
         value = result.pop(field_name, None)
         if value and not getattr(session, field_name):
             setattr(session, field_name, value)
+            if session.visitor_id:
+                gate_log.save_qualification_field(session.visitor_id, field_name, value)
+            # len(history)//2 here equals the turn currently being
+            # finalized (the agent's reply for it hasn't been appended
+            # yet) — see _qualification_note's turn-count escalation,
+            # which reads this to know how many turns have passed since
+            # anything was last captured.
+            session.last_qual_capture_turn = len(session.history) // 2
 
     if result.get("action"):
         session.current_page = result["action"]["page"]
@@ -769,7 +941,7 @@ async def _stream_with_claude(message: str, session: SessionState) -> AsyncItera
         interruption_note=INTERRUPTION_NOTE if session.was_interrupted else "",
         name_note=_name_note(session),
         company_note=_company_note(session),
-        meddic_note=_meddic_note(session),
+        qualification_note=_qualification_note(session),
         pacing_note=_pacing_note(session),
         history=history,
     )
@@ -902,3 +1074,46 @@ async def run_turn_stream(message: str, session: SessionState) -> AsyncIterator[
     else:
         result = _fallback_reply(_keyword_match(message))
     yield ("done_fallback", _finalize_turn(session, result))
+
+
+def generate_call_summary(visitor_id: str) -> Optional[str]:
+    """One focused, non-streaming LLM call summarizing a finished call for
+    the admin dashboard — deliberately separate from the live run_turn/
+    run_turn_stream path so it never adds cost or latency to an actual
+    conversation. Called from two places: bot.py's on_client_disconnected
+    (fire-and-forget, right when a call really ends, so a summary is
+    normally already cached by the time an admin looks) and server.py's
+    admin summary endpoint (on-demand fallback for the rare case nothing's
+    cached yet). Returns None if there's no LLM configured or nothing to
+    summarize — callers should just leave the summary uncached in that case
+    rather than persisting a fabricated placeholder."""
+    if _client is None:
+        return None
+    turns = gate_log.list_transcript(visitor_id)
+    if not turns:
+        return None
+    transcript = "\n".join(f"{t['role']}: {t['text']}" for t in turns)
+    try:
+        msg = _client.messages.create(
+            model=_model,
+            # 400, not 150-words-worth (~200): DeepSeek's thinking mode is
+            # disabled below the same way _select_with_claude disables it,
+            # but leaves headroom regardless — confirmed via a real test
+            # that omitting thinking={"type": "disabled"} here let a
+            # thinking block eat into the budget before any summary text
+            # was written at all, truncating it mid-sentence.
+            max_tokens=400,
+            system=(
+                "Summarize this sales call transcript in under 150 words for a sales rep who "
+                "wasn't on the call. Cover: what the prospect needed, what was shown/discussed, "
+                "how qualified they seem, and any clear next step. Plain prose, no headers or "
+                "bullet points."
+            ),
+            thinking={"type": "disabled"},
+            messages=[{"role": "user", "content": transcript}],
+        )
+        text_block = next((b for b in msg.content if b.type == "text"), None)
+        return text_block.text.strip() if text_block else None
+    except Exception:
+        logger.exception(f"Failed to generate call summary for visitor {visitor_id}")
+        return None

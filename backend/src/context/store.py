@@ -16,8 +16,8 @@ from ..persona import AGENT_NAME
 # seeding it into history here means run_turn's very next call already sees
 # it as the opening turn.
 OPENING_GREETING = (
-    f"Hi, I'm {AGENT_NAME}, sales rep at SwishX — here to walk you through the demo. "
-    "Feel free to raise your hand anytime if something comes to mind — what can I help you with?"
+    f"Hi, I'm {AGENT_NAME}, sales rep at SwishX. Want me to give you a walkthrough of the "
+    "platform, or is there something specific on your mind first?"
 )
 
 
@@ -29,8 +29,8 @@ def build_greeting(prospect_name: Optional[str] = None) -> str:
     if not prospect_name:
         return OPENING_GREETING
     return (
-        f"Hi {prospect_name}, I'm {AGENT_NAME}, sales rep at SwishX — here to walk you through the demo. "
-        "Feel free to raise your hand anytime if something comes to mind — what can I help you with?"
+        f"Hi {prospect_name}, I'm {AGENT_NAME}, sales rep at SwishX. Want me to give you a "
+        "walkthrough of the platform, or is there something specific on your mind first?"
     )
 
 
@@ -73,6 +73,23 @@ class SessionState:
     meddic_decision_process: Optional[str] = None
     meddic_pain: Optional[str] = None
     meddic_champion: Optional[str] = None
+    # The 5-question qualification KPI (see runtime.py's
+    # _qualification_note) — question 1 ("what problem brought them here")
+    # deliberately has no field of its own here; it's satisfied by
+    # meddic_pain above, since asking both would be two near-identical
+    # questions back to back. Same "set once, on the turn it's learned"
+    # pattern as the MEDDIC fields.
+    qual_current_solution: Optional[str] = None
+    qual_daily_users: Optional[str] = None
+    qual_past_attempts: Optional[str] = None
+    qual_next_step_response: Optional[str] = None
+    # Turn number (see runtime.py's _qualification_note — len(history)//2)
+    # the last qualification/MEDDIC field was captured on, 0 if none yet.
+    # Drives turn-count-based escalating pressure instead of a wall-clock
+    # gate — a fast-paced short call and a slow long call both get
+    # proportional nudging based on actual missed opportunities, not
+    # elapsed minutes, which don't distinguish the two.
+    last_qual_capture_turn: int = 0
     # Wall-clock start of this session (monotonic, not calendar time) — lets
     # the prompt tell the agent how long the call has actually been running,
     # so it can pace itself toward the ~10 minute target instead of pacing

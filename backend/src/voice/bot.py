@@ -45,7 +45,9 @@ from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.workers.runner import WorkerRunner
 
+from ..agent.runtime import generate_call_summary
 from ..context.store import start_session
+from ..data import gate_log
 from .agent_processor import (
     IDLE_CHECK_INTERVAL_SECS,
     IDLE_TIMEOUT_SECS,
@@ -66,6 +68,23 @@ transport_params = {
         serializer=ProtobufFrameSerializer(),
     ),
 }
+
+
+async def _save_call_summary(visitor_id: str) -> None:
+    """Fired as a background task from on_client_disconnected, right when a
+    call actually ends, so the AI call summary (see runtime.py's
+    generate_call_summary) is normally already cached by the time an admin
+    looks at this visitor in /admin — the endpoint there only needs its
+    on-demand fallback for the rare case this hasn't finished yet. Runs the
+    underlying LLM call in a thread since the Anthropic SDK call it makes is
+    synchronous/blocking, and this must not stall the event loop other
+    in-flight work (idle-watch teardown, voice-lock release above) runs on."""
+    try:
+        summary = await asyncio.to_thread(generate_call_summary, visitor_id)
+        if summary:
+            gate_log.save_call_summary(visitor_id, summary)
+    except Exception:
+        logger.exception(f"Failed to generate/save call summary for visitor {visitor_id}")
 
 
 async def _release_voice_lock(visitor_id: str) -> None:
@@ -123,6 +142,7 @@ async def _watch_idle(agent: AgentRuntimeProcessor, worker: PipelineWorker, visi
                 await asyncio.sleep(0.1)
             await worker.cancel()
             await _release_voice_lock(visitor_id)
+            asyncio.create_task(_save_call_summary(visitor_id))
             return
     except asyncio.CancelledError:
         pass
@@ -226,6 +246,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         idle_watch_task.cancel()
         await worker.cancel()
         await _release_voice_lock(visitor_id)
+        asyncio.create_task(_save_call_summary(visitor_id))
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)

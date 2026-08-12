@@ -157,6 +157,11 @@ export interface AdminSession {
   path: string;
   status: string;
   created_at: string;
+  // The 5-question qualification KPI + 4 bonus MEDDIC fields, keyed by their
+  // raw field name (see backend agent/runtime.py's _QUAL_LABELS/
+  // _MEDDIC_LABELS) — only present for fields actually captured this
+  // session, absent otherwise.
+  qualification: Record<string, string>;
 }
 
 export interface AdminVisitorDetail {
@@ -180,6 +185,10 @@ export interface TranscriptTurn {
 
 export function getAdminTranscript(visitorId: string) {
   return getJson<TranscriptTurn[]>(`/api/admin/transcript/${encodeURIComponent(visitorId)}`);
+}
+
+export function getAdminCallSummary(visitorId: string) {
+  return getJson<{ summary: string | null }>(`/api/admin/summary/${encodeURIComponent(visitorId)}`);
 }
 
 /**

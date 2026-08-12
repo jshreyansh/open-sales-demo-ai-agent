@@ -12,5 +12,5 @@ export const AGENT_PHOTO = agentPhoto;
 // of the same line ever reaches it), but the *name* portion tracks AGENT_NAME here
 // same as the backend's tracks AGENT_NAME there.
 export const AGENT_GREETING =
-  `Hi, I'm ${AGENT_NAME}, sales rep at SwishX — here to walk you through the demo. ` +
-  "Feel free to raise your hand anytime if something comes to mind — what can I help you with?";
+  `Hi, I'm ${AGENT_NAME}, sales rep at SwishX. Want me to give you a walkthrough of the ` +
+  "platform, or is there something specific on your mind first?";

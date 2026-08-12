@@ -1,9 +1,87 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getAdminTranscript, getAdminVisitorDetail, type AdminVisitorDetail as Detail, type TranscriptTurn } from "../../lib/api";
+import {
+  getAdminCallSummary,
+  getAdminTranscript,
+  getAdminVisitorDetail,
+  type AdminVisitorDetail as Detail,
+  type TranscriptTurn,
+} from "../../lib/api";
 
 function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+}
+
+// Mirrors backend agent/runtime.py's _QUAL_LABELS/_MEDDIC_LABELS keys exactly
+// — the backend owns capture logic and raw field names, this owns display
+// copy, same split of responsibility as the rest of this app's UI code.
+const REQUIRED_QUAL_FIELDS: [key: string, label: string][] = [
+  ["meddic_pain", "1. What problem brought them here"],
+  ["qual_current_solution", "2. How they solve it today"],
+  ["qual_daily_users", "3. Who'd use it day to day"],
+  ["qual_past_attempts", "4. What they've already tried"],
+  ["qual_next_step_response", "5. Connect with a rep for next steps"],
+];
+
+const BONUS_MEDDIC_FIELDS: [key: string, label: string][] = [
+  ["meddic_metrics", "Metrics"],
+  ["meddic_economic_buyer", "Economic Buyer"],
+  ["meddic_decision_criteria", "Decision Criteria"],
+  ["meddic_decision_process", "Decision Process"],
+  ["meddic_champion", "Champion"],
+];
+
+function QualificationProfile({ qualification }: { qualification: Record<string, string> }) {
+  const bonusCaptured = BONUS_MEDDIC_FIELDS.filter(([key]) => qualification[key]);
+
+  return (
+    <div className="admin-qualification">
+      <h3 className="admin-qualification__title">Qualification (5 required questions)</h3>
+      <dl className="admin-qualification__list">
+        {REQUIRED_QUAL_FIELDS.map(([key, label]) => (
+          <div key={key} className="admin-qualification__row">
+            <dt>{label}</dt>
+            <dd className={qualification[key] ? "" : "admin-qualification__missing"}>
+              {qualification[key] || "Not captured"}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {bonusCaptured.length > 0 && (
+        <>
+          <h4 className="admin-qualification__subtitle">Additional insights (MEDDIC)</h4>
+          <dl className="admin-qualification__list">
+            {bonusCaptured.map(([key, label]) => (
+              <div key={key} className="admin-qualification__row">
+                <dt>{label}</dt>
+                <dd>{qualification[key]}</dd>
+              </div>
+            ))}
+          </dl>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Fetched only once its session is expanded, same lazy-load reasoning as
+// SessionTranscript below — most sessions won't be looked at.
+function CallSummary({ visitorId }: { visitorId: string }) {
+  const [summary, setSummary] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    getAdminCallSummary(visitorId).then((r) => setSummary(r.summary));
+  }, [visitorId]);
+
+  if (summary === undefined) return <div className="admin__loading">Generating summary…</div>;
+  if (!summary) return <div className="admin__empty">No summary yet — the call may still be in progress.</div>;
+
+  return (
+    <div className="admin-call-summary">
+      <h3 className="admin-call-summary__title">AI Call Summary</h3>
+      <p>{summary}</p>
+    </div>
+  );
 }
 
 // One session's transcript, fetched only once its row is expanded — most
@@ -88,7 +166,11 @@ export default function AdminVisitorDetail() {
               {expanded && (
                 <div className="admin-session__body">
                   {s.status === "allowed" ? (
-                    <SessionTranscript visitorId={s.visitor_id} />
+                    <>
+                      <QualificationProfile qualification={s.qualification} />
+                      <CallSummary visitorId={s.visitor_id} />
+                      <SessionTranscript visitorId={s.visitor_id} />
+                    </>
                   ) : (
                     <div className="admin__empty">Blocked at the gate — no conversation happened.</div>
                   )}
