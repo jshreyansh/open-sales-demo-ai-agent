@@ -430,18 +430,30 @@ UI_REGISTRY: List[RegistryPage] = [
                 label="MagicReel wizard",
                 description=(
                     "The MagicReel™ video-creation wizard — 5 steps in order: Source (brand dossier / news "
-                    "article / custom brief), Brief (audience, topics, goal, voice, language, logo), Script "
-                    "(structure + length, then generate/review the draft script), Scenes (review and edit each "
-                    "scene's narration/visual direction), Generate (pick HD or Cinematic 4K and render). Jumping "
-                    "ahead to Scenes or Generate before a script exists auto-drafts a placeholder script so the "
-                    "screen isn't empty."
+                    "article / custom brief — 3 tabs, individually selectable), Brief (3 sub-stages — Audience "
+                    "Configuration, Voice & Language, Brand & Product — individually jumpable), Script "
+                    "(structure + length, then a real 'Generate script' button that drafts it), Scenes (review "
+                    "and edit each scene's narration/visual direction), Generate (HD/Cinematic tier selectable, "
+                    "then a real 'Generate' button that actually renders and shows the result). Jumping ahead to "
+                    "Scenes or Generate before a script exists auto-drafts a placeholder script so the screen "
+                    "isn't empty."
                 ),
                 actions=[
                     RegistryAction(id="step-source", description="Open MagicReel at the Source step (pick brand dossier / news / custom brief)"),
+                    RegistryAction(id="select-source-dossier", description="On the Source step, switch to the Brand Dossier tab"),
+                    RegistryAction(id="select-source-news", description="On the Source step, switch to the News Article tab"),
+                    RegistryAction(id="select-source-custom", description="On the Source step, switch to the Custom brief tab"),
                     RegistryAction(id="step-brief", description="Jump to the Brief step (audience, topics, goal, voice, language, logo)"),
+                    RegistryAction(id="brief-audience", description="Within the Brief step, jump to the Audience Configuration sub-stage"),
+                    RegistryAction(id="brief-voice-language", description="Within the Brief step, jump to the Voice & Language sub-stage"),
+                    RegistryAction(id="brief-brand-product", description="Within the Brief step, jump to the Brand & Product sub-stage"),
                     RegistryAction(id="step-script", description="Jump to the Script step (structure, length, generate the draft script)"),
+                    RegistryAction(id="generate-script", description="On the Script step, press Generate (or Regenerate) script"),
                     RegistryAction(id="step-scenes", description="Jump to the Scenes step (review/edit each scene)"),
                     RegistryAction(id="step-generate", description="Jump to the Generate step (video quality tier, render)"),
+                    RegistryAction(id="select-tier-hd", description="On the Generate step, select the HD quality tier"),
+                    RegistryAction(id="select-tier-cinematic", description="On the Generate step, select the Cinematic 4K quality tier"),
+                    RegistryAction(id="start-generation", description="On the Generate step, actually press 'Generate reel' — starts rendering and shows the loading screen, then the result"),
                 ],
             ),
             _scroll_component(),
@@ -470,15 +482,21 @@ UI_REGISTRY: List[RegistryPage] = [
                 label="MagicAvatar Master wizard",
                 description=(
                     "The Digital Twin Master Video wizard — 4 steps in order: Brief (script/notes, persona, "
-                    "aesthetic), Scenes (the team's scene breakdown + visual direction), Options (HD/Cinematic "
-                    "4K, background music), Generate (render the silent master). Jumping ahead before scenes "
-                    "exist auto-drafts a placeholder breakdown so the screen isn't empty."
+                    "aesthetic, then a real button that turns it into a scene breakdown), Scenes (the team's "
+                    "scene breakdown + visual direction), Options (HD/Cinematic tier selectable, background "
+                    "music), Generate (a real 'Generate' button that actually renders the silent master and "
+                    "shows the result). Jumping ahead before scenes exist auto-drafts a placeholder breakdown "
+                    "so the screen isn't empty."
                 ),
                 actions=[
                     RegistryAction(id="step-brief", description="Jump to the Brief step (script/notes, persona, aesthetic)"),
+                    RegistryAction(id="generate-breakdown", description="On the Brief step, press the button that turns the brief into a scene breakdown"),
                     RegistryAction(id="step-scenes", description="Jump to the Scenes step (scene breakdown + visual direction)"),
                     RegistryAction(id="step-options", description="Jump to the Options step (video quality tier, music)"),
+                    RegistryAction(id="select-tier-hd", description="On the Options step, select the HD quality tier"),
+                    RegistryAction(id="select-tier-cinematic", description="On the Options step, select the Cinematic 4K quality tier"),
                     RegistryAction(id="step-generate", description="Jump to the Generate step (render the master)"),
+                    RegistryAction(id="start-generation", description="On the Generate step, actually press 'Generate' — starts rendering and shows the loading screen, then the result"),
                 ],
             ),
             _scroll_component(),

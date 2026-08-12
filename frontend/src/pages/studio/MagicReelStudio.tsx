@@ -86,10 +86,50 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
 
   useRegisterComponent("magicreel-studio", "wizard", {
     "step-source": () => goToStep(0),
+    "select-source-dossier": () => {
+      goToStep(0);
+      setLane("dossier");
+    },
+    "select-source-news": () => {
+      goToStep(0);
+      setLane("news");
+    },
+    "select-source-custom": () => {
+      goToStep(0);
+      setLane("custom");
+    },
     "step-brief": () => goToStep(1),
+    "brief-audience": () => {
+      goToStep(1);
+      setBriefSub(0);
+    },
+    "brief-voice-language": () => {
+      goToStep(1);
+      setBriefSub(1);
+    },
+    "brief-brand-product": () => {
+      goToStep(1);
+      setBriefSub(2);
+    },
     "step-script": () => goToStep(2),
+    "generate-script": () => {
+      goToStep(2);
+      generateScript();
+    },
     "step-scenes": () => goToStep(3),
     "step-generate": () => goToStep(4),
+    "select-tier-hd": () => {
+      goToStep(4);
+      setTier("hd");
+    },
+    "select-tier-cinematic": () => {
+      goToStep(4);
+      setTier("cinematic");
+    },
+    "start-generation": () => {
+      goToStep(4);
+      setGenerating(true);
+    },
   });
 
   function toggleTopic(t: string) {

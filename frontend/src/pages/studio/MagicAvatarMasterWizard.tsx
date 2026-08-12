@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Icon from "../../components/Icon";
 import StepBar from "../../components/studio/StepBar";
 import TeamDock from "../../components/studio/TeamDock";
@@ -14,6 +14,11 @@ interface MagicAvatarMasterWizardProps {
   onStepChange: (step: number) => void;
   scenes: Scene[];
   onScenesChange: (scenes: Scene[]) => void;
+  tier: "hd" | "cinematic";
+  onTierChange: (tier: "hd" | "cinematic") => void;
+  generating: boolean;
+  onGeneratingChange: (generating: boolean) => void;
+  registerSegmentAndDirect: (fn: (() => void) | null) => void;
   onBack: () => void;
   onDone: () => void;
 }
@@ -25,12 +30,35 @@ interface MagicAvatarMasterWizardProps {
  * the Launchpad's step 1: a silent, reusable presenter video, personalized
  * per-doctor later, outside this flow.
  *
- * `step`/`scenes` are controlled by the parent (MagicAvatarStudio) rather
- * than local state, so the agent's registered step actions — which live on
- * the always-mounted parent — can jump here even before this component
- * exists yet.
+ * `step`/`scenes`/`tier`/`generating` are ALL controlled by the parent
+ * (MagicAvatarStudio) rather than local state, and every agent-triggerable
+ * action (step-jumps, tier selection, generate) is registered there too —
+ * on the always-mounted parent, not here. A prior version moved the
+ * wizard-internal actions into this component instead, reasoning they only
+ * make sense once mounted anyway — but that meant a single combined
+ * request ("start it and skip to generate") could ask for an action here
+ * before this component ever mounted, which silently queued and never
+ * fired, while the conversation kept talking as if it had worked. Keeping
+ * one single, always-reliable registration point (matching how `step`/
+ * `scenes` already worked) avoids that regardless of what order things get
+ * asked for. `segmentAndDirect` is the one exception — it needs this
+ * component's own local persona/name fields — so instead of lifting those
+ * too, this component hands the parent a live reference to the function via
+ * `registerSegmentAndDirect`, cleared on unmount.
  */
-export default function MagicAvatarMasterWizard({ step, onStepChange: setStep, scenes, onScenesChange: setScenes, onBack, onDone }: MagicAvatarMasterWizardProps) {
+export default function MagicAvatarMasterWizard({
+  step,
+  onStepChange: setStep,
+  scenes,
+  onScenesChange: setScenes,
+  tier,
+  onTierChange: setTier,
+  generating,
+  onGeneratingChange: setGenerating,
+  registerSegmentAndDirect,
+  onBack,
+  onDone,
+}: MagicAvatarMasterWizardProps) {
   const [name, setName] = useState("");
   const [script, setScript] = useState("");
   const [persona, setPersona] = useState("");
@@ -39,10 +67,8 @@ export default function MagicAvatarMasterWizard({ step, onStepChange: setStep, s
   const [addIntro, setAddIntro] = useState(true);
   const [addOutro, setAddOutro] = useState(true);
 
-  const [tier, setTier] = useState<"hd" | "cinematic">("hd");
   const [musicTab, setMusicTab] = useState<MusicTab>("none");
   const [musicId, setMusicId] = useState<string | null>(null);
-  const [generating, setGenerating] = useState(false);
 
   function segmentAndDirect() {
     setSegmenting(true);
@@ -52,6 +78,16 @@ export default function MagicAvatarMasterWizard({ step, onStepChange: setStep, s
       setStep(1);
     }, 1300);
   }
+
+  // Hands the parent a live reference so its always-mounted "generate-
+  // breakdown" action can trigger this component's own function — cleared
+  // on unmount so the parent never calls a stale reference into an
+  // unmounted component.
+  useEffect(() => {
+    registerSegmentAndDirect(segmentAndDirect);
+    return () => registerSegmentAndDirect(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persona, name]);
 
   return (
     <div className="page studio">
