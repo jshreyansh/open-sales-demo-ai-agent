@@ -48,6 +48,14 @@ AUTO_CONTINUE_WATCHDOG_INTERVAL_SECS = 2.0
 # for a dead chain.
 AUTO_CONTINUE_STALL_GRACE_SECS = 2.0
 
+# How often _poll_hand_raise checks the REST API's mailbox for a raised
+# hand. Used to be 1.0s — a raise landing right after a tick meant up to a
+# full second before the system even noticed, on top of whatever a
+# sentence-boundary wait added on top of that. Tightened so a raise reads
+# as prompt, not laggy; still cheap enough (one small HTTP GET) not to be
+# worth throttling further.
+HAND_RAISE_POLL_INTERVAL_SECS = 0.3
+
 REST_API_URL = "http://localhost:8787"
 
 # Ends the call after this much total silence from both sides — someone who
@@ -86,12 +94,16 @@ IDLE_CHECK_INTERVAL_SECS = 15
 # ChatGPT's own voice mode and Agora's Conversational AI filler-word feature
 # both use: short, replaceable, no immediate repeat (see _pick_filler).
 #
-# Split into two pools because a filler that only makes sense as a reply to a
-# question ("good question") read as wrong/confusing when the prospect had
-# actually just made a statement — QUESTION_FILLERS is only drawn from when
-# the transcript actually looks like a question (see _is_question).
-NEUTRAL_FILLERS = ["Okay —", "Right —", "Sure —", "Hmm —", "Mhm —", "Let me see —"]
-QUESTION_FILLERS = ["Good question —", "Great question —", "Let's see —"]
+# Two distinct pools, chosen by what the filler is actually doing (see
+# _pick_filler / _is_question) rather than mixed together at random:
+# THINKING_FILLERS ("Hmm —") for when the prospect asked a real question and
+# the agent needs a beat to actually think before answering; FLOOR_FILLERS
+# ("Um —") for when they just made a statement/comment and the agent is
+# simply holding the floor for a moment before continuing, not thinking hard.
+# Previously both cases drew from an overlapping pool, which read as
+# unnatural (e.g. "Hmm —" before a plain acknowledgment).
+THINKING_FILLERS = ["Hmm —", "Hmm, let's see —", "Hmm, good question —", "Let me think —"]
+FLOOR_FILLERS = ["Um —", "Mm —", "Okay, um —", "Sure, um —"]
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
@@ -244,9 +256,18 @@ class AgentRuntimeProcessor(FrameProcessor):
         # (see _maybe_replay_pending_interruption), so a genuine barge-in's
         # actual words are never just thrown away.
         self._pending_interruption_text: Optional[str] = None
+        # Counts consecutive stash-replays chained back-to-back with no
+        # normal, non-replayed turn in between (see _advance_after_turn) —
+        # capped at one. Without a cap, someone saying two or three
+        # different things in a row while the bot was mid-turn each got
+        # a full, separate answer chained one after another, which reads
+        # as the agent "queuing up" and reciting multiple unrelated replies
+        # instead of engaging with what's current. Reset to 0 any time a
+        # turn ends with nothing left stashed.
+        self._interruption_replay_depth = 0
 
     def _pick_filler(self, heard_text: str) -> str:
-        pool = QUESTION_FILLERS + NEUTRAL_FILLERS if _is_question(heard_text) else NEUTRAL_FILLERS
+        pool = THINKING_FILLERS if _is_question(heard_text) else FLOOR_FILLERS
         choices = [f for f in pool if f != self._last_filler] or pool
         filler = random.choice(choices)
         self._last_filler = filler
@@ -436,12 +457,30 @@ class AgentRuntimeProcessor(FrameProcessor):
         docstring): if one landed while this turn was in flight, replay it
         as the next real turn right now instead of scheduling the next
         scripted beat, so a genuine barge-in never just gets silently
-        skipped over in favor of the tour continuing on schedule."""
+        skipped over in favor of the tour continuing on schedule.
+
+        Only ever chains ONE such replay in a row (_interruption_replay_depth).
+        _pending_interruption_text already always holds just the latest
+        overwrite, never a backlog — but a person can genuinely say two or
+        three different things in the seconds it takes to work through each
+        one, and chaining a full reply for every single one back-to-back is
+        what read as the agent "queuing up" and answering several unrelated
+        things in a row instead of engaging with what's current. Capping at
+        one still guarantees the most recent thing said is never silently
+        dropped; anything stacked on top of that gets a short, honest
+        "still catching up" instead of another full unrelated answer."""
         pending = self._pending_interruption_text
         if pending is not None:
             self._pending_interruption_text = None
+            if self._interruption_replay_depth >= 1:
+                self._interruption_replay_depth = 0
+                await self._speak("Sorry, I'm still catching up — could you say that again?", direction)
+                self._maybe_schedule_auto_continue(session, direction)
+                return
+            self._interruption_replay_depth += 1
             await self._handle_real_turn(pending, direction)
             return
+        self._interruption_replay_depth = 0
         self._maybe_schedule_auto_continue(session, direction)
 
     async def _greet(self, direction: FrameDirection) -> None:
@@ -706,7 +745,16 @@ class AgentRuntimeProcessor(FrameProcessor):
         # covers the common case (it cancels this task outright); this is a
         # defensive second check for the narrow window where the task is
         # already past its cancellation point but hasn't started speaking.
-        if self._turn_in_progress or self._bot_speaking:
+        #
+        # _user_speaking matters here specifically: VAD only fires on the
+        # EDGE of speech (VADUserStartedSpeakingFrame), so if the user was
+        # already mid-utterance when this timer was scheduled and is STILL
+        # talking now, there's no new VAD-start event left to trigger
+        # _cancel_pending_auto_continue or broadcast_interruption — without
+        # this check this beat would start speaking straight over them with
+        # nothing to stop it. _watch_auto_continue_stall already reschedules
+        # once things go idle, so bailing here is safe, not a dead end.
+        if self._turn_in_progress or self._bot_speaking or self._user_speaking:
             # Bail without firing this beat, but still clear the reference —
             # this task is done either way, and leaving a stale non-None
             # reference here would permanently convince
@@ -824,7 +872,7 @@ class AgentRuntimeProcessor(FrameProcessor):
         try:
             async with aiohttp.ClientSession() as http:
                 while True:
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(HAND_RAISE_POLL_INTERVAL_SECS)
                     try:
                         async with http.get(
                             f"{REST_API_URL}/internal/hand-raise/{self._visitor_id}",
@@ -836,6 +884,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                         logger.exception(f"Failed to poll hand-raise for visitor {self._visitor_id}")
                         continue
 
+                    fresh_raise = raised and not self._hand_raised
                     if raised != self._hand_raised:
                         # Either edge (fresh raise, or the visitor lowering
                         # it) resets the ack gate — a fresh raise deserves
@@ -844,13 +893,25 @@ class AgentRuntimeProcessor(FrameProcessor):
                         # does this; polling the same still-raised state
                         # tick after tick must not re-open the gate.
                         self._hand_ack_sent = False
-                    if raised and not self._hand_raised:
+                    if fresh_raise:
                         # Counts as activity even though it's not speech — a
                         # hand-raise is a genuine engagement signal, and
                         # someone who just raised their hand shouldn't get
                         # idled out from under them before they even speak.
                         self._last_activity = time.monotonic()
                     self._hand_raised = raised
+
+                    if fresh_raise and self._bot_speaking:
+                        # A raised hand means "stop right now," not "finish
+                        # your sentence first" — cut audio the exact same way
+                        # a real VAD barge-in does (see
+                        # VADUserStartedSpeakingFrame above) instead of
+                        # relying on _speak_reply's own sentence-boundary
+                        # check, which could otherwise let a long sentence
+                        # (or a whole multi-sentence reply, mid-stream) run
+                        # all the way out before reacting.
+                        self._interrupted_this_turn = True
+                        await self.broadcast_interruption()
 
                     if self._hand_raised and not self._hand_ack_sent and not self._turn_in_progress:
                         # Genuinely idle when the raise landed — nothing else

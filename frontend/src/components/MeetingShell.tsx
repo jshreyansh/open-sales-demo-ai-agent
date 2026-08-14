@@ -19,6 +19,13 @@ interface MeetingShellProps {
 
 const MEETING_CODE = "demo-call-pnx";
 const JOIN_COUNTDOWN_SECS = 5;
+// A quick double-click/double-tap on the hand-raise button toggled
+// raise->lower->raise within a second or two, which the backend correctly
+// reads as two genuine, separate raises (each deserving its own spoken
+// handoff) — reading, from the visitor's side, as the agent repeating
+// itself for what looked like one click. This is purely a debounce against
+// that accidental double-toggle, not a rate limit on genuine re-raises.
+const HAND_RAISE_DEBOUNCE_MS = 800;
 
 function useClock() {
   const [now, setNow] = useState(new Date());
@@ -156,7 +163,11 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
   // off once (see agent_processor.py's _hand_ack_sent) but never lowers the
   // hand itself, since only the visitor really knows when their question's
   // been answered.
+  const lastHandRaiseToggle = useRef(0);
   function handleToggleHandRaise() {
+    const now = Date.now();
+    if (now - lastHandRaiseToggle.current < HAND_RAISE_DEBOUNCE_MS) return;
+    lastHandRaiseToggle.current = now;
     const next = !handRaised;
     setHandRaised(next);
     void setHandRaiseState(visitorId, next);

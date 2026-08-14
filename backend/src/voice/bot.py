@@ -197,7 +197,18 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     # its own separate transcript — see AgentRuntimeProcessor's turn-lock,
     # which is the other half of handling overlapping speech; this just
     # reduces how often it needs to kick in.
-    vad = VADProcessor(vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=1.0)))
+    #
+    # start_secs defaults to 0.2 — how long a real barge-in has to wait
+    # before VAD will even declare "user started speaking" at all. Measured
+    # on a real interrupted call: once VAD fires, broadcast_interruption
+    # cuts audio in ~5ms — the entire perceived "lag before it goes silent"
+    # people notice on barge-in is this confirmation window, not anything
+    # downstream. Trimmed to 0.12 to make barge-in read as prompt rather
+    # than laggy; kept above 0 (rather than removed entirely) since that's
+    # the debounce against false-triggering on a breath/cough/mic bleed —
+    # the exact false-VAD problem this pipeline already fought once. Re-test
+    # for false positives before trimming further.
+    vad = VADProcessor(vad_analyzer=SileroVADAnalyzer(params=VADParams(start_secs=0.12, stop_secs=1.0)))
     # `prompt` is Whisper's standard vocabulary-biasing hint — it doesn't
     # force these words, just nudges ambiguous audio toward them. Added
     # after a real call transcribed "give me a walkthrough" as "give me a

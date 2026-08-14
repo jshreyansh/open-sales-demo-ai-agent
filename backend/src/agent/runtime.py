@@ -372,8 +372,13 @@ def _tool_schema() -> dict:
                         "go-ahead, to resume at your current step after answering an interruption, or "
                         "to jump straight to a step they specifically asked for. Do NOT use this to "
                         "start the walkthrough — that's \"start_walkthrough\" above, which always wins "
-                        "on the turn it's true (this field is ignored that turn). Omit on any turn that "
-                        "doesn't change your position in the tour. See the walkthrough note below."
+                        "on the turn it's true (this field is ignored that turn). This field ONLY tracks "
+                        "position in the scripted 10-step platform tour (see the walkthrough note below, "
+                        "which tells you plainly whether one is active) — it has nothing to do with "
+                        "narrating your own progress through a studio wizard's internal steps (MagicReel's "
+                        "Source/Brief/Script/Scenes/Generate, MagicAvatar's own steps, per instruction 2c). "
+                        "Never set it there; it's silently ignored outside an active scripted tour anyway. "
+                        "Omit on any turn that doesn't change your position in the actual scripted tour."
                     ),
                 },
                 "end_walkthrough": {
@@ -523,6 +528,8 @@ How to behave, in priority order:
 
 1. If the prospect describes their own business problem, workflow, or use case (rather than asking to see a specific feature), your job is to *reason* about it: think about which of the capabilities above are actually relevant to what they described and explain specifically why — connect their situation to the product, don't just list features. Only trigger an action if showing something concrete would actually help make the point, and say what you're about to show before doing it. If nothing above is genuinely relevant to what they described, say so honestly instead of forcing a connection.
 2. Listen for what's actually being asked. A follow-up question ("what kinds of X are there?", "why would I need that?", "how much does that cost?") is not a request to repeat an action you already did — it's a request for you to *explain*, using what you know. Only set "action" when the prospect is asking to see or be taken to something new.
+
+2z. Speech-to-text sometimes hands you a transcript that's fragmentary, garbled, or just a stray name/word with no real content (e.g. "Can you show me, Vê?" or "I want to see the magic real lot"). If you genuinely can't tell what they're asking for — not just an unusual phrasing you can still reason through, but actually unclear — don't guess at an action or force an answer onto the nearest topic. Say so plainly and ask them to repeat it ("Sorry, I didn't quite catch that — could you say it again?"), set no "action" this turn, and wait for their next turn instead.
 2a. In Content Studio specifically, every one of the 30 formats (component ids like "magicsave", "magicdossier", etc, action "open") is a *more specific* match than its engine tab (component ids ending "-tab", action "click"). If the prospect describes something one specific format actually does — not just a category — you MUST use that format's "open" action, never the tab "click" action. Example: asked about co-pay cards, use {{"page": "content-studio", "component": "magicsave", "method": "open"}}, NOT the canvas-tab click. Only use a "-tab" click when they're asking to browse a whole category ("what video stuff do you have?") rather than one specific thing.
 2b. Each Content Studio format's description ends with its real status. If it says "not yet built in this workspace", say so plainly and naturally (e.g. "that one's on the roadmap, not live yet") before or alongside describing it — don't imply something already exists when it's still coming soon.
 2c. Only MagicReel and MagicAvatar have a real, walkable studio behind their format modal — the "magicreel-studio" and "magicavatar-studio" pages. Once the prospect wants to actually move past looking at the format's spec into building one ("let's make one", "walk me through it", "show me the actual flow"), use those pages' step actions instead of re-opening the format modal. Go one step at a time, in order (Source → Brief → Script → Scenes → Generate for MagicReel; Launchpad → Brief → Scenes → Options → Generate for MagicAvatar) — narrate what you're about to show before each jump, the same way a person walks someone through a tool rather than teleporting through it. Don't skip steps just to get to the end faster. Every other format has no studio to enter yet — for those, the modal is as far as it goes.
@@ -619,11 +626,14 @@ def _name_note(session: SessionState) -> str:
     if session.prospect_name:
         name = session.prospect_name
         return (
-            f"\nThe prospect's name is {name} — use it naturally now and then, not every line. A "
-            "confident, classic close pattern: after you've proposed something or checked in, end with "
-            f"a warm tag question using their name — \"Sound good, {name}?\", \"Make sense, {name}?\", "
-            f"\"That work for you, {name}?\" Sprinkle this in every few turns, not constantly — it should "
-            "read as genuine rapport, not a verbal tic.\n"
+            f"\nThe prospect's name is {name}. Use it RARELY — roughly once every 4-5 of your replies "
+            "at most, never in back-to-back turns, and never just to soften an ordinary sentence "
+            f"(\"Great question, {name}\", \"Absolutely, {name}\", \"So this is {name}...\" are the "
+            "pattern to avoid — confirmed from a real call where nearly every single reply used it, "
+            "which reads as a verbal tic, not warmth). Save it for one deliberate moment: a "
+            "confident, classic close pattern, after you've proposed something or checked in, ending "
+            f"with a warm tag question — \"Sound good, {name}?\", \"Make sense, {name}?\", \"That work "
+            f"for you, {name}?\" Most of your replies should have no name in them at all.\n"
         )
     return (
         "\nYou don't have the prospect's name yet. If they introduce themselves in their next message, "
@@ -996,7 +1006,26 @@ def _finalize_turn(session: SessionState, result: AgentResult) -> AgentResult:
     elif start_walkthrough:
         session.walkthrough_step = 1
     elif new_step is not None:
-        session.walkthrough_step = new_step
+        if prev_walkthrough_step is not None:
+            session.walkthrough_step = new_step
+        else:
+            # No scripted tour actually active (and start_walkthrough wasn't
+            # set this turn either) — this field is meant ONLY for position
+            # within the scripted 10-step walkthrough, but the model sets it
+            # from other context too, e.g. narrating an ad hoc studio
+            # wizard's own internal steps (Source/Brief/Script/...), which
+            # has nothing to do with the scripted tour. Applying it here
+            # would silently re-arm the auto-continue scheduler and inject
+            # an old, unrelated scripted-tour beat into the middle of an
+            # unrelated conversation — confirmed happening on a real call
+            # (walkthrough_step went None -> 3 mid-wizard, then the
+            # scheduler spoke a stale MagicReel beat minutes later,
+            # unprompted). Only an active tour or a fresh start_walkthrough
+            # may ever move this field.
+            logger.warning(
+                f"[{session.visitor_id}] ignoring walkthrough_step={new_step!r} — no active scripted "
+                "walkthrough and start_walkthrough wasn't set this turn, likely ad hoc wizard narration"
+            )
 
     # Unlike the fields above, this one is a hard reset every turn (True
     # only on the exact turn the model set it, False otherwise) rather than
