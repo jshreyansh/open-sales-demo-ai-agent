@@ -1,11 +1,12 @@
 import array
 import asyncio
 import contextlib
+import dataclasses
 import random
 import re
 import time
 import uuid
-from typing import Optional
+from typing import Callable, Optional
 
 import aiohttp
 from loguru import logger
@@ -26,8 +27,9 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from ..agent.runtime import run_turn_stream, run_walkthrough_continuation
+from ..agent.runtime import commit_prefetched_turn, run_turn_stream, run_walkthrough_continuation
 from ..context.store import OPENING_GREETING, get_session
+from ..data import gate_log
 
 # Short "breathing room" between one walkthrough beat finishing and the next
 # starting on its own — long enough that an interruption landing right after
@@ -265,6 +267,31 @@ class AgentRuntimeProcessor(FrameProcessor):
         # instead of engaging with what's current. Reset to 0 any time a
         # turn ends with nothing left stashed.
         self._interruption_replay_depth = 0
+        # Background task generating the NEXT walkthrough beat's content
+        # ahead of time, kicked off the moment the CURRENT beat's own
+        # state is settled but its audio may still be playing (see
+        # _consume_turn_stream's on_result hook and _start_prefetch) — this
+        # is what hides DeepSeek's real ~2-4s generation latency behind
+        # speech that's already happening, instead of paying it as dead
+        # air between steps (confirmed live as the dominant cost there).
+        # _prefetch_for_step records which walkthrough_step this was
+        # generated FROM, so a mismatch at consumption time (something else
+        # moved the step in between) is caught rather than silently used.
+        # MUST be cancelled (see _cancel_prefetch) the instant anything
+        # actually interrupts — a real barge-in, a hand-raise, or a fresh
+        # real turn — so it can never finish and silently finalize
+        # (advancing walkthrough_step) a beat nobody is going to hear.
+        self._prefetch_task: Optional[asyncio.Task] = None
+        self._prefetch_for_step: Optional[int] = None
+        # The disposable session clone _drain_prefetch actually ran
+        # against (see _start_prefetch) — held so _take_ready_prefetch can
+        # replay its mutations onto the real session via
+        # runtime.commit_prefetched_turn ONLY once this prefetch is
+        # confirmed to actually be spoken. Never the real session itself:
+        # run_walkthrough_continuation's persist=False mode still fully
+        # mutates whatever session object it's given, so driving it against
+        # the real session would commit a beat nobody may ever hear.
+        self._prefetch_session_clone = None
 
     def _pick_filler(self, heard_text: str) -> str:
         pool = THINKING_FILLERS if _is_question(heard_text) else FLOOR_FILLERS
@@ -346,8 +373,12 @@ class AgentRuntimeProcessor(FrameProcessor):
             # (the _bot_speaking branch below) or was about to speak again
             # after its pause (this branch also covers that case, since the
             # pause is exactly when _bot_speaking is False but a beat is
-            # still queued up).
+            # still queued up). A next-beat prefetch is the same kind of
+            # "abort whatever's ahead of us" state — cancel it here too, so
+            # it can never finish and silently finalize a beat that was
+            # never actually delivered.
             self._cancel_pending_auto_continue()
+            self._cancel_prefetch()
             if self._bot_speaking:
                 get_session(self._visitor_id).was_interrupted = True
                 self._interrupted_this_turn = True
@@ -387,8 +418,11 @@ class AgentRuntimeProcessor(FrameProcessor):
         # segment finalizing aren't the same frame/timing, so this isn't
         # redundant with the VADUserStartedSpeakingFrame branch; a real turn
         # starting for any reason must never race against a scheduled
-        # auto-continue.
+        # auto-continue or a stale prefetch for a beat this turn might make
+        # irrelevant (a detour, a skip-ahead, anything other than a plain
+        # "continue").
         self._cancel_pending_auto_continue()
+        self._cancel_prefetch()
         self._turn_in_progress = True
         self._interrupted_this_turn = False
 
@@ -474,7 +508,33 @@ class AgentRuntimeProcessor(FrameProcessor):
             self._pending_interruption_text = None
             if self._interruption_replay_depth >= 1:
                 self._interruption_replay_depth = 0
-                await self._speak("Sorry, I'm still catching up — could you say that again?", direction)
+                catching_up = "Sorry, I'm still catching up — could you say that again?"
+                # Both sides of this exchange used to be invisible outside
+                # the raw pipeline log — neither the superseded transcript
+                # nor this recovery reply ever went through _handle_real_turn/
+                # _finalize_turn (the only place transcript_turns rows and
+                # history entries normally get written), since this path
+                # bypasses the model entirely. Confirmed live: reviewing a
+                # call afterward, this exchange was real (present in the raw
+                # log) but read as a mysterious gap in the transcript DB and
+                # the frontend chat UI, which both only ever show what's
+                # persisted here. Persist and report the same way every
+                # other real turn does.
+                if session.visitor_id:
+                    gate_log.append_transcript_turn(session.visitor_id, "user", pending)
+                    gate_log.append_transcript_turn(session.visitor_id, "agent", catching_up)
+                asyncio.create_task(self._report_reply(catching_up))
+                await self._speak(catching_up, direction)
+                # This message is spoken directly here, never through the
+                # model's own tool call — so it's the one place that has to
+                # set the sticky pause itself instead of relying on the
+                # model to set "walkthrough_awaiting_answer" (see runtime.py's
+                # _finalize_turn). Without this, _maybe_schedule_auto_continue
+                # right below would go ahead and fire the next scripted beat
+                # anyway, the exact "asked me to repeat, then kept going
+                # without listening" bug confirmed live.
+                if session.walkthrough_step is not None:
+                    session.walkthrough_awaiting_answer = True
                 self._maybe_schedule_auto_continue(session, direction)
                 return
             self._interruption_replay_depth += 1
@@ -526,7 +586,13 @@ class AgentRuntimeProcessor(FrameProcessor):
                 await self._speak_hand_raise_handoff(direction)
                 return
 
-    async def _consume_turn_stream(self, stream, direction: FrameDirection) -> tuple[Optional[dict], bool]:
+    async def _consume_turn_stream(
+        self,
+        stream,
+        direction: FrameDirection,
+        on_result: Optional[Callable[[], None]] = None,
+        allow_abandon_before_speech: bool = False,
+    ) -> tuple[Optional[dict], bool]:
         """Consumes a run_turn_stream()/run_walkthrough_continuation() event
         stream (see runtime.py — both share the exact same event contract)
         for one turn, speaking (and reporting) lead_in/action/reply as their
@@ -566,6 +632,28 @@ class AgentRuntimeProcessor(FrameProcessor):
         heard (a different or no action at all, disagreeing content) —
         worse than the turn just ending a little short. See the
         any_speech_started handling below.
+
+        allow_abandon_before_speech (only ever True for auto-continue beats
+        — see auto_continue_walkthrough's call site): if a fresher stash
+        (see queue_frame's docstring) is ALREADY waiting the moment this
+        beat is about to speak its very first word, and nothing has been
+        said for this beat yet, abandon it outright — return (None, False)
+        — instead of speaking stale content right before that stash gets
+        replayed a moment later. Confirmed live: a beat that sat waiting on
+        its LLM call for 8+ seconds (self-healed by the watchdog) finally
+        resolved and spoke its content within ~10ms of a genuinely-asked
+        question being replayed, reading as "it's not even listening."
+        Unlike the interrupted-mid-speech case below, this is safe to
+        abandon rather than drain: nothing was ever said, so there's
+        nothing in session.history to keep consistent, and — critically —
+        this must NEVER be enabled for a real turn's own run_turn_stream(),
+        since _begin_turn() there already logged the prospect's message
+        before this call even started; abandoning that reply early would
+        recreate the exact "heard message with no matching reply in
+        history" bug already found and fixed once. run_walkthrough_continuation()
+        has no such pairing (it deliberately never calls _begin_turn() —
+        there's no real prospect message behind an auto-continue beat), so
+        it alone is safe to opt into this.
         """
         pending_text = ""
         any_speech_started = False
@@ -584,16 +672,31 @@ class AgentRuntimeProcessor(FrameProcessor):
         # instead of abandoning keeps history correct while still cutting
         # audio off immediately.
         stopped_speaking_early = False
+        # Whether ANYTHING has actually been spoken yet for THIS beat —
+        # distinct from any_speech_started above, which flips true the
+        # instant text/a lead_in is merely seen, before _speak() is
+        # actually reached. Only meaningful when allow_abandon_before_speech
+        # is set; unused otherwise.
+        spoken_anything_yet = False
+        abandoned_before_speech = False
+
+        def _superseded_by_fresher_stash() -> bool:
+            return (
+                allow_abandon_before_speech
+                and not spoken_anything_yet
+                and self._pending_interruption_text is not None
+            )
 
         async def _flush_ready_sentences(final: bool) -> bool:
             """Speaks whatever's newly complete in pending_text (all but a
             possibly-still-growing last fragment, unless final=True, in
             which case everything left over is spoken as the last piece).
-            Returns True if a hand-raise OR a real barge-in interrupted
-            mid-flush (mirrors _speak_reply's own early-return behavior) —
-            the caller stops treating this turn as still-speaking either
-            way, it just doesn't speak a handoff line for a barge-in."""
-            nonlocal pending_text
+            Returns True if a hand-raise, a real barge-in, or (auto-continue
+            only) a fresher stash already waiting interrupted mid-flush
+            (mirrors _speak_reply's own early-return behavior) — the caller
+            stops treating this turn as still-speaking either way, it just
+            doesn't speak a handoff line for a barge-in."""
+            nonlocal pending_text, spoken_anything_yet, abandoned_before_speech
             if final:
                 chunks = [pending_text] if pending_text.strip() else []
                 pending_text = ""
@@ -606,8 +709,12 @@ class AgentRuntimeProcessor(FrameProcessor):
                     continue
                 if self._interrupted_this_turn:
                     return True
+                if _superseded_by_fresher_stash():
+                    abandoned_before_speech = True
+                    return True
                 self._speech_finished.clear()
                 await self._speak(sentence, direction)
+                spoken_anything_yet = True
                 await self._speech_finished.wait()
                 if self._interrupted_this_turn:
                     return True
@@ -629,7 +736,12 @@ class AgentRuntimeProcessor(FrameProcessor):
                 if self._interrupted_this_turn:
                     stopped_speaking_early = True
                     continue
+                if _superseded_by_fresher_stash():
+                    abandoned_before_speech = True
+                    stopped_speaking_early = True
+                    continue
                 any_speech_started = True
+                spoken_anything_yet = True
                 asyncio.create_task(self._report_reply(event[1]))
                 await self._speak(event[1], direction)
             elif kind == "action":
@@ -641,12 +753,36 @@ class AgentRuntimeProcessor(FrameProcessor):
                     stopped_speaking_early = True
             elif kind in ("done_streamed", "done_fallback"):
                 result = event[1]
+                # This fires here specifically because runtime.py's
+                # _finalize_turn() has ALREADY run by the time this event
+                # reaches us (see run_walkthrough_continuation/
+                # _stream_with_claude) — session state (walkthrough_step
+                # etc.) is fully settled for THIS beat, even though its
+                # remaining sentences are about to be spoken over the next
+                # few seconds below. That's exactly the window a caller can
+                # use to prefetch the NEXT beat's own LLM call concurrently,
+                # hiding its latency behind this beat's still-playing audio
+                # instead of paying it as dead air afterward.
+                if on_result is not None:
+                    on_result()
                 if kind == "done_streamed":
                     asyncio.create_task(self._report_reply(result["reply"]))
                     if await _flush_ready_sentences(final=True):
                         stopped_speaking_early = True
                     else:
                         reply_fully_spoken_live = True
+
+        if abandoned_before_speech:
+            # Nothing was ever actually spoken for this beat before a
+            # fresher, real thing the prospect said landed — abandon the
+            # generator outright (it's already past the loop, nothing left
+            # to drain) instead of the normal finalize path, so nothing
+            # gets silently committed (walkthrough_step advance, a history
+            # entry) for content the prospect never actually heard. The
+            # caller treats a None result exactly like any other skipped
+            # auto-continue beat.
+            await stream.aclose()
+            return None, False
 
         if stopped_speaking_early or (any_speech_started and not reply_fully_spoken_live):
             logger.warning(
@@ -666,6 +802,121 @@ class AgentRuntimeProcessor(FrameProcessor):
         if self._pending_auto_continue is not None:
             self._pending_auto_continue.cancel()
             self._pending_auto_continue = None
+
+    def _cancel_prefetch(self) -> None:
+        """Discards an in-flight next-beat prefetch outright (see
+        _start_prefetch) — called from every real-interruption path (VAD
+        barge-in, hand-raise, a fresh real turn starting), same reason
+        _cancel_pending_auto_continue exists: a prefetch racing ahead of
+        something that actually changes the conversation must never be
+        allowed to finish and silently finalize (advancing
+        walkthrough_step) a beat nobody is going to hear. Cancelling here
+        interrupts the prefetch's own generation call before it reaches
+        that point in the overwhelmingly common case (the ~2-4s DeepSeek
+        wait is most of the task's lifetime); _take_ready_prefetch's own
+        step-match check is the backstop for the rare remaining race.
+        Safe to call when nothing is prefetching."""
+        if self._prefetch_task is not None:
+            self._prefetch_task.cancel()
+            self._prefetch_task = None
+        self._prefetch_for_step = None
+        self._prefetch_session_clone = None
+
+    def _start_prefetch(self, session) -> None:
+        """Kicks off the NEXT walkthrough beat's LLM generation in the
+        background right when the CURRENT beat's own state is already
+        settled (see _consume_turn_stream's on_result hook, and
+        auto_continue_walkthrough's use of it) but its audio may still be
+        playing for a few more seconds — this is what actually hides
+        DeepSeek's real generation latency behind speech that's already
+        happening, instead of it being paid as dead air between steps
+        afterward (measured live: ~3-4s of silence per step, almost
+        entirely LLM generation time, not TTS or the 0.1s scheduling
+        pause). Only ever one prefetch in flight; a stale leftover is
+        replaced, not stacked. No-op outside an active, unpaused
+        walkthrough — nothing to get ahead of."""
+        if session.walkthrough_step is None or session.walkthrough_awaiting_answer:
+            return
+        if self._prefetch_task is not None:
+            return
+        self._prefetch_for_step = session.walkthrough_step
+        # A DISPOSABLE clone, never the real session — run_walkthrough_
+        # continuation(persist=False) still fully mutates whatever session
+        # object it's given (walkthrough_step, history, etc.), just without
+        # the two gate_log writes. Driving that against the real session
+        # would commit a beat nobody may ever hear the instant generation
+        # completes, seconds before (or in the discarded case, instead of)
+        # it's ever actually spoken — confirmed live as a real bug: 2 of 18
+        # finalize calls on one real call were never spoken yet had already
+        # permanently written themselves into session.history and the
+        # transcript DB, one of them a hallucinated step reversion that
+        # then poisoned every later turn's context. `history=list(...)`
+        # gives the clone its own list object so appends to it never touch
+        # the real session's history.
+        session_clone = dataclasses.replace(session, history=list(session.history))
+        self._prefetch_session_clone = session_clone
+        self._prefetch_task = asyncio.create_task(self._drain_prefetch(session_clone))
+
+    async def _drain_prefetch(self, session_clone) -> Optional[dict]:
+        """Runs run_walkthrough_continuation() to completion for a
+        prefetch, silently — no speaking, no reporting, just capturing the
+        final result. Iterating the generator to its terminal event is
+        what triggers its own _finalize_turn(persist=False) (see
+        runtime.py) — against `session_clone`, a disposable copy (see
+        _start_prefetch), not the real session, and with the durable
+        gate_log writes skipped. Nothing is committed anywhere for real
+        until _take_ready_prefetch confirms this prefetch is actually going
+        to be spoken and calls runtime.commit_prefetched_turn. Cancelling
+        the wrapping task (see _cancel_prefetch) mid-await stops this
+        before that point in the normal case, same as any other cancelled
+        asyncio task — and even when it isn't cancelled in time, completing
+        against the clone means there's nothing to undo either way."""
+        result = None
+        async for event in run_walkthrough_continuation(session_clone, persist=False):
+            if event[0] in ("done_streamed", "done_fallback"):
+                result = event[1]
+        return result
+
+    async def _take_ready_prefetch(self, session) -> Optional[dict]:
+        """Returns an in-flight prefetch's result if one exists and still
+        matches where we actually are, clearing it either way so it's
+        never reused or double-consumed. Falls back to None (the caller
+        drives a fresh run_walkthrough_continuation() call itself, exactly
+        like before prefetching existed) on any step mismatch, failure, or
+        cancellation — always safe, it just loses the speed win for this
+        one beat rather than risking stale content. On success, replays the
+        clone's mutations (and the gate_log writes it skipped) onto the
+        REAL session via runtime.commit_prefetched_turn — this is the one
+        and only place a prefetch's side effects ever become real, and it
+        only happens here because this beat is actually about to be spoken."""
+        task = self._prefetch_task
+        for_step = self._prefetch_for_step
+        clone = self._prefetch_session_clone
+        self._prefetch_task = None
+        self._prefetch_for_step = None
+        self._prefetch_session_clone = None
+        if task is None:
+            return None
+        if for_step != session.walkthrough_step:
+            # Something else moved walkthrough_step since this was kicked
+            # off (a real turn, a skip-ahead, a restart) — this prefetch is
+            # for a step we're not actually continuing from anymore. Cancel
+            # it outright rather than let it finish and silently finalize a
+            # beat nobody asked for.
+            task.cancel()
+            return None
+        try:
+            result = await task
+        except (asyncio.CancelledError, Exception):
+            logger.exception(f"[{self._visitor_id}] prefetched walkthrough beat failed, generating fresh")
+            return None
+        if result is None:
+            # Both the streaming and non-streaming paths inside the
+            # prefetch's own run_walkthrough_continuation() failed (already
+            # logged there) — nothing to commit.
+            return None
+        commit_prefetched_turn(session, clone, result)
+        return result
 
     def _maybe_schedule_auto_continue(self, session, direction: FrameDirection) -> None:
         """Called at the end of every real AND auto-continued turn.
@@ -778,19 +1029,49 @@ class AgentRuntimeProcessor(FrameProcessor):
         way a real turn does, so the existing barge-in path (which gates on
         _bot_speaking, not on how the speech started) interrupts an
         auto-continued beat exactly the same as it would a real one — no
-        new interruption logic needed for this case."""
+        new interruption logic needed for this case.
+
+        Prefers an already-in-flight prefetch (see _take_ready_prefetch)
+        over driving run_walkthrough_continuation() itself — same content
+        either way, just without paying its ~2-4s LLM latency as dead air
+        first. Either way, the FOLLOWING beat's own prefetch gets kicked
+        off as early as possible relative to THIS beat's speaking, via
+        _consume_turn_stream's on_result hook when generating fresh, or
+        directly here when a ready prefetch was used instead (that path
+        never drives _consume_turn_stream at all, so the hook never
+        fires)."""
         self._turn_in_progress = True
         self._interrupted_this_turn = False
         try:
+            prefetched = await self._take_ready_prefetch(session)
             try:
-                result, already_spoken = await self._consume_turn_stream(
-                    run_walkthrough_continuation(session), direction
-                )
+                if prefetched is not None:
+                    result, already_spoken = prefetched, False
+                    self._start_prefetch(session)
+                else:
+                    result, already_spoken = await self._consume_turn_stream(
+                        run_walkthrough_continuation(session),
+                        direction,
+                        on_result=lambda: self._start_prefetch(session),
+                        allow_abandon_before_speech=True,
+                    )
             except Exception:
                 logger.exception(f"[{self._visitor_id}] walkthrough auto-continue failed, skipping this beat")
                 return
 
             if result is None:
+                if self._pending_interruption_text is not None:
+                    # _consume_turn_stream abandoned this beat before
+                    # speaking anything because a fresher stash was already
+                    # waiting (see allow_abandon_before_speech) — replay it
+                    # right now via _advance_after_turn's own stash-replay
+                    # logic instead of just returning, which would leave it
+                    # sitting untouched until the watchdog eventually
+                    # reschedules this same beat (itself just abandoning
+                    # again in an unnecessary loop, seconds later, instead
+                    # of answering what was actually asked).
+                    await self._advance_after_turn(session, direction)
+                    return
                 # Both the streaming and non-streaming paths inside
                 # run_walkthrough_continuation() failed (already logged
                 # there). Silently skip rather than speak anything wrong or
@@ -799,7 +1080,21 @@ class AgentRuntimeProcessor(FrameProcessor):
 
             logger.info(f"[{self._visitor_id}] auto-continuing: {result!r}")
 
-            if not already_spoken:
+            if not already_spoken and self._pending_interruption_text is not None:
+                # Neither the prefetched-result branch above nor a
+                # done_fallback result (already_spoken is only ever True for
+                # a streamed result _consume_turn_stream itself spoke) ever
+                # passes through _consume_turn_stream's own
+                # allow_abandon_before_speech check — this is the same
+                # "don't speak stale content right before a fresher stash
+                # replays" guard for those two paths. Leave the stash itself
+                # untouched; _advance_after_turn below replays it exactly
+                # like any other skipped beat.
+                logger.info(
+                    f"[{self._visitor_id}] a fresher stash is already waiting — skipping this "
+                    "auto-continue beat instead of speaking it"
+                )
+            elif not already_spoken:
                 action = result.get("action")
                 lead_in = result.get("lead_in")
                 reply = result["reply"]
@@ -850,7 +1145,37 @@ class AgentRuntimeProcessor(FrameProcessor):
         # _speak_reply, once more at end-of-turn, or twice across repeated
         # polls while it's still held up).
         self._hand_ack_sent = True
+        # A hand-raise IS a real interruption — treated exactly like a real
+        # VAD barge-in (see VADUserStartedSpeakingFrame above), not a
+        # special case of its own: mark the session interrupted the same
+        # way, cancel anything already queued up ahead of it (a scheduled
+        # auto-continue tick, a next-beat prefetch), and — since this
+        # message is spoken directly here and never goes through the
+        # model's own tool call — set the sticky walkthrough pause
+        # ourselves the same way the "still catching up" recovery path
+        # does. Without this, the very next auto-continue tick had nothing
+        # telling it to hold off and would resume the tour right through
+        # this handoff — confirmed live at ~6ms after the handoff finished,
+        # giving no real window to actually unmute and ask anything.
+        # Cleared the normal way once the model sets "resume_walkthrough"
+        # after the prospect's real question gets answered and they give an
+        # actual go-ahead to continue.
+        session = get_session(self._visitor_id)
+        session.was_interrupted = True
+        self._cancel_pending_auto_continue()
+        self._cancel_prefetch()
+        if session.walkthrough_step is not None:
+            session.walkthrough_awaiting_answer = True
         handoff = "Yes, go ahead — what's your question?"
+        # Persisted directly, same reason and same pattern as the "still
+        # catching up" recovery line (see _advance_after_turn) — this is
+        # spoken by code, never through a real turn/_finalize_turn, so
+        # without this it's genuinely spoken but invisible in both the
+        # transcript DB and the frontend chat UI. Confirmed live: had to
+        # read the raw pipeline log to see hand-raise activity a transcript
+        # pull didn't show at all.
+        if session.visitor_id:
+            gate_log.append_transcript_turn(session.visitor_id, "agent", handoff)
         asyncio.create_task(self._report_reply(handoff))
         await self._speak(handoff, direction)
 
@@ -964,6 +1289,7 @@ class AgentRuntimeProcessor(FrameProcessor):
         # left mid-tour when the call ends shouldn't leave a dangling task
         # trying to speak into a torn-down pipeline.
         self._cancel_pending_auto_continue()
+        self._cancel_prefetch()
         await super().cleanup()
 
 

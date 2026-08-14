@@ -101,13 +101,31 @@ class SessionState:
     # position, unlike the MEDDIC/qual fields above which are set once and
     # never touched again.
     walkthrough_step: Optional[int] = None
-    # True on the turn the model just answered a REAL interruption mid-tour
-    # and asked "want me to continue?" — tells the voice pipeline's
-    # auto-continue scheduler (agent_processor.py) to pause and wait for a
-    # real answer instead of auto-advancing. Reset to False every turn (set
-    # only when the model explicitly asks it that turn), so a stale True
-    # from an earlier interruption never blocks continuation forever.
+    # True from the turn the model answers a REAL interruption mid-tour
+    # (a genuine question, or asking the prospect to repeat something
+    # unclear) onward — tells the voice pipeline's auto-continue scheduler
+    # (agent_processor.py) to pause and stay paused, no matter how many
+    # follow-up turns the prospect spends on the tangent, instead of
+    # auto-advancing the moment any one reply doesn't happen to end with a
+    # check-in question. STICKY, not reset every turn — only cleared by the
+    # model setting "resume_walkthrough" true (a real "let's continue"),
+    # or by start_walkthrough/end_walkthrough (see runtime.py's
+    # _finalize_turn). This also gets set directly by agent_processor.py's
+    # own "still catching up" recovery message (see AgentRuntimeProcessor's
+    # _interruption_replay_depth), which never goes through the model at all.
     walkthrough_awaiting_answer: bool = False
+    # None means the active walkthrough (if any) runs the full 10-step
+    # platform tour, ending naturally at step 10 — today's original
+    # behavior, unchanged. A concrete step number means this is a
+    # module-scoped walkthrough (see runtime.py's "start_module_walkthrough"
+    # field and _walkthrough_note): auto-continue should stop once THIS
+    # step is fully delivered, instead of advancing into the rest of the
+    # platform tour, so "just show me MagicReel end-to-end" doesn't
+    # silently roll on into MagicAvatar/MLR/analytics/dashboard. Cleared
+    # back to None by a fresh "start_walkthrough" (a genuine full-tour
+    # request always means "no scoping"), set to the entry step by
+    # "start_module_walkthrough" (see _finalize_turn's precedence chain).
+    walkthrough_scope_end: Optional[int] = None
     # True once the model has asked a closing/qualifying question in
     # response to the prospect indicating they're leaving the call — set
     # once and never reset (same "set once" pattern as the MEDDIC/qual
@@ -117,6 +135,18 @@ class SessionState:
     # independently treated as a fresh opening for one more question,
     # which reads as not listening when the prospect says it twice in a row.
     farewell_question_asked: bool = False
+    # True once "start-generation" has fired for the CURRENT run through
+    # step 6 or 7's internal wizard (see walkthrough.py's step 6/7 guidance
+    # and runtime.py's _walkthrough_note/_finalize_turn) — surfaced as
+    # ground truth so the model isn't relying on rereading its own history
+    # to notice it already kicked off the render, which real testing showed
+    # it doesn't reliably do under auto-continue's rapid, unattended pacing:
+    # confirmed live, "start-generation" fired 3 times in a row across 3
+    # separate auto-continue beats, each narrated as if for the first time,
+    # before the tour ever wrapped up. Cleared the instant walkthrough_step
+    # actually changes value (advancing past this step, ending the tour, or
+    # a fresh module/full walkthrough starting) — see _finalize_turn.
+    walkthrough_generate_fired: bool = False
     # The same id this session is keyed by in _sessions below — kept on the
     # object itself (not just as the dict key) so run_turn() can persist each
     # turn to the durable transcript log (see data/gate_log.py) without
