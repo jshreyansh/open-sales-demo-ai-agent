@@ -3,14 +3,21 @@ interface StepBarProps {
   currentIndex: number;
   onStepClick?: (index: number) => void;
   locked?: boolean;
-  // Lets the parent collect a ref per step pill — used to pulse() the pill
-  // the agent is jumping to for a step-jump action, since the destination
-  // step's own content isn't mounted yet at the moment the action fires
-  // (this bar is, always), same reasoning as ContentStudio's engine tabs.
-  onStepRef?: (index: number, el: HTMLButtonElement | null) => void;
+  // Every step pill is always mounted regardless of which step is active,
+  // making it the natural fallback target (data-hl-group) for any action
+  // whose own real, in-place target isn't rendered right now — see
+  // highlightBridge.ts. `hlGroupPrefix` scopes the group key per wizard
+  // (e.g. "step" for MagicReel, matching MAGICREEL_FALLBACK_GROUPS' "step:N"
+  // entries) so two different wizards sharing this component never collide.
+  // `dataHl` optionally gives a specific pill its own literal, primary
+  // data-hl target (used for the one step per wizard — the first one —
+  // that has no natural "Continue into it" button of its own to carry that
+  // key instead).
+  hlGroupPrefix: string;
+  dataHl?: (index: number) => string | undefined;
 }
 
-export default function StepBar({ steps, currentIndex, onStepClick, locked, onStepRef }: StepBarProps) {
+export default function StepBar({ steps, currentIndex, onStepClick, locked, hlGroupPrefix, dataHl }: StepBarProps) {
   return (
     <div className="studio-stepbar">
       {steps.map((label, i) => {
@@ -19,7 +26,8 @@ export default function StepBar({ steps, currentIndex, onStepClick, locked, onSt
         return (
           <div key={label} className="studio-stepbar__step-wrap">
             <button
-              ref={(el) => onStepRef?.(i, el)}
+              data-hl={dataHl?.(i)}
+              data-hl-group={`${hlGroupPrefix}:${i}`}
               className={`studio-stepbar__step studio-stepbar__step--${state}`}
               onClick={() => clickable && onStepClick?.(i)}
               disabled={!clickable}

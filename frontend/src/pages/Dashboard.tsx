@@ -2,8 +2,6 @@ import { useEffect, useState } from "react";
 import Icon from "../components/Icon";
 import Sparkline from "../components/Sparkline";
 import { getDashboard } from "../lib/api";
-import { useRegisterComponent } from "../lib/uiRegistry";
-import { useHighlight } from "../lib/useHighlight";
 import type { DashboardData } from "../lib/types";
 
 const RANGES = ["7D", "30D", "90D", "Custom"];
@@ -11,15 +9,10 @@ const RANGES = ["7D", "30D", "90D", "Custom"];
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [range, setRange] = useState("30D");
-  const insights = useHighlight();
-  const activeCampaigns = useHighlight();
 
   useEffect(() => {
     getDashboard().then(setData).catch(() => setData(null));
   }, []);
-
-  useRegisterComponent("dashboard", "insights", { highlight: insights.spotlight });
-  useRegisterComponent("dashboard", "active-campaigns", { highlight: activeCampaigns.spotlight });
 
   if (!data) {
     return (
@@ -54,7 +47,7 @@ export default function Dashboard() {
         <span className="section__subtitle">Last 30 days</span>
       </div>
 
-      <div className="insights-grid card" ref={insights.ref}>
+      <div className="insights-grid card" data-hl="insights:highlight" data-hl-cue="spotlight">
         {data.insights.map((card) => (
           <div key={card.id} className="insight-card" style={{ ["--accent-color" as string]: card.accent }}>
             <div className="insight-card__head">
@@ -82,7 +75,7 @@ export default function Dashboard() {
         ))}
       </div>
 
-      <div className="section card" ref={activeCampaigns.ref}>
+      <div className="section card" data-hl="active-campaigns:highlight" data-hl-cue="spotlight">
         <div className="section__header">
           <div>
             <h2 className="section__title">Active Campaigns</h2>

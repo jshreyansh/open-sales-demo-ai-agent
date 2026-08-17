@@ -12,6 +12,8 @@ import {
   mdiAccount,
   mdiInformationOutline,
   mdiMapMarkerOutline,
+  mdiMessageTextOutline,
+  mdiSend,
 } from "@mdi/js";
 
 interface MeetIconProps {
@@ -28,7 +30,9 @@ interface MeetIconProps {
     | "people"
     | "account"
     | "info"
-    | "location";
+    | "location"
+    | "chat"
+    | "send";
   size?: number;
 }
 
@@ -49,6 +53,8 @@ const PATHS: Record<MeetIconProps["name"], string> = {
   account: mdiAccount,
   info: mdiInformationOutline,
   location: mdiMapMarkerOutline,
+  chat: mdiMessageTextOutline,
+  send: mdiSend,
 };
 
 export default function MeetIcon({ name, size = 20 }: MeetIconProps) {

@@ -9,6 +9,7 @@ import MagicReelStudio from "../pages/studio/MagicReelStudio";
 import MagicAvatarStudio from "../pages/studio/MagicAvatarStudio";
 import { NAV_REGISTRY } from "../registry/pages";
 import { executeAction, registerComponent, unregisterComponent } from "./uiRegistry";
+import { dispatchWithHighlight, getFallbackGroups } from "./highlightBridge";
 import type { AgentAction } from "./api";
 
 function findLabel(pageId: string): string {
@@ -58,7 +59,19 @@ export function useProductPages() {
       // components — executeAction queues until that registration lands.
       setActivePageId(action.page);
     }
-    executeAction(action.page, action.component, action.method);
+    // Scoped to the current page's own container -- see highlightBridge.ts.
+    // When action.page differs from activePageId (a genuine cross-page
+    // jump), the page we're still showing right now has neither the real
+    // target nor a fallback proxy for the NEW page's action, so this
+    // resolves to "nothing to highlight, just run" -- identical to today's
+    // immediate-navigate behavior, not worse.
+    dispatchWithHighlight(
+      contentRef.current ?? document,
+      action.component,
+      action.method,
+      () => executeAction(action.page, action.component, action.method),
+      getFallbackGroups(action.page)
+    );
   }
 
   function renderPage() {

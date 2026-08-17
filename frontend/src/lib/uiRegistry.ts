@@ -12,7 +12,16 @@ interface PendingAction {
   method: string;
 }
 
-let pending: PendingAction | null = null;
+// A real queue, not a single overwritable slot -- an autonomous walkthrough
+// can fire a fresh action well within the time it takes the target page's
+// component to mount and register, and a single slot silently lost
+// whichever action hadn't been drained yet. Mirrors server.py's
+// _pending_voice_actions, already fixed there for the identical reason
+// ("a single slot silently lost whichever action hadn't been polled yet,
+// which is exactly why the walkthrough's on-screen highlighting kept going
+// dark mid-tour") -- this was the frontend-side half of that same bug,
+// never fixed alongside it.
+let pending: PendingAction[] = [];
 
 function key(page: string, componentId: string) {
   return `${page}:${componentId}`;
@@ -20,16 +29,22 @@ function key(page: string, componentId: string) {
 
 /**
  * Called by a mounted component to expose the actions it supports.
- * If an action was queued waiting for this exact component to mount
- * (e.g. the agent navigated here first), it fires immediately.
+ * Drains any pending actions now resolvable by this registration, in the
+ * order they arrived -- there can be more than one if several actions were
+ * queued before this component ever mounted.
  */
 export function registerComponent(page: string, componentId: string, actions: ActionMap) {
   registry.set(key(page, componentId), actions);
-  if (pending && pending.page === page && pending.component === componentId) {
-    const fn = actions[pending.method];
-    pending = null;
-    fn?.();
+  if (pending.length === 0) return;
+  const stillPending: PendingAction[] = [];
+  for (const p of pending) {
+    if (p.page === page && p.component === componentId) {
+      actions[p.method]?.();
+    } else {
+      stillPending.push(p);
+    }
   }
+  pending = stillPending;
 }
 
 export function unregisterComponent(page: string, componentId: string) {
@@ -40,8 +55,6 @@ export function unregisterComponent(page: string, componentId: string) {
  * Runs an action if its component is already mounted. Otherwise queues it —
  * the caller is expected to have already triggered navigation to `page`;
  * once that page's component registers itself, the queued action fires.
- * There is only ever one pending action: a newer one replaces an older one
- * that never got the chance to run.
  */
 export function executeAction(page: string, componentId: string, method: string): ExecuteResult {
   const entry = registry.get(key(page, componentId));
@@ -50,7 +63,7 @@ export function executeAction(page: string, componentId: string, method: string)
     fn();
     return "done";
   }
-  pending = { page, component: componentId, method };
+  pending.push({ page, component: componentId, method });
   return "queued";
 }
 

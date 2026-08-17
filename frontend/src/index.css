@@ -1508,21 +1508,39 @@ body {
   transition: box-shadow 0.2s, border-color 0.2s;
 }
 
-/* Dims the rest of the shared screen and glows the target — the 9999px
+/* Dims the rest of the shared screen and rings the target — the 9999px
    spread paints outward from the element's own box (no viewport coordinates
    needed) and gets clipped to just the shared-screen pane for free, since
-   .meet__stage already has overflow: hidden. */
-.panel--spotlight {
+   .meet__stage already has overflow: hidden.
+   .panel--spotlight and .panel--hl-armed used to be two different
+   treatments (a heavier full-dim "spotlight", opt-in via
+   data-hl-cue="spotlight", vs. a lighter accent-only glow ring as the
+   default everywhere else) — unified into one now: with dozens of actions
+   across a wizard, the ring-only version reads as too easy to miss (you
+   have to already know where to look), and it's flatly invisible on a
+   target whose own fill is already the accent color (a primary CTA
+   button) since the ring is that same color. A white inner ring + accent
+   outer ring reads clearly against both a dimmed backdrop and an
+   accent-colored button. Both classnames are kept (highlightBridge.ts
+   still picks between them via data-hl-cue, and 4 pages set
+   .panel--spotlight directly) but now share the identical rule. */
+.panel--spotlight,
+.panel--hl-armed {
   position: relative;
   z-index: 5;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55), 0 0 0 3px var(--accent), 0 0 24px 4px var(--accent-tint-30);
+  box-shadow:
+    0 0 0 9999px rgba(0, 0, 0, 0.6),
+    0 0 0 3px #fff,
+    0 0 0 6px var(--accent),
+    0 0 22px 4px rgba(255, 255, 255, 0.3);
   transition: box-shadow 0.25s ease;
 }
 
 /* A quick expanding/fading ring anchored to the target's own box — the
    "the agent just clicked this" cue for click/open/select-*/generate-*/
-   start-* actions, distinct from the lingering spotlight above. */
+   start-* actions, distinct from the lingering highlight above. White +
+   accent double ring for the same reason as the highlight above — stays
+   visible even when the target itself is accent-colored. */
 .panel--pulse {
   position: relative;
 }
@@ -1530,7 +1548,8 @@ body {
   content: "";
   position: absolute;
   inset: -4px;
-  border: 2px solid var(--accent);
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 2px var(--accent);
   border-radius: inherit;
   animation: action-pulse 0.6s ease-out;
   pointer-events: none;
@@ -1680,6 +1699,34 @@ body {
   min-height: 0;
 }
 
+/* Wraps the stage + participant tiles as one unit, kept separate from the
+   chat panel so the panel is a plain sibling flex item rather than needing
+   the stage/rail pair to know anything about chat being open. row-reverse
+   by default renders as [stage, rail] — visually identical to the pre-chat
+   markup where .meet__body's own two direct children were stage then rail
+   in that order — so the closed-chat layout is pixel-for-pixel unchanged. */
+.meet__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: row-reverse;
+  gap: 14px;
+  min-height: 0;
+}
+
+/* With chat open, the tiles move to a strip above the (now shorter) stage —
+   matching Google Meet's own in-call-messages layout — instead of sitting
+   in a vertical rail beside it. */
+.meet__body--chat-open .meet__main {
+  flex-direction: column;
+}
+
+.meet__body--chat-open .meet__rail {
+  width: auto;
+  height: 110px;
+  flex-direction: row;
+}
+
 .meet__stage {
   flex: 1;
   min-width: 0;
@@ -1801,6 +1848,113 @@ body {
   height: 96px;
   font-size: 32px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35), 0 0 0 2px rgba(138, 180, 248, 0.3);
+}
+
+/* ---- Meeting Mode: in-call chat panel ---- */
+
+.meet__chat-panel {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #2d2e30;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.meet__chat-header {
+  flex-shrink: 0;
+  padding: 14px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e8eaed;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.meet__chat-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.meet__chat-empty {
+  margin: auto 0;
+  text-align: center;
+  font-size: 12px;
+  color: #9aa0a6;
+}
+
+.meet__chat-message {
+  max-width: 88%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.meet__chat-message--user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: white;
+  border-bottom-right-radius: 3px;
+}
+
+.meet__chat-message--agent {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e8eaed;
+  border-bottom-left-radius: 3px;
+}
+
+.meet__chat-input {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.meet__chat-input input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: #e8eaed;
+  outline: none;
+}
+
+.meet__chat-input input::placeholder {
+  color: #9aa0a6;
+}
+
+.meet__chat-input input:focus {
+  border-color: var(--accent);
+}
+
+.meet__chat-input button {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.meet__chat-input button:hover {
+  filter: brightness(1.1);
 }
 
 .meet__avatar--tiny {

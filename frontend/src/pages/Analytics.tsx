@@ -2,8 +2,6 @@ import { useEffect, useState } from "react";
 import Icon from "../components/Icon";
 import WeeklySendChart from "../components/WeeklySendChart";
 import { getAnalyticsOverview } from "../lib/api";
-import { useRegisterComponent } from "../lib/uiRegistry";
-import { useHighlight } from "../lib/useHighlight";
 import type { AnalyticsOverview } from "../lib/types";
 
 const TABS = ["Overview", "Channel", "Specialty", "Geo", "By Campaigns", "MagicReel Analytics", "MagicAvatar Analytics"];
@@ -11,13 +9,10 @@ const TABS = ["Overview", "Channel", "Specialty", "Geo", "By Campaigns", "MagicR
 export default function Analytics() {
   const [data, setData] = useState<AnalyticsOverview | null>(null);
   const [tab, setTab] = useState("Overview");
-  const funnel = useHighlight();
 
   useEffect(() => {
     getAnalyticsOverview().then(setData).catch(() => setData(null));
   }, []);
-
-  useRegisterComponent("analytics", "funnel", { highlight: funnel.spotlight });
 
   if (!data) {
     return (
@@ -79,7 +74,7 @@ export default function Analytics() {
             <WeeklySendChart weeks={data.weeklySendVolume.weeks} channels={data.weeklySendVolume.channels} />
           </div>
 
-          <div className="card" ref={funnel.ref}>
+          <div className="card" data-hl="funnel:highlight" data-hl-cue="spotlight">
             <h2 className="section__title">Engagement Funnel</h2>
             <p className="section__subtitle">
               Sent · Viewed · Played · Completed · Shared. Includes campaign sends + manual shares — Viewed may exceed Sent.

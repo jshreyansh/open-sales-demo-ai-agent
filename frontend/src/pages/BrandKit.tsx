@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react";
 import { getBrandKit, saveBrandKit } from "../lib/api";
-import { useRegisterComponent } from "../lib/uiRegistry";
-import { useHighlight } from "../lib/useHighlight";
 import type { BrandKitData } from "../lib/types";
 
 type PaletteKey = keyof BrandKitData["palette"];
@@ -17,8 +15,6 @@ export default function BrandKit() {
   const [data, setData] = useState<BrandKitData | null>(null);
   const [original, setOriginal] = useState<BrandKitData | null>(null);
   const [saving, setSaving] = useState(false);
-  const logo = useHighlight();
-  const palette = useHighlight();
 
   useEffect(() => {
     getBrandKit().then((d) => {
@@ -26,9 +22,6 @@ export default function BrandKit() {
       setOriginal(d);
     });
   }, []);
-
-  useRegisterComponent("brand-kit", "logo", { highlight: logo.spotlight });
-  useRegisterComponent("brand-kit", "palette", { highlight: palette.spotlight });
 
   if (!data) {
     return (
@@ -77,7 +70,7 @@ export default function BrandKit() {
 
       <div className="brand-kit">
         <div>
-          <div className="card" style={{ marginBottom: 16 }} ref={logo.ref}>
+          <div className="card" style={{ marginBottom: 16 }} data-hl="logo:highlight" data-hl-cue="spotlight">
             <h3 style={{ marginTop: 0, marginBottom: 4 }}>Logo</h3>
             <p className="stub-page__note" style={{ marginTop: 0, fontSize: 12 }}>
               Shared with Settings › Account — update it here or there and both stay in sync.
@@ -93,7 +86,7 @@ export default function BrandKit() {
             </div>
           </div>
 
-          <div className="card" style={{ marginBottom: 16 }} ref={palette.ref}>
+          <div className="card" style={{ marginBottom: 16 }} data-hl="palette:highlight" data-hl-cue="spotlight">
             <h3 style={{ marginTop: 0, marginBottom: 12 }}>Palette</h3>
             <div className="brand-kit__field-group">
               {PALETTE_FIELDS.map((f) => (

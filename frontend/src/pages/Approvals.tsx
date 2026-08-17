@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { getApprovals } from "../lib/api";
-import { useRegisterComponent } from "../lib/uiRegistry";
-import { useHighlight } from "../lib/useHighlight";
 import type { ApprovalsData, ApprovalEntityKind, ApprovalState } from "../lib/types";
 
 type Tab = "pending" | "approved" | "rejected" | "withdrawn" | "all";
@@ -42,13 +40,10 @@ export default function Approvals() {
   const [search, setSearch] = useState("");
   const [entityFilter, setEntityFilter] = useState<"all" | ApprovalEntityKind>("all");
   const [stageFilter, setStageFilter] = useState("all");
-  const queue = useHighlight();
 
   useEffect(() => {
     getApprovals().then(setData).catch(() => setData(null));
   }, []);
-
-  useRegisterComponent("mlr-review", "queue", { highlight: queue.spotlight });
 
   const tabCounts = useMemo(() => {
     const counts: Record<Tab, number> = { pending: 0, approved: 0, rejected: 0, withdrawn: 0, all: data?.rows.length ?? 0 };
@@ -120,7 +115,7 @@ export default function Approvals() {
         </select>
       </div>
 
-      <div className="card" style={{ padding: 0, overflow: "hidden" }} ref={queue.ref}>
+      <div className="card" style={{ padding: 0, overflow: "hidden" }} data-hl="queue:highlight" data-hl-cue="spotlight">
         <table className="approvals-table">
           <thead>
             <tr>

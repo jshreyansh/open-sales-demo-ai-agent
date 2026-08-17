@@ -939,6 +939,27 @@ def _walkthrough_note(session: SessionState) -> str:
         if step.index in (6, 7) and session.walkthrough_generate_fired
         else ""
     )
+    # Ground truth for step 6/7's own internal sub-navigation (step-source,
+    # select-source-*, step-brief, brief-*, step-script, ...) — see
+    # SessionState.walkthrough_fired_actions. Same reasoning as
+    # generate_fired_line above, generalized: without this, the model has no
+    # explicit signal for which of these it already fired and reliably
+    # re-fires/re-narrates one under auto-continue's rapid, unattended
+    # pacing — confirmed live, "step-brief" fired 3 separate times across 3
+    # auto-continue beats, each re-narrating the Brief step's intro (and
+    # re-covering sub-parts already delivered) as if for the first time.
+    # Excludes "start-generation", which generate_fired_line above already
+    # covers with its own stronger wording (forcing wrap-up on a repeat).
+    already_fired_actions = sorted(session.walkthrough_fired_actions - {"start-generation"})
+    fired_actions_line = (
+        (
+            f"\nYou've ALREADY covered these sub-parts of this step this run: {', '.join(already_fired_actions)}. "
+            "Do NOT re-fire or re-narrate any of these as if for the first time — move on to whichever "
+            "sub-part/stage you haven't done yet, in the order given above.\n"
+        )
+        if step.index in (6, 7) and already_fired_actions
+        else ""
+    )
     return (
         f"\nFull walkthrough step list (for resolving skip-ahead requests by name — always use "
         f"the exact number listed here, never estimate or count): {full_list}.\n"
@@ -946,6 +967,7 @@ def _walkthrough_note(session: SessionState) -> str:
         f'"{step.title}." {action_line} Guidance for this step: {step.guidance} {next_line}\n'
         f"{paused_line}"
         f"{generate_fired_line}"
+        f"{fired_actions_line}"
         "If this step's content was already fully delivered in your own last reply (check the "
         "conversation history below) and the prospect's message just now was an ordinary "
         "acknowledgment rather than a real question, move on to the next step now instead of "
@@ -1208,7 +1230,17 @@ def _finalize_turn(session: SessionState, result: AgentResult, persist: bool = T
     if session.walkthrough_step != prev_walkthrough_step:
         session.walkthrough_generate_fired = False
         already_fired = False
+        # A fresh run through 6/7 (or leaving it) starts with a clean slate —
+        # see SessionState.walkthrough_fired_actions.
+        session.walkthrough_fired_actions = set()
     action_method = (result.get("action") or {}).get("method")
+    # Ground truth for "which step 6/7 sub-actions have already fired in the
+    # CURRENT wizard run" — see SessionState.walkthrough_fired_actions.
+    # Recorded for every action, not just start-generation (that one keeps
+    # its own dedicated flag/backstop right below since it needs stronger
+    # handling — forcing wrap-up on a repeat, not just a prompt note).
+    if session.walkthrough_step in (6, 7) and action_method:
+        session.walkthrough_fired_actions.add(action_method)
     if session.walkthrough_step in (6, 7) and action_method == "start-generation":
         if already_fired:
             # The model fired it again despite _walkthrough_note's own

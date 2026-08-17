@@ -13,7 +13,10 @@ const visitorId = getVisitorId();
  * (Meeting Mode's always-on call). Both read/write the same underlying
  * client, so muting from either place is reflected in the other.
  */
-export function useVoiceSession(onAction: (action: AgentAction) => void, onReply?: (text: string) => void) {
+export function useVoiceSession(
+  onAction: (action: AgentAction) => void,
+  onReply?: (text: string, source: "voice" | "chat") => void
+) {
   const transportState = usePipecatClientTransportState();
   const { enableMic, isMicEnabled } = usePipecatClientMicControl();
 
@@ -75,7 +78,7 @@ export function useVoiceSession(onAction: (action: AgentAction) => void, onReply
         getVoiceAction(visitorId).catch(() => null),
         onReplyRef.current ? getVoiceReply(visitorId).catch(() => null) : Promise.resolve(null),
       ]);
-      if (reply) onReplyRef.current?.(reply);
+      if (reply) onReplyRef.current?.(reply.text, reply.source);
       if (action) onActionRef.current(action);
     }, 800);
     return () => clearInterval(id);

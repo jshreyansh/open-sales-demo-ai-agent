@@ -1,15 +1,22 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePipecatClientMediaTrack } from "@pipecat-ai/client-react";
 import { useVoiceSession } from "../lib/useVoiceSession";
 import { useAudioLevelRing } from "../lib/useAudioLevelRing";
 import { useReportedAudioLevelRing } from "../lib/useReportedAudioLevelRing";
-import { claimVoiceLock, setHandRaiseState, startSession, type AgentAction } from "../lib/api";
+import { claimVoiceLock, sendMeetingChatMessage, setHandRaiseState, startSession, type AgentAction } from "../lib/api";
 import { getVisitorId } from "../lib/session";
 import MeetIcon from "./MeetIcons";
 import PreJoinScreen from "./PreJoinScreen";
+import MeetingChatPanel, { type MeetingChatMessage } from "./MeetingChatPanel";
 import { AGENT_NAME, AGENT_INITIAL, AGENT_PHOTO } from "../lib/persona";
 
 const visitorId = getVisitorId();
+
+let chatMsgSeq = 0;
+function nextChatMsgId() {
+  chatMsgSeq += 1;
+  return `mc${Date.now()}-${chatMsgSeq}`;
+}
 
 interface MeetingShellProps {
   children: React.ReactNode;
@@ -76,7 +83,22 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
   const [visitorName, setVisitorName] = useState<string | undefined>(undefined);
   const [visitorCompany, setVisitorCompany] = useState<string | undefined>(undefined);
   const [visitorEmail, setVisitorEmail] = useState<string | undefined>(undefined);
-  const { voiceConnected, isMicEnabled, enableMic, connect, mute } = useVoiceSession(onAction);
+  // In-call text chat — mirrors Google Meet's own panel: only the typed
+  // exchanges live here, not a running transcript of the whole spoken call
+  // (see the onReply filter below, which drops anything not explicitly
+  // tagged source: "chat").
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<MeetingChatMessage[]>([]);
+  const handleChatReply = useCallback((text: string, source: "voice" | "chat") => {
+    if (source !== "chat") return;
+    setChatMessages((prev) => [...prev, { id: nextChatMsgId(), role: "agent", text }]);
+  }, []);
+  const { voiceConnected, isMicEnabled, enableMic, connect, mute } = useVoiceSession(onAction, handleChatReply);
+
+  function handleSendChat(text: string) {
+    setChatMessages((prev) => [...prev, { id: nextChatMsgId(), role: "user", text }]);
+    void sendMeetingChatMessage(visitorId, text);
+  }
   // "You" tile: real local mic MediaStreamTrack, analysed client-side. The
   // agent's tile: WebSocketTransport exposes no "bot" track at all (its
   // audio never becomes an inspectable MediaStreamTrack), so its ring is
@@ -142,7 +164,8 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
 
   // Spacebar toggles mute, same convention as Google Meet/Zoom — but only
   // once actually connected, and never while focus is in a text field (the
-  // chat input rendered in `children`), where a space is just a space.
+  // in-call chat input below, or the chat input rendered in `children`),
+  // where a space is just a space.
   useEffect(() => {
     if (!voiceConnected) return;
     function handleKeyDown(e: KeyboardEvent) {
@@ -184,9 +207,8 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
   // The actual voice personalization happens via connect(visitorName) in
   // the effect above. startSession here is a separate, secondary thing: it
   // seeds the REST API process's own session store with the same name, in
-  // case anything reads it from that side later (e.g. a future text
-  // transcript in Meeting Mode) — Meeting Mode has no such surface today,
-  // so this is forward-looking, not load-bearing.
+  // case anything reads it from that side later — which now includes the
+  // in-call chat panel's messages, routed through the REST API's mailbox.
   async function handleJoin(name: string, company: string, email: string): Promise<boolean> {
     const claimed = await claimVoiceLock(visitorId);
     if (!claimed) return false;
@@ -236,27 +258,31 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
         <div className="meet__banner">Our agent is joining {MEETING_CODE}…</div>
       )}
 
-      <div className="meet__body">
-        <div className="meet__stage">
-          <div className="meet__stage-inner">{children}</div>
+      <div className={`meet__body ${chatOpen ? "meet__body--chat-open" : ""}`}>
+        <div className="meet__main">
+          <div className="meet__rail">
+            <div className="meet__tile meet__tile--you">
+              <span className="meet__mic-badge">
+                <MeetIcon name={isMicEnabled ? "mic" : "mic-off"} size={13} />
+              </span>
+              <TileAvatar ringRef={youRingRef} letter="Y" avatarClassName="meet__avatar--tile meet__avatar--you" />
+              <div className="meet__tile-label">You</div>
+            </div>
+            <div className="meet__tile meet__tile--agent">
+              <span className="meet__mic-badge">
+                <MeetIcon name="mic" size={13} />
+              </span>
+              <TileAvatar ringRef={agentRingRef} photo={AGENT_PHOTO} letter={AGENT_INITIAL} avatarClassName="meet__avatar--tile meet__avatar--agent" />
+              <div className="meet__tile-label">{AGENT_NAME}</div>
+            </div>
+          </div>
+
+          <div className="meet__stage">
+            <div className="meet__stage-inner">{children}</div>
+          </div>
         </div>
 
-        <div className="meet__rail">
-          <div className="meet__tile meet__tile--you">
-            <span className="meet__mic-badge">
-              <MeetIcon name={isMicEnabled ? "mic" : "mic-off"} size={13} />
-            </span>
-            <TileAvatar ringRef={youRingRef} letter="Y" avatarClassName="meet__avatar--tile meet__avatar--you" />
-            <div className="meet__tile-label">You</div>
-          </div>
-          <div className="meet__tile meet__tile--agent">
-            <span className="meet__mic-badge">
-              <MeetIcon name="mic" size={13} />
-            </span>
-            <TileAvatar ringRef={agentRingRef} photo={AGENT_PHOTO} letter={AGENT_INITIAL} avatarClassName="meet__avatar--tile meet__avatar--agent" />
-            <div className="meet__tile-label">{AGENT_NAME}</div>
-          </div>
-        </div>
+        {chatOpen && <MeetingChatPanel messages={chatMessages} onSend={handleSendChat} />}
       </div>
 
       {/* Only mic, hand-raise, and hangup are actually wired to real
@@ -283,6 +309,13 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
           }
         >
           <MeetIcon name="hand" />
+        </button>
+        <button
+          className={`meet__ctrl ${chatOpen ? "meet__ctrl--active" : ""}`}
+          onClick={() => setChatOpen((v) => !v)}
+          title={chatOpen ? "Hide in-call messages" : "Show in-call messages"}
+        >
+          <MeetIcon name="chat" />
         </button>
         <button className="meet__ctrl meet__ctrl--hangup" onClick={onLeave}>
           <MeetIcon name="hangup" />

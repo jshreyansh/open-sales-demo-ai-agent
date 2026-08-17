@@ -43,7 +43,23 @@ _pending_voice_actions: Dict[str, List[dict]] = {}
 # A queue, not a single slot: a turn with an action reports two texts in
 # quick succession (the lead_in, then the reply) — a single dict slot would
 # let the second POST silently clobber the first before a poll ever saw it.
-_pending_voice_replies: Dict[str, List[str]] = {}
+# Each entry also carries which surface it answers ("voice" — narration,
+# real spoken turns, hand-raise handoffs — or "chat" — a reply to a typed
+# Meeting Mode message, see _pending_meeting_chat below) so the frontend's
+# docked chat panel can show only the exchanges the visitor actually typed,
+# not the whole call's narration, while every other existing consumer
+# (ChatWidget's Product Mode Talk view) keeps working unchanged since it
+# never looks at this field.
+_pending_voice_replies: Dict[str, List[dict]] = {}
+
+# The reverse direction of _pending_voice_replies, for typed input instead
+# of spoken: Meeting Mode's chat panel posts here, and the voice process (a
+# separate process on :7860) polls it — same reasoning as
+# _hand_raise_state below, since the two processes don't share memory. A
+# real queue, not a single slot, for the same reason _pending_voice_actions
+# already is: someone can type and send a second message before the voice
+# process's poll has drained the first.
+_pending_meeting_chat: Dict[str, List[str]] = {}
 
 # The reverse direction of the two mailboxes above: the frontend's hand-raise
 # button posts here, and the voice process (a separate process on :7860)
@@ -296,26 +312,64 @@ def get_voice_action(visitor_id: str):
 class VoiceReplyReport(BaseModel):
     visitorId: str
     reply: str
+    source: str = "voice"
 
 
 @app.post("/internal/voice-reply")
 def report_voice_reply(body: VoiceReplyReport):
     """Called by the voice process to hand off a piece of spoken text (a
     lead_in, or a reply) so it can show up in the chat transcript as its own
-    bubble."""
-    _pending_voice_replies.setdefault(body.visitorId, []).append(body.reply)
+    bubble. `source` distinguishes ordinary narration/spoken turns ("voice")
+    from a reply that specifically answers a typed Meeting Mode chat message
+    ("chat") — see get_voice_reply."""
+    _pending_voice_replies.setdefault(body.visitorId, []).append({"text": body.reply, "source": body.source})
     return {"ok": True}
 
 
 @app.get("/api/voice-reply/{visitor_id}")
 def get_voice_reply(visitor_id: str):
     """Polled by the frontend during an active voice call. Returns and
-    clears the oldest pending reply text, or "" if there isn't one — one
-    per poll, so a lead_in and its reply each land as separate bubbles."""
+    clears the oldest pending reply, or an empty one if there isn't one —
+    one per poll, so a lead_in and its reply each land as separate bubbles.
+    Product Mode's ChatWidget only ever reads `.reply`, so this stays
+    backward compatible for it; Meeting Mode's chat panel additionally
+    filters on `.source == "chat"` so it only ever shows exchanges the
+    visitor actually typed, not the whole call's narration."""
     queue = _pending_voice_replies.get(visitor_id)
     if not queue:
-        return {"reply": ""}
-    return {"reply": queue.pop(0)}
+        return {"reply": "", "source": "voice"}
+    item = queue.pop(0)
+    return {"reply": item["text"], "source": item["source"]}
+
+
+class MeetingChatRequest(BaseModel):
+    message: str
+
+
+@app.post("/api/meeting-chat/{visitor_id}")
+def send_meeting_chat(visitor_id: str, body: MeetingChatRequest):
+    """Called by Meeting Mode's chat panel when the visitor sends a typed
+    message. Deliberately NOT routed through /chat above — /chat calls
+    run_turn against a SessionState that lives in THIS process, but a live
+    Meeting Mode call is being driven by the voice process on :7860 against
+    its OWN SessionState object for the same visitor_id; the two are not the
+    same object and share no history. Queuing here for the voice process's
+    own poll (_poll_meeting_chat in agent_processor.py) to pick up is what
+    lets a typed message actually reach the conversation the visitor is
+    really having, exactly like hand-raise already does for a boolean
+    signal — mirrored here for real text content instead."""
+    _pending_meeting_chat.setdefault(visitor_id, []).append(body.message)
+    return {"ok": True}
+
+
+@app.get("/internal/meeting-chat/{visitor_id}")
+def get_meeting_chat(visitor_id: str):
+    """Polled by the voice process. Returns and clears the oldest pending
+    typed message, or "" if there isn't one."""
+    queue = _pending_meeting_chat.get(visitor_id)
+    if not queue:
+        return {"message": ""}
+    return {"message": queue.pop(0)}
 
 
 class HandRaiseRequest(BaseModel):

@@ -147,6 +147,20 @@ class SessionState:
     # actually changes value (advancing past this step, ending the tour, or
     # a fresh module/full walkthrough starting) — see _finalize_turn.
     walkthrough_generate_fired: bool = False
+    # Every registry action method already fired while on the CURRENT run
+    # through step 6 or 7's internal wizard (see walkthrough.py's step 6/7
+    # guidance) — e.g. {"step-brief", "brief-audience"}. Same reasoning as
+    # walkthrough_generate_fired above, generalized: step 6/7 stay on one
+    # walkthrough_step value for 10+ turns while the model is expected to
+    # track its own sub-navigation (step-source, select-source-*, step-brief,
+    # brief-*, step-script, ...) purely by rereading its own conversation
+    # history, and real testing showed that isn't reliable under
+    # auto-continue's rapid, unattended pacing: confirmed live, "step-brief"
+    # fired 3 separate times across 3 auto-continue beats, each re-narrating
+    # the Brief step's intro (and re-covering sub-parts already delivered) as
+    # if for the first time. Cleared the instant walkthrough_step actually
+    # changes value, same as walkthrough_generate_fired.
+    walkthrough_fired_actions: set = field(default_factory=set)
     # The same id this session is keyed by in _sessions below — kept on the
     # object itself (not just as the dict key) so run_turn() can persist each
     # turn to the durable transcript log (see data/gate_log.py) without

@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Icon from "../../components/Icon";
 import StepBar from "../../components/studio/StepBar";
 import TeamDock from "../../components/studio/TeamDock";
 import SceneList from "../../components/studio/SceneList";
 import GenerationScreen from "../../components/studio/GenerationScreen";
 import AvatarResult from "../../components/studio/AvatarResult";
-import { applyPulse } from "../../lib/useHighlight";
 import { MUSIC_TRACKS, generateDummyScenes, type Scene } from "../../registry/studioData";
 
 const STEPS = ["Brief", "Scenes", "Options", "Generate"];
@@ -20,14 +19,15 @@ interface MagicAvatarMasterWizardProps {
   onTierChange: (tier: "hd" | "cinematic") => void;
   generating: boolean;
   onGeneratingChange: (generating: boolean) => void;
+  // Lifted to the parent (see MagicAvatarStudio.tsx) rather than kept as
+  // local state here — this used to live in this component alone, which
+  // meant none of the parent's 8 registered wizard actions ever reset it:
+  // once generation finished, every one of them silently failed to
+  // navigate away from the result screen at all, a real functional bug
+  // found during the highlight-system audit, not just a missed pulse.
+  showResult: boolean;
+  onShowResultChange: (show: boolean) => void;
   registerSegmentAndDirect: (fn: (() => void) | null) => void;
-  // Same shape as registerSegmentAndDirect, for the same reason — the
-  // parent owns the always-mounted action registration, but the actual
-  // pulse-cue targets (StepBar pills, tier cards, the Next/Generate
-  // buttons) only exist here. Hands the parent a live "pulse whichever
-  // target matches this registry action id" function, re-registered every
-  // render so it never reads stale step/generating/tier values.
-  registerCue: (fn: ((actionId: string) => void) | null) => void;
   onBack: () => void;
   onBackToAssets: () => void;
   onSubmitForReview: () => void;
@@ -65,8 +65,9 @@ export default function MagicAvatarMasterWizard({
   onTierChange: setTier,
   generating,
   onGeneratingChange: setGenerating,
+  showResult,
+  onShowResultChange: setShowResult,
   registerSegmentAndDirect,
-  registerCue,
   onBack,
   onBackToAssets,
   onSubmitForReview,
@@ -78,19 +79,9 @@ export default function MagicAvatarMasterWizard({
   const [segmenting, setSegmenting] = useState(false);
   const [addIntro, setAddIntro] = useState(true);
   const [addOutro, setAddOutro] = useState(true);
-  // Set once GenerationScreen's fake render finishes — mirrors
-  // MagicReelStudio's "result" view, just kept local here since this
-  // component (not its parent) already owns every field the result screen
-  // needs (name, persona, scenes, tier, cards).
-  const [showResult, setShowResult] = useState(false);
 
   const [musicTab, setMusicTab] = useState<MusicTab>("none");
   const [musicId, setMusicId] = useState<string | null>(null);
-
-  const stepRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
-  const tierRefs = useRef<Map<"hd" | "cinematic", HTMLButtonElement>>(new Map());
-  const generateBreakdownRef = useRef<HTMLButtonElement>(null);
-  const generateButtonRef = useRef<HTMLButtonElement>(null);
 
   function segmentAndDirect() {
     setSegmenting(true);
@@ -111,54 +102,11 @@ export default function MagicAvatarMasterWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [persona, name]);
 
-  // Maps each registry action id to whichever DOM target it actually acts
-  // on right now — the in-place element if this step/generating state has
-  // it mounted, otherwise the always-mounted StepBar pill for the step
-  // that action lands on (same "navigation cues the always-mounted
-  // control" rule used everywhere else). No deps array — re-registers
-  // every render so it always reads current step/generating/tier, never a
-  // stale value from whenever it first mounted.
-  useEffect(() => {
-    function pulseCue(actionId: string) {
-      const stepPill = (i: number) => stepRefs.current.get(i) ?? null;
-      const onStep2 = step === 2 && !generating;
-      const onStep3 = step === 3 && !generating;
-      switch (actionId) {
-        case "step-brief":
-          applyPulse(stepPill(0));
-          break;
-        case "generate-breakdown":
-          applyPulse(step === 0 ? generateBreakdownRef.current : stepPill(0));
-          break;
-        case "step-scenes":
-          applyPulse(stepPill(1));
-          break;
-        case "step-options":
-          applyPulse(stepPill(2));
-          break;
-        case "select-tier-hd":
-          applyPulse(onStep2 ? tierRefs.current.get("hd") ?? null : stepPill(2));
-          break;
-        case "select-tier-cinematic":
-          applyPulse(onStep2 ? tierRefs.current.get("cinematic") ?? null : stepPill(2));
-          break;
-        case "step-generate":
-          applyPulse(stepPill(3));
-          break;
-        case "start-generation":
-          applyPulse(onStep3 ? generateButtonRef.current : stepPill(3));
-          break;
-      }
-    }
-    registerCue(pulseCue);
-    return () => registerCue(null);
-  });
-
   if (showResult) {
     return (
       <div className="page studio">
         <div className="studio__header">
-          <button className="studio__back" onClick={onBack}>
+          <button className="studio__back" data-hl="launchpad:open" data-hl-group="studio-header" onClick={onBack}>
             <Icon name="chevron-down" size={14} /> MagicAvatar
           </button>
           <h1 className="page__title">Digital Twin Master Video</h1>
@@ -191,9 +139,11 @@ export default function MagicAvatarMasterWizard({
         currentIndex={step}
         onStepClick={setStep}
         locked={generating}
-        onStepRef={(i, el) => {
-          if (el) stepRefs.current.set(i, el);
-          else stepRefs.current.delete(i);
+        hlGroupPrefix="step"
+        dataHl={(i) => {
+          if (i === 0) return "wizard:step-brief";
+          if (i === 1) return "wizard:step-scenes";
+          return undefined;
         }}
       />
 
@@ -247,7 +197,7 @@ export default function MagicAvatarMasterWizard({
             </div>
 
             <div className="studio__footer">
-              <button className="btn-primary" ref={generateBreakdownRef} onClick={segmentAndDirect} disabled={segmenting}>
+              <button className="btn-primary" data-hl="wizard:generate-breakdown" onClick={segmentAndDirect} disabled={segmenting}>
                 <Icon name="sparkles" size={14} /> {segmenting ? "Directing visuals…" : "Next →"}
               </button>
             </div>
@@ -270,7 +220,7 @@ export default function MagicAvatarMasterWizard({
               </button>
             </div>
             <div className="studio__footer">
-              <button className="btn-primary" onClick={() => setStep(2)}>
+              <button className="btn-primary" data-hl="wizard:step-options" onClick={() => setStep(2)}>
                 Continue to options →
               </button>
             </div>
@@ -282,10 +232,7 @@ export default function MagicAvatarMasterWizard({
             <div className="field-label">Video mode</div>
             <div className="tier-grid">
               <button
-                ref={(el) => {
-                  if (el) tierRefs.current.set("hd", el);
-                  else tierRefs.current.delete("hd");
-                }}
+                data-hl="wizard:select-tier-hd"
                 className={`tier-card ${tier === "hd" ? "tier-card--active" : ""}`}
                 onClick={() => setTier("hd")}
               >
@@ -294,10 +241,7 @@ export default function MagicAvatarMasterWizard({
                 <div className="tier-card__meta">4,500 credits · ~2 min</div>
               </button>
               <button
-                ref={(el) => {
-                  if (el) tierRefs.current.set("cinematic", el);
-                  else tierRefs.current.delete("cinematic");
-                }}
+                data-hl="wizard:select-tier-cinematic"
                 className={`tier-card ${tier === "cinematic" ? "tier-card--active" : ""}`}
                 onClick={() => setTier("cinematic")}
               >
@@ -340,7 +284,7 @@ export default function MagicAvatarMasterWizard({
             </p>
 
             <div className="studio__footer">
-              <button className="btn-primary" onClick={() => setStep(3)}>
+              <button className="btn-primary" data-hl="wizard:step-generate" onClick={() => setStep(3)}>
                 Continue to generate →
               </button>
             </div>
@@ -378,7 +322,7 @@ export default function MagicAvatarMasterWizard({
                 </div>
               </dl>
               <div className="studio__footer">
-                <button className="btn-primary" ref={generateButtonRef} onClick={() => setGenerating(true)}>
+                <button className="btn-primary" data-hl="wizard:start-generation" onClick={() => setGenerating(true)}>
                   Generate master →
                 </button>
               </div>

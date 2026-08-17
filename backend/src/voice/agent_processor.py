@@ -58,6 +58,11 @@ AUTO_CONTINUE_STALL_GRACE_SECS = 2.0
 # worth throttling further.
 HAND_RAISE_POLL_INTERVAL_SECS = 0.3
 
+# A typed message deserves at least as prompt a reaction as a hand-raise —
+# arguably more, since unlike a raise (a pure signal) it already carries the
+# actual thing the visitor wants answered.
+MEETING_CHAT_POLL_INTERVAL_SECS = 0.3
+
 REST_API_URL = "http://localhost:8787"
 
 # Ends the call after this much total silence from both sides — someone who
@@ -258,6 +263,26 @@ class AgentRuntimeProcessor(FrameProcessor):
         # (see _maybe_replay_pending_interruption), so a genuine barge-in's
         # actual words are never just thrown away.
         self._pending_interruption_text: Optional[str] = None
+        # Which surface a stashed interruption's text actually came from —
+        # "voice" (a dropped real transcript, the original/only case this
+        # existed for) or "chat" (a typed Meeting Mode message that arrived
+        # while a beat was mid-turn, see _handle_meeting_chat_message).
+        # Read (and reset back to "voice") by _advance_after_turn alongside
+        # _pending_interruption_text itself, so the eventual reply gets
+        # reported with the right source — see _current_reply_source below.
+        self._pending_interruption_source: str = "voice"
+        # Which surface the CURRENTLY RUNNING turn's replies should be
+        # reported under (see _report_reply) — "voice" for everything
+        # (narration, real spoken turns, hand-raise handoffs) except a real
+        # turn that specifically started from a typed chat message, which
+        # sets this to "chat" for its duration (see _handle_real_turn's
+        # `source` param). Every speaking path that ISN'T _handle_real_turn
+        # (auto_continue_walkthrough, _speak_hand_raise_handoff, the idle
+        # farewell) resets this to "voice" itself at its own start, since
+        # otherwise it would just keep whatever a previous chat-sourced turn
+        # last left it as.
+        self._current_reply_source: str = "voice"
+        self._meeting_chat_poll_task: asyncio.Task | None = None
         # Counts consecutive stash-replays chained back-to-back with no
         # normal, non-replayed turn in between (see _advance_after_turn) —
         # capped at one. Without a cap, someone saying two or three
@@ -331,6 +356,7 @@ class AgentRuntimeProcessor(FrameProcessor):
             # so it's always heard and answered instead of silently skipped.
             logger.info(f"[{self._visitor_id}] stashing transcript mid-turn: {frame.text!r}")
             self._pending_interruption_text = frame.text
+            self._pending_interruption_source = "voice"
             return
         await super().queue_frame(frame, direction, callback)
 
@@ -347,6 +373,7 @@ class AgentRuntimeProcessor(FrameProcessor):
             if not self._greeted:
                 self._greeted = True
                 self._hand_raise_poll_task = asyncio.create_task(self._poll_hand_raise())
+                self._meeting_chat_poll_task = asyncio.create_task(self._poll_meeting_chat())
                 self._auto_continue_watchdog_task = asyncio.create_task(self._watch_auto_continue_stall())
                 await self._greet(direction)
             return
@@ -404,15 +431,24 @@ class AgentRuntimeProcessor(FrameProcessor):
 
         await self.push_frame(frame, direction)
 
-    async def _handle_real_turn(self, text: str, direction: FrameDirection) -> None:
+    async def _handle_real_turn(self, text: str, direction: FrameDirection, source: str = "voice") -> None:
         """Processes one real turn — the prospect's actual words — through
         run_turn_stream and out to speech. Shared by the TranscriptionFrame
-        handler above (a transcript arriving live) and _advance_after_turn
+        handler above (a transcript arriving live), _advance_after_turn
         below (a transcript that had to be stashed because it arrived mid-
         beat — see queue_frame's docstring — replayed here the moment it's
-        safe to). Exactly the same handling either way: the model should
-        never be able to tell the difference from its own side."""
+        safe to), and _handle_meeting_chat_message (a typed message, treated
+        as a real turn's content exactly the same way). Exactly the same
+        handling either way: the model should never be able to tell the
+        difference from its own side.
+
+        `source` ("voice" or "chat") only affects _report_reply's tagging
+        (see _current_reply_source) — it changes nothing about how the turn
+        itself runs, so a typed message gets identical interruption/
+        walkthrough/qualification handling to a spoken one, just reported
+        under the surface it actually came from."""
         logger.info(f"[{self._visitor_id}] heard: {text!r}")
+        self._current_reply_source = source
         session = get_session(self._visitor_id)
         # Defensive second cancellation point — VAD-start and an STT
         # segment finalizing aren't the same frame/timing, so this isn't
@@ -506,6 +542,8 @@ class AgentRuntimeProcessor(FrameProcessor):
         pending = self._pending_interruption_text
         if pending is not None:
             self._pending_interruption_text = None
+            pending_source = self._pending_interruption_source
+            self._pending_interruption_source = "voice"
             if self._interruption_replay_depth >= 1:
                 self._interruption_replay_depth = 0
                 catching_up = "Sorry, I'm still catching up — could you say that again?"
@@ -523,6 +561,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                 if session.visitor_id:
                     gate_log.append_transcript_turn(session.visitor_id, "user", pending)
                     gate_log.append_transcript_turn(session.visitor_id, "agent", catching_up)
+                self._current_reply_source = pending_source
                 asyncio.create_task(self._report_reply(catching_up))
                 await self._speak(catching_up, direction)
                 # This message is spoken directly here, never through the
@@ -538,7 +577,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                 self._maybe_schedule_auto_continue(session, direction)
                 return
             self._interruption_replay_depth += 1
-            await self._handle_real_turn(pending, direction)
+            await self._handle_real_turn(pending, direction, source=pending_source)
             return
         self._interruption_replay_depth = 0
         self._maybe_schedule_auto_continue(session, direction)
@@ -1042,6 +1081,10 @@ class AgentRuntimeProcessor(FrameProcessor):
         fires)."""
         self._turn_in_progress = True
         self._interrupted_this_turn = False
+        # Auto-continue beats are always narration, never a reply to
+        # anything typed — reset in case a previous real turn left this set
+        # to "chat" (see _current_reply_source).
+        self._current_reply_source = "voice"
         try:
             prefetched = await self._take_ready_prefetch(session)
             try:
@@ -1133,13 +1176,17 @@ class AgentRuntimeProcessor(FrameProcessor):
             async with aiohttp.ClientSession() as http:
                 await http.post(
                     f"{REST_API_URL}/internal/voice-reply",
-                    json={"visitorId": self._visitor_id, "reply": reply},
+                    json={"visitorId": self._visitor_id, "reply": reply, "source": self._current_reply_source},
                     timeout=aiohttp.ClientTimeout(total=3),
                 )
         except Exception:
             logger.exception(f"Failed to report voice reply for visitor {self._visitor_id}")
 
     async def _speak_hand_raise_handoff(self, direction: FrameDirection) -> None:
+        # A hand-raise carries no typed content of its own, regardless of
+        # whether it interrupted a chat-sourced turn — always report as
+        # "voice" (see _current_reply_source).
+        self._current_reply_source = "voice"
         # Set before speaking, not after — this is the single gate that
         # stops a raise from getting handed off twice (once mid-reply via
         # _speak_reply, once more at end-of-turn, or twice across repeated
@@ -1250,6 +1297,74 @@ class AgentRuntimeProcessor(FrameProcessor):
         except asyncio.CancelledError:
             pass
 
+    async def _poll_meeting_chat(self) -> None:
+        """Same cross-process reasoning as _poll_hand_raise, opposite
+        direction: Meeting Mode's chat panel posts typed text to the REST
+        process (:8787), and this process (:7860, the one actually running
+        the live call) polls it, since the two share no memory. Unlike
+        hand-raise's boolean mailbox, this one already carries a complete,
+        final piece of content — no "wait for the actual question" step, it
+        gets handled the instant it's seen."""
+        try:
+            async with aiohttp.ClientSession() as http:
+                while True:
+                    await asyncio.sleep(MEETING_CHAT_POLL_INTERVAL_SECS)
+                    try:
+                        async with http.get(
+                            f"{REST_API_URL}/internal/meeting-chat/{self._visitor_id}",
+                            timeout=aiohttp.ClientTimeout(total=3),
+                        ) as resp:
+                            data = await resp.json()
+                            message = data.get("message") or ""
+                    except Exception:
+                        logger.exception(f"Failed to poll meeting chat for visitor {self._visitor_id}")
+                        continue
+                    if message:
+                        await self._handle_meeting_chat_message(message, FrameDirection.DOWNSTREAM)
+        except asyncio.CancelledError:
+            pass
+
+    async def _handle_meeting_chat_message(self, text: str, direction: FrameDirection) -> None:
+        """Routes a typed Meeting Mode message into the exact same handling
+        a spoken interruption already gets — deliberately not a separate
+        mechanism, since every piece of "was I speaking, do I need to cut
+        audio, do I need to cancel the next scripted beat" logic a typed
+        message needs already exists for voice. The one difference from a
+        real VAD barge-in: there's no waiting for STT to catch up, since the
+        full text is already in hand the moment this runs.
+
+        Counts as activity (see _last_activity) even though it's not
+        speech — someone actively typing instead of talking shouldn't get
+        idled out from under them."""
+        self._last_activity = time.monotonic()
+        if self._turn_in_progress:
+            # A beat is currently being generated and/or spoken. If it's
+            # actively speaking, cut the audio right now — same as a real
+            # mic barge-in (see VADUserStartedSpeakingFrame above) or a
+            # hand-raise landing mid-speech (see _poll_hand_raise) — rather
+            # than waiting for the current sentence to finish. Either way,
+            # stash the text itself rather than calling _handle_real_turn
+            # again here: a second concurrent call while _turn_in_progress
+            # is already true would corrupt session.history ordering. The
+            # in-flight turn's own _advance_after_turn (its `finally` always
+            # runs, interrupted or not) picks this up and replays it the
+            # instant it's actually safe to, via the same stash-and-replay
+            # path a dropped real transcript already uses.
+            if self._bot_speaking:
+                get_session(self._visitor_id).was_interrupted = True
+                self._interrupted_this_turn = True
+                await self.broadcast_interruption()
+            self._cancel_pending_auto_continue()
+            self._cancel_prefetch()
+            self._pending_interruption_text = text
+            self._pending_interruption_source = "chat"
+            return
+        # Genuinely idle — nothing else is going to pick this up, so handle
+        # it directly, exactly like a transcript arriving while idle would.
+        self._cancel_pending_auto_continue()
+        self._cancel_prefetch()
+        await self._handle_real_turn(text, direction, source="chat")
+
     def seconds_since_activity(self) -> float:
         """Read by bot.py's idle watcher (see run_bot) — kept here because
         this is the processor that actually observes real speech from both
@@ -1273,6 +1388,7 @@ class AgentRuntimeProcessor(FrameProcessor):
             "Looks like you might have stepped away — I'll go ahead and hop off. "
             "Feel free to jump back in anytime!"
         )
+        self._current_reply_source = "voice"
         asyncio.create_task(self._report_reply(farewell))
         await self._speak(farewell, FrameDirection.DOWNSTREAM)
 
@@ -1281,6 +1397,10 @@ class AgentRuntimeProcessor(FrameProcessor):
             self._hand_raise_poll_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._hand_raise_poll_task
+        if self._meeting_chat_poll_task is not None:
+            self._meeting_chat_poll_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._meeting_chat_poll_task
         if self._auto_continue_watchdog_task is not None:
             self._auto_continue_watchdog_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

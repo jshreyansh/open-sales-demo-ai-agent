@@ -54,7 +54,7 @@ export default function MagicAvatarLaunchpad({ onBack, onCreateMaster }: MagicAv
             Author the script, direct photoreal visuals, and generate a silent cinematic master video — your reusable presenter, once.
           </p>
           <p className="avatar-launch__step-team">Your Content Strategist, Creative Producer & MLR Reviewer draft it with you.</p>
-          <button className="btn-primary avatar-launch__cta" onClick={onCreateMaster}>
+          <button className="btn-primary avatar-launch__cta" data-hl="launchpad:create-master" onClick={onCreateMaster}>
             Create Digital Twin Master Video →
           </button>
         </div>

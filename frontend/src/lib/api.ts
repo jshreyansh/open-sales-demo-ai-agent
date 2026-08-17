@@ -41,15 +41,38 @@ export async function getVoiceAction(visitorId: string): Promise<AgentAction | n
   return result.page && result.component && result.method ? (result as AgentAction) : null;
 }
 
+export interface VoiceReply {
+  text: string;
+  // "chat" for a reply answering a typed Meeting Mode message, "voice"
+  // (the default) for everything else — lets a chat panel show only the
+  // exchanges it's responsible for instead of the whole spoken call.
+  source: "voice" | "chat";
+}
+
 /**
  * Polled while a voice call is active — the reply text the agent just spoke.
  * Pipecat's own bot-transcription RTVI event isn't reliably emitted for the
  * voice pipeline's one-shot (non-streaming) reply, so this side-channel is
  * what actually gets the spoken words into the chat transcript.
  */
-export async function getVoiceReply(visitorId: string): Promise<string | null> {
-  const result = await getJson<{ reply?: string }>(`/api/voice-reply/${visitorId}`);
-  return result.reply || null;
+export async function getVoiceReply(visitorId: string): Promise<VoiceReply | null> {
+  const result = await getJson<{ reply?: string; source?: string }>(`/api/voice-reply/${visitorId}`);
+  if (!result.reply) return null;
+  return { text: result.reply, source: result.source === "chat" ? "chat" : "voice" };
+}
+
+/**
+ * Sends a typed message in Meeting Mode's in-call chat panel — routed to the
+ * same live session as the voice call (see server.py's
+ * _pending_meeting_chat mailbox) so it interrupts/answers exactly like a
+ * real mic barge-in would, just without speaking it.
+ */
+export async function sendMeetingChatMessage(visitorId: string, message: string): Promise<void> {
+  await fetch(`${API_URL}/api/meeting-chat/${visitorId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
 }
 
 /**
