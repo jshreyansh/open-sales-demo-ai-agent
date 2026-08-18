@@ -128,7 +128,13 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
             "first lands on Source or Brief (\"step-source\"/\"step-brief\") should be a brief, "
             "one-sentence transition only — name the stage and that it has a few parts, don't "
             "summarize what those parts do, since you're about to explain each one properly right "
-            "after; a content preview here just gets said twice. Generate is a "
+            "after; a content preview here just gets said twice. Script has its own required "
+            "button press too, same reasoning as Generate below: once you land on \"step-script\", "
+            "the very next turn must actually fire \"generate-script\" as its own dedicated action "
+            "— narrate that you're generating the draft (e.g. \"let's generate that script\"), don't "
+            "just mention hitting generate and jump straight into Scenes in the same breath, that "
+            "skips the button press entirely and the prospect never sees the script actually get "
+            "drafted. Generate is a "
             "real, separate stage, not just something to mention while "
             "wrapping up — when you get there, actually fire component \"wizard\" action "
             "\"start-generation\" as this turn's action (after \"step-generate\" got you onto that "
@@ -148,7 +154,12 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
         guidance=(
             "Open the MagicAvatar Launchpad, then start the Master wizard (create-master) and "
             "walk it end-to-end the same way as MagicReel — Brief, Scenes, Options, Generate — "
-            "one stage at a time, same continuous active-walkthrough pacing as step 6. Generate is "
+            "one stage at a time, same continuous active-walkthrough pacing as step 6. Brief has "
+            "its own required button press before Scenes, same reasoning as Generate below: once "
+            "you land on \"step-brief\" here, the very next turn must actually fire "
+            "\"generate-breakdown\" as its own dedicated action — narrate that you're turning the "
+            "brief into a scene breakdown, don't just mention that button and jump straight into "
+            "Scenes in the same breath, that skips the button press entirely. Generate is "
             "a real, separate stage here too — when you get there, actually fire component "
             "\"wizard\" action \"start-generation\" as this turn's action (after \"step-generate\"), "
             "narrating what's about to render — don't just mention generating and jump straight to "
@@ -191,3 +202,41 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
 ]
 
 WALKTHROUGH_STEPS_BY_INDEX = {s.index: s for s in WALKTHROUGH_STEPS}
+
+# The canonical, ordered sub-action sequence for step 6/7's own internal
+# wizard sub-navigation — mirrors the prose in each step's guidance above,
+# but as real structured data runtime.py's _walkthrough_note can walk
+# through to tell the model the exact next sub-action, rather than just
+# listing what's already covered and trusting it to work out the complement
+# itself. Real testing showed that inference step is exactly where this
+# still went wrong even after already-covered ground truth was added: the
+# model fired "step-brief" a second time (the wrong, already-done value)
+# instead of "brief-brand-product" (the correct next one), specifically at
+# the last Brief sub-part, twice in the same call. Giving the exact next
+# value directly removes that inference step entirely — same "give ground
+# truth, don't make it infer" fix as everywhere else in this file.
+STEP_SUB_ACTIONS = {
+    6: [
+        "step-source",
+        "select-source-dossier",
+        "select-source-news",
+        "select-source-custom",
+        "step-brief",
+        "brief-audience",
+        "brief-voice-language",
+        "brief-brand-product",
+        "step-script",
+        "generate-script",
+        "step-scenes",
+        "step-generate",
+        "start-generation",
+    ],
+    7: [
+        "step-brief",
+        "generate-breakdown",
+        "step-scenes",
+        "step-options",
+        "step-generate",
+        "start-generation",
+    ],
+}

@@ -13,7 +13,7 @@ from ..context.store import SessionState, HistoryEntry
 from ..data import gate_log
 from ..persona import AGENT_LOCATION, AGENT_NAME, AGENT_TIMEZONE
 from .registry import PRODUCT_OVERVIEW, UI_REGISTRY, flatten_registry, FlatAction
-from .walkthrough import WALKTHROUGH_STEPS_BY_INDEX
+from .walkthrough import STEP_SUB_ACTIONS, WALKTHROUGH_STEPS_BY_INDEX
 
 
 def _load_knowledge() -> str:
@@ -941,23 +941,49 @@ def _walkthrough_note(session: SessionState) -> str:
     )
     # Ground truth for step 6/7's own internal sub-navigation (step-source,
     # select-source-*, step-brief, brief-*, step-script, ...) — see
-    # SessionState.walkthrough_fired_actions. Same reasoning as
-    # generate_fired_line above, generalized: without this, the model has no
-    # explicit signal for which of these it already fired and reliably
-    # re-fires/re-narrates one under auto-continue's rapid, unattended
-    # pacing — confirmed live, "step-brief" fired 3 separate times across 3
-    # auto-continue beats, each re-narrating the Brief step's intro (and
-    # re-covering sub-parts already delivered) as if for the first time.
-    # Excludes "start-generation", which generate_fired_line above already
-    # covers with its own stronger wording (forcing wrap-up on a repeat).
+    # SessionState.walkthrough_fired_actions and walkthrough.py's
+    # STEP_SUB_ACTIONS. Same reasoning as generate_fired_line above,
+    # generalized: without this, the model has no explicit signal for which
+    # of these it already fired and reliably re-fires/re-narrates one under
+    # auto-continue's rapid, unattended pacing — confirmed live, "step-brief"
+    # fired 3 separate times across 3 auto-continue beats, each re-narrating
+    # the Brief step's intro (and re-covering sub-parts already delivered) as
+    # if for the first time.
+    #
+    # Listing "already covered" alone (an earlier version of this) wasn't
+    # enough on its own — confirmed live, the model still fired "step-brief"
+    # a SECOND time (the wrong, already-done value, with a hallucinated
+    # extra "method_note" field) instead of "brief-brand-product" (the
+    # correct next one), specifically at the last Brief sub-part, twice in
+    # the same call. Computing and stating the exact next value removes
+    # that inference step entirely instead of trusting the model to work
+    # out the complement of a list itself.
+    #
+    # Excludes "start-generation" from the "already covered" list, which
+    # generate_fired_line above already covers with its own stronger wording
+    # (forcing wrap-up on a repeat) — but it's left in STEP_SUB_ACTIONS so
+    # it still shows up correctly as "the next one" once everything else is
+    # done.
+    sub_actions = STEP_SUB_ACTIONS.get(step.index, [])
     already_fired_actions = sorted(session.walkthrough_fired_actions - {"start-generation"})
+    next_sub_action = next((a for a in sub_actions if a not in session.walkthrough_fired_actions), None)
     fired_actions_line = (
         (
-            f"\nYou've ALREADY covered these sub-parts of this step this run: {', '.join(already_fired_actions)}. "
-            "Do NOT re-fire or re-narrate any of these as if for the first time — move on to whichever "
-            "sub-part/stage you haven't done yet, in the order given above.\n"
+            (
+                f"\nYou've ALREADY covered these sub-parts of this step this run: {', '.join(already_fired_actions)}. "
+                "Do NOT re-fire or re-narrate any of these as if for the first time.\n"
+                if already_fired_actions
+                else ""
+            )
+            + (
+                f"The exact next sub-part/stage to move into (once you're done with whatever you're "
+                f"currently on) is action \"{next_sub_action}\" — use that exact value, not one you've "
+                "already fired above.\n"
+                if next_sub_action
+                else ""
+            )
         )
-        if step.index in (6, 7) and already_fired_actions
+        if step.index in (6, 7) and sub_actions
         else ""
     )
     return (
@@ -1160,6 +1186,39 @@ def _finalize_turn(session: SessionState, result: AgentResult, persist: bool = T
     resume_walkthrough = result.pop("resume_walkthrough", None)
     new_step = result.pop("walkthrough_step", None)
     prev_walkthrough_step = session.walkthrough_step
+    # Read early (non-destructively — "action" itself is popped nowhere,
+    # just read again later) so the guard right below can use it.
+    action_method = (result.get("action") or {}).get("method")
+
+    # Ground truth guard: start-generation firing for the FIRST time this
+    # step 6/7 run must never ALSO end or advance the walkthrough in the
+    # SAME turn — the rendered result needs its own beat first (see the
+    # guidance's own "move into step 7 on the turn AFTER that, not the same
+    # one"). Confirmed live TWICE, two different ways the model expressed
+    # "done" in the same breath as firing the render: once via
+    # walkthrough_step advancing past 6/7 (full platform tour), once via
+    # end_walkthrough=True (a module-scoped tour, where "done with this
+    # step" correctly means "done with the whole scoped run" instead of a
+    # numbered next step — but still happened before the result was ever
+    # shown). Checked here, before the end_walkthrough/start_walkthrough/
+    # start_module_walkthrough/new_step precedence chain below even runs,
+    # since end_walkthrough's own branch would otherwise win outright and
+    # this same-turn combination would never reach the new_step-only guard
+    # a narrower, earlier version of this fix used to have.
+    if (
+        prev_walkthrough_step in (6, 7)
+        and action_method == "start-generation"
+        and not session.walkthrough_generate_fired
+        and (end_walkthrough or (new_step is not None and new_step > prev_walkthrough_step))
+    ):
+        logger.warning(
+            f"[{session.visitor_id}] start-generation fired and the walkthrough tried to "
+            f"{'end (end_walkthrough)' if end_walkthrough else f'advance (walkthrough_step={new_step!r})'} "
+            f"in the SAME turn — holding at step {prev_walkthrough_step} so the result gets its own beat first"
+        )
+        end_walkthrough = False
+        new_step = None
+
     if end_walkthrough:
         session.walkthrough_step = None
         session.walkthrough_scope_end = None
@@ -1233,7 +1292,6 @@ def _finalize_turn(session: SessionState, result: AgentResult, persist: bool = T
         # A fresh run through 6/7 (or leaving it) starts with a clean slate —
         # see SessionState.walkthrough_fired_actions.
         session.walkthrough_fired_actions = set()
-    action_method = (result.get("action") or {}).get("method")
     # Ground truth for "which step 6/7 sub-actions have already fired in the
     # CURRENT wizard run" — see SessionState.walkthrough_fired_actions.
     # Recorded for every action, not just start-generation (that one keeps

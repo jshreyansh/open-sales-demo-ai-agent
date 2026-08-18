@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { NAV_REGISTRY } from "../registry/pages";
 import { getApprovals } from "../lib/api";
-import { applyPulse } from "../lib/useHighlight";
 import Icon from "./Icon";
 import logo from "../assets/contentiq-lockup-light.png";
 
@@ -13,21 +12,6 @@ interface SidebarProps {
 export default function Sidebar({ activePageId, onNavigate }: SidebarProps) {
   const [pendingApprovals, setPendingApprovals] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
-  const itemRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
-  // The active-page CSS class below already tracks activePageId correctly
-  // on its own — but a static color swap is easy to miss mid-conversation.
-  // This adds the same transient pulse cue every other agent-driven jump
-  // gets (ContentStudio's tabs/cards, the wizards' StepBar pills) so a
-  // voice-triggered page switch is actually noticeable, not just "quietly
-  // now true." Skips the very first mount (no real switch happened yet).
-  const mounted = useRef(false);
-  useEffect(() => {
-    if (!mounted.current) {
-      mounted.current = true;
-      return;
-    }
-    applyPulse(itemRefs.current.get(activePageId) ?? null);
-  }, [activePageId]);
 
   useEffect(() => {
     getApprovals()
@@ -64,10 +48,7 @@ export default function Sidebar({ activePageId, onNavigate }: SidebarProps) {
               return (
                 <button
                   key={item.id}
-                  ref={(el) => {
-                    if (el) itemRefs.current.set(item.id, el);
-                    else itemRefs.current.delete(item.id);
-                  }}
+                  data-hl-group={`${item.id}-nav`}
                   className={`sidebar__item ${activePageId === item.id ? "sidebar__item--active" : ""} ${indent ? "sidebar__item--indent" : ""}`}
                   disabled={item.status === "soon"}
                   onClick={() => onNavigate(item.id)}

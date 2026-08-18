@@ -1508,39 +1508,96 @@ body {
   transition: box-shadow 0.2s, border-color 0.2s;
 }
 
-/* Dims the rest of the shared screen and rings the target — the 9999px
-   spread paints outward from the element's own box (no viewport coordinates
-   needed) and gets clipped to just the shared-screen pane for free, since
-   .meet__stage already has overflow: hidden.
-   .panel--spotlight and .panel--hl-armed used to be two different
-   treatments (a heavier full-dim "spotlight", opt-in via
-   data-hl-cue="spotlight", vs. a lighter accent-only glow ring as the
-   default everywhere else) — unified into one now: with dozens of actions
-   across a wizard, the ring-only version reads as too easy to miss (you
-   have to already know where to look), and it's flatly invisible on a
-   target whose own fill is already the accent color (a primary CTA
-   button) since the ring is that same color. A white inner ring + accent
-   outer ring reads clearly against both a dimmed backdrop and an
-   accent-colored button. Both classnames are kept (highlightBridge.ts
-   still picks between them via data-hl-cue, and 4 pages set
-   .panel--spotlight directly) but now share the identical rule. */
+/* A fixed, full-screen (or full-shared-screen, in Meeting Mode — see
+   highlightBridge.ts's setScrim) dim overlay, sitting just below the
+   highlighted target's own z-index so it pokes through above the dim.
+   Used to be a 9999px box-shadow spread on the target itself, but that
+   gets clipped by the nearest ancestor with overflow != visible —
+   .app-shell__content (scrolling) clipped it exactly at the sidebar's
+   edge, and a sidebar-triggered highlight (outside .app-shell__content
+   entirely) got no dim at all. A real overlay appended to .app-shell
+   (the common ancestor of both sidebar and content) isn't clipped by
+   either. */
+.hl-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  background: rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.hl-scrim--visible {
+  opacity: 1;
+}
+
+/* Rings the target — a floating overlay (sized/positioned to match the
+   target's own rect via highlightBridge.ts's positionRing) rather than a
+   box-shadow class applied directly to the target, for the same clipping
+   reason as .hl-scrim above: .sidebar__nav's own overflow-y: auto (needed
+   for its scrollable item list) clipped a box-shadow ring at its edges,
+   so a sidebar item's highlight was invisible for the entire hold even
+   after the dim scrim itself got fixed. A real overlay sidesteps that
+   clipping regardless of which container the target happens to sit in.
+   White inner ring + accent outer ring reads clearly against both a
+   dimmed backdrop and an accent-colored button (a primary CTA), since an
+   accent-only ring would be invisible on one of those. */
+.hl-ring {
+  position: fixed;
+  z-index: 5;
+  pointer-events: none;
+  opacity: 0;
+  box-shadow:
+    0 0 0 3px #fff,
+    0 0 0 6px var(--accent),
+    0 0 22px 4px rgba(255, 255, 255, 0.3);
+  transition: opacity 0.2s ease;
+}
+/* Lets the highlighted target itself poke back out of the dim scrim below
+   it -- same trick .topbar already relies on (position + z-index above the
+   scrim's z-index: 4) to stay undimmed. Without this, the target's own
+   rendering has no explicit stacking of its own, so the scrim (a positioned,
+   z-indexed sibling higher up the tree) simply paints over it like
+   everything else, even though the ring drawn around its edges is still
+   visible -- confirmed live: the "highlighted" card read exactly as dim as
+   its neighbors, just with a bright border. position: relative with no
+   offset is a layout no-op, so this is safe to toggle on arbitrary targets
+   (format cards, tabs, sidebar items) with no risk of shifting them. */
+.hl-target-lift {
+  position: relative;
+  z-index: 5;
+}
+
+.hl-ring--visible {
+  opacity: 1;
+}
+/* The one-shot "the agent just clicked this" flourish, landing at the
+   exact instant the action fires — distinct from the sustained hold
+   above. Reuses the same ring element/box-shadow, just adds the
+   expand-and-fade animation on top. */
+.hl-ring--pulse {
+  opacity: 1;
+  animation: action-pulse 0.6s ease-out;
+}
+
+/* Legacy: .panel--spotlight/.panel--hl-armed/.panel--pulse below are no
+   longer applied by highlightBridge.ts (see .hl-ring above) but are left
+   in place since frontend/src/lib/useHighlight.ts's applySpotlight/
+   applyPulse still reference them — those functions are themselves unused
+   by any live code path (kept from before the highlight system was
+   unified), so this CSS is effectively dead too, just not worth the
+   churn of deleting both right now. */
 .panel--spotlight,
 .panel--hl-armed {
   position: relative;
   z-index: 5;
   box-shadow:
-    0 0 0 9999px rgba(0, 0, 0, 0.6),
     0 0 0 3px #fff,
     0 0 0 6px var(--accent),
     0 0 22px 4px rgba(255, 255, 255, 0.3);
   transition: box-shadow 0.25s ease;
 }
 
-/* A quick expanding/fading ring anchored to the target's own box — the
-   "the agent just clicked this" cue for click/open/select-*/generate-*/
-   start-* actions, distinct from the lingering highlight above. White +
-   accent double ring for the same reason as the highlight above — stays
-   visible even when the target itself is accent-colored. */
 .panel--pulse {
   position: relative;
 }

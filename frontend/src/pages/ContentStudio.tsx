@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatSlug, MAGIC_ENGINES, STAGE_LABELS, type ContentFormat, type MagicEngine, type Stage } from "../registry/contentStudio";
 import { registerComponent, unregisterComponent, useRegisterComponent } from "../lib/uiRegistry";
-import { setFallbackGroups } from "../lib/highlightBridge";
+import { registerBeforeArm, setFallbackGroups } from "../lib/highlightBridge";
 import Icon from "../components/Icon";
 import FormatModal from "../components/FormatModal";
 
@@ -23,11 +23,52 @@ const FORMAT_TAB_GROUPS: Record<string, string> = Object.fromEntries(
 );
 setFallbackGroups("content-studio", FORMAT_TAB_GROUPS);
 
+// A previous preview modal closing out, and the destination tab's own grid
+// getting a beat to actually be seen, before the next preview opens --
+// without this, opening a second (or a different-tab) format fired the tab
+// switch and the modal open in the exact same instant as the first, which
+// read as the content just swapping/flickering rather than the agent
+// closing one preview and moving deliberately to the next.
+const CLOSE_PAUSE_MS = 400;
+const TAB_SETTLE_MS = 700;
+
 export default function ContentStudio({ initialTab, onOpenStudio }: ContentStudioProps) {
   const [tab, setTab] = useState(initialTab ?? "All");
   const [objective, setObjective] = useState<Stage | null>(null);
   const [audience, setAudience] = useState<string | null>(null);
   const [selected, setSelected] = useState<{ format: ContentFormat; engine: MagicEngine } | null>(null);
+
+  // The format-open handlers below are registered once (empty-deps effect,
+  // see below) and must still read the CURRENT tab/selected at call time to
+  // decide whether a close/tab-switch pause is needed -- refs mirrored every
+  // render, rather than adding tab/selected to that effect's deps, which
+  // would re-register (and briefly un-register) all 30 formats on every tab
+  // change instead of once.
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  // Pending close/tab-switch timers for whichever open sequence is
+  // currently in flight -- cleared on a fresh open call (so a rapid second
+  // action doesn't layer on top of a still-running sequence) and on unmount.
+  const sequenceTimers = useRef<number[]>([]);
+  useEffect(() => {
+    return () => {
+      for (const id of sequenceTimers.current) window.clearTimeout(id);
+    };
+  }, []);
+
+  // Runs BEFORE the next content-studio highlight arms/holds -- see
+  // registerBeforeArm's own docstring. Closes whatever preview modal is
+  // currently open right away, so by the time the NEXT format's highlight
+  // is actually visible (a moment later, once the transition finishes),
+  // the old modal is already gone instead of still sitting on top of it
+  // for the whole 2.2s hold.
+  useEffect(() => {
+    registerBeforeArm("content-studio", () => {
+      if (selectedRef.current !== null) setSelected(null);
+    });
+  }, []);
 
   useRegisterComponent("content-studio", "video-tab", { click: () => setTab("Video") });
   useRegisterComponent("content-studio", "aid-tab", { click: () => setTab("Aid") });
@@ -53,8 +94,32 @@ export default function ContentStudio({ initialTab, onOpenStudio }: ContentStudi
         ids.push(id);
         registerComponent("content-studio", id, {
           open: () => {
-            setTab(engine.tabId);
-            setSelected({ format, engine });
+            for (const timerId of sequenceTimers.current) window.clearTimeout(timerId);
+            sequenceTimers.current = [];
+
+            const currentlyOpen = selectedRef.current !== null;
+            const switchingTab = tabRef.current !== engine.tabId;
+            const openThis = () => setSelected({ format, engine });
+
+            if (currentlyOpen) setSelected(null);
+
+            if (!currentlyOpen && !switchingTab) {
+              openThis();
+              return;
+            }
+            const afterClose = window.setTimeout(
+              () => {
+                if (!switchingTab) {
+                  openThis();
+                  return;
+                }
+                setTab(engine.tabId);
+                const afterTabSettle = window.setTimeout(openThis, TAB_SETTLE_MS);
+                sequenceTimers.current.push(afterTabSettle);
+              },
+              currentlyOpen ? CLOSE_PAUSE_MS : 0
+            );
+            sequenceTimers.current.push(afterClose);
           },
         });
       }

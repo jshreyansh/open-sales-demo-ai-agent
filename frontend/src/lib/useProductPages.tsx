@@ -59,18 +59,21 @@ export function useProductPages() {
       // components — executeAction queues until that registration lands.
       setActivePageId(action.page);
     }
-    // Scoped to the current page's own container -- see highlightBridge.ts.
-    // When action.page differs from activePageId (a genuine cross-page
-    // jump), the page we're still showing right now has neither the real
-    // target nor a fallback proxy for the NEW page's action, so this
-    // resolves to "nothing to highlight, just run" -- identical to today's
-    // immediate-navigate behavior, not worse.
+    // Searches the whole document, not just the current page's own
+    // container -- the sidebar (always mounted, regardless of which page is
+    // showing) needs to be reachable too, both for its own dim/highlight
+    // treatment and as the universal fallback proxy for a genuine cross-page
+    // jump (see highlightBridge.ts's pageId param and Sidebar.tsx's
+    // data-hl-group). Safe to widen: data-hl/data-hl-group keys are unique
+    // per component:method, so this can't accidentally match something on
+    // whatever page we're jumping FROM.
     dispatchWithHighlight(
-      contentRef.current ?? document,
+      document,
       action.component,
       action.method,
       () => executeAction(action.page, action.component, action.method),
-      getFallbackGroups(action.page)
+      getFallbackGroups(action.page),
+      action.page
     );
   }
 
