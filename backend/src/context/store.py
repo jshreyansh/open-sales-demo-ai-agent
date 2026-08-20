@@ -114,6 +114,25 @@ class SessionState:
     # own "still catching up" recovery message (see AgentRuntimeProcessor's
     # _interruption_replay_depth), which never goes through the model at all.
     walkthrough_awaiting_answer: bool = False
+    # An EXPLICIT stop from the prospect ("stop", "hold on", "pause",
+    # "let me discuss with my colleague"), as distinct from
+    # walkthrough_awaiting_answer above.
+    #
+    # These were one flag until a real test showed why they can't be. The
+    # latch escape added for awaiting_answer (a hard ceiling, so a tour that
+    # froze on a garbled transcript could recover on its own) also expired a
+    # deliberate human stop: the prospect said "stop for a moment, I'll tell
+    # you to continue", the flag was set correctly, and 45 seconds later the
+    # ceiling released it and the tour resumed talking over him. He had to
+    # say "I told you to stop, why are you continuing?".
+    #
+    # The two states need opposite escape rules:
+    #   awaiting_answer      model got confused  -> MUST time out
+    #   walkthrough_user_stopped  a human said stop -> MUST NOT, ever
+    #
+    # Only the prospect clears this: a real go-ahead ("continue", "carry on"),
+    # or starting/ending a walkthrough outright. No timer touches it.
+    walkthrough_user_stopped: bool = False
     # None means the active walkthrough (if any) runs the full 10-step
     # platform tour, ending naturally at step 10 — today's original
     # behavior, unchanged. A concrete step number means this is a

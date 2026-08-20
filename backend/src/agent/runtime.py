@@ -13,7 +13,7 @@ from ..context.store import SessionState, HistoryEntry
 from ..data import gate_log
 from ..persona import AGENT_LOCATION, AGENT_NAME, AGENT_TIMEZONE
 from .registry import PRODUCT_OVERVIEW, UI_REGISTRY, flatten_registry, FlatAction
-from .walkthrough import STEP_SUB_ACTIONS, WALKTHROUGH_STEPS_BY_INDEX
+from .walkthrough import STEP_SUB_ACTIONS, WALKTHROUGH_STEPS_BY_INDEX, sub_beat_for
 
 
 def _load_knowledge() -> str:
@@ -188,6 +188,37 @@ def _is_valid_action(action: AgentAction) -> bool:
     )
 
 
+# Phrases that unambiguously mean "carry on", matched deterministically so
+# clearing a stop never depends on the model volunteering a field.
+#
+# walkthrough_user_stopped has no timeout by design — that is the whole point,
+# a human asked for quiet. But that makes a stuck stop unrecoverable, which is
+# the original latch bug wearing a different hat. Confirmed in testing: the
+# model set the stop correctly on "stop for a moment", then failed to set
+# "resume_walkthrough" on "okay, you can continue now", leaving the tour dead.
+#
+# So the state has two independent exits: the model's own signal, OR this
+# keyword match. Same belt-and-braces reasoning as FAST_TRACK_AFFIRMATIONS in
+# agent_processor.py — a critical transition should not hinge on one
+# probabilistic source.
+_RESUME_PHRASES = (
+    "continue", "carry on", "keep going", "go ahead", "go on", "carryom",
+    "resume", "pick up where", "you can start", "let's go", "lets go",
+    "im back", "i'm back", "we're back", "were back", "ready now",
+)
+
+
+def _is_explicit_resume(message: str) -> bool:
+    """True when the prospect's own words clearly mean 'carry on'.
+
+    Deliberately substring-based and generous: a false positive resumes a
+    tour one beat early (recoverable — they can stop again), a false negative
+    strands them in a dead call (not recoverable without hanging up).
+    """
+    low = (message or "").lower()
+    return any(ph in low for ph in _RESUME_PHRASES)
+
+
 def _repair_action(action: AgentAction) -> Optional[AgentAction]:
     """Best-effort recovery for a tool_use action that fails _is_valid_action.
 
@@ -326,6 +357,19 @@ def _tool_schema() -> dict:
                         "answer their questions naturally. The ONLY thing that lifts the pause is "
                         "\"resume_walkthrough\" (see below) being set on a later turn. Set this true only on "
                         "the turn the pause actually STARTS; omit it on every other turn, paused or not."
+                    ),
+                },
+                "user_requested_stop": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true on the EXACT turn the prospect explicitly asks you to STOP or HOLD — "
+                        "\"stop\", \"stop for now\", \"hold on\", \"pause\", \"wait\", \"give me a minute\", "
+                        "\"let me discuss this with my colleague\", \"I'll tell you when to continue\". "
+                        "This is stronger than a question interrupting the tour: it means put everything "
+                        "down and wait. NOTHING will resume on its own after this — no timer, no watchdog, "
+                        "no scripted beat — until they actually say to carry on. Do not set it for a mere "
+                        "question, a clarification, or a short pause in their speech; those are ordinary "
+                        "interruptions and \"walkthrough_awaiting_answer\" already covers them."
                     ),
                 },
                 "resume_walkthrough": {
@@ -564,6 +608,8 @@ def _parse_tool_result(data: dict, stop_reason: Optional[str] = None) -> AgentRe
         captured_fields["walkthrough_awaiting_answer"] = True
     if data.get("resume_walkthrough"):
         captured_fields["resume_walkthrough"] = True
+    if data.get("user_requested_stop"):
+        captured_fields["user_requested_stop"] = True
     # "Set once" like the MEDDIC/qual fields above (only captured when true —
     # see SessionState.farewell_question_asked for why this must never be
     # explicitly reset back to False by a later turn).
@@ -966,6 +1012,13 @@ def _walkthrough_note(session: SessionState) -> str:
     full_list = "; ".join(f"{s.index}={s.title}" for s in WALKTHROUGH_STEPS_BY_INDEX.values())
 
     paused_line = (
+        "\nTHE PROSPECT ASKED YOU TO STOP. Nothing resumes on its own — no timer, no watchdog, "
+        "no scripted beat. Do not narrate the next stage, do not fire a walkthrough action, do not "
+        "ask whether they're ready yet. Answer whatever they say, briefly, and wait. Only set "
+        "\"resume_walkthrough\" when they actually tell you to carry on.\n"
+        if session.walkthrough_user_stopped
+        else ""
+    ) + (
         "\nTHE TOUR IS CURRENTLY PAUSED (a real interruption or unclear-transcript moment set this "
         "earlier) — it stays paused through however many questions the prospect asks, and the "
         "system will NOT auto-advance on its own while this holds, no matter how long the pause "
@@ -1057,11 +1110,31 @@ def _walkthrough_note(session: SessionState) -> str:
         if step.index in (6, 7) and sub_actions
         else ""
     )
+    # Only the beat actually being performed is shown, not the whole flow.
+    # Steps 6 and 7 each cover an entire wizard, and sending all of it every
+    # turn is what produced the monologues: the model narrated everything it
+    # could see, which was everything. See walkthrough.py's SubBeat docstring
+    # for the measured before/after.
+    beat = sub_beat_for(next_sub_action) if step.index in (6, 7) else None
+    if beat is not None:
+        guidance_text = beat.guidance
+        budget = beat.max_words
+    else:
+        guidance_text = step.guidance
+        budget = step.max_words
+    # A number attached to THIS beat, not a global "be brief" — see
+    # WalkthroughStep.max_words for why the global version never worked.
+    budget_line = (
+        f"LENGTH BUDGET for this turn's \"reply\": about {budget} words, {budget + 15} at the "
+        "very most. That is roughly one to two spoken sentences. Say the one idea above and "
+        "stop — do not add context, benefits, or a preview of what's coming next.\n"
+    )
     return (
         f"\nFull walkthrough step list (for resolving skip-ahead requests by name — always use "
         f"the exact number listed here, never estimate or count): {full_list}.\n"
         f"{position_line}"
-        f'"{step.title}." {action_line} Guidance for this step: {step.guidance} {next_line}\n'
+        f'"{step.title}." {action_line} Guidance for this beat: {guidance_text} {next_line}\n'
+        f"{budget_line}"
         f"{paused_line}"
         f"{generate_fired_line}"
         f"{fired_actions_line}"
@@ -1304,6 +1377,27 @@ def _begin_turn(session: SessionState, message: str) -> None:
     if session.visitor_id:
         gate_log.append_transcript_turn(session.visitor_id, "user", message)
 
+    # Deterministic escape from a user-requested stop.
+    #
+    # Done HERE rather than in _finalize_turn on purpose: this function runs
+    # only for genuine prospect turns, never for an auto-continued beat, so
+    # it can never mistake a stale history entry for a fresh go-ahead. And it
+    # runs BEFORE the model sees the turn, so the note it's handed already
+    # reflects that the tour is live again.
+    #
+    # walkthrough_user_stopped has no timeout by design; without this it
+    # would depend entirely on the model remembering to set
+    # "resume_walkthrough", which testing showed it does not reliably do —
+    # it correctly stopped on "stop for a moment" and then failed to resume
+    # on "okay, you can continue now". See _is_explicit_resume.
+    if session.walkthrough_user_stopped and _is_explicit_resume(message):
+        session.walkthrough_user_stopped = False
+        session.walkthrough_awaiting_answer = False
+        if session.visitor_id:
+            logger.info(
+                f"[{session.visitor_id}] explicit resume heard — stop lifted: {message[:60]!r}"
+            )
+
 
 def _finalize_turn(session: SessionState, result: AgentResult, persist: bool = True) -> AgentResult:
     """Shared end-of-turn bookkeeping — persisting anything the model just
@@ -1529,6 +1623,18 @@ def _finalize_turn(session: SessionState, result: AgentResult, persist: bool = T
         session.walkthrough_awaiting_answer = True
     # else: leave session.walkthrough_awaiting_answer exactly as it was
 
+    # An explicit human stop. Deliberately a SEPARATE field from
+    # awaiting_answer above, because the two need opposite escape rules —
+    # see SessionState.walkthrough_user_stopped for the incident that forced
+    # them apart. Nothing but the prospect clears this: no watchdog, no
+    # ceiling, no timer.
+    user_stop = bool(result.pop("user_requested_stop", False))
+    if end_walkthrough or start_walkthrough or resume_walkthrough:
+        session.walkthrough_user_stopped = False
+    elif user_stop:
+        session.walkthrough_user_stopped = True
+    # else: leave it exactly as it was
+
     # Set-once, same pattern as the MEDDIC/qual fields above — never reset
     # back to False by a later turn. See SessionState.farewell_question_asked.
     if result.pop("farewell_question_asked", None):
@@ -1545,8 +1651,38 @@ def _finalize_turn(session: SessionState, result: AgentResult, persist: bool = T
         logger.info(
             f"[{session.visitor_id}] walkthrough: step {prev_walkthrough_step} -> {session.walkthrough_step} "
             f"(start_walkthrough={bool(start_walkthrough)}, walkthrough_step_field={new_step!r}, "
-            f"end_walkthrough={bool(end_walkthrough)}, awaiting_answer={session.walkthrough_awaiting_answer})"
+            f"end_walkthrough={bool(end_walkthrough)}, awaiting_answer={session.walkthrough_awaiting_answer}, "
+            f"user_stopped={session.walkthrough_user_stopped})"
         )
+
+    # Length budget: measured, not assumed.
+    #
+    # The whole reason a per-beat word budget exists is that the previous
+    # length rule ("one or two short sentences", in the tool schema) was
+    # never checked, so nobody knew it was being ignored 2x at the median
+    # and 7x at the worst until a production transcript was counted by hand.
+    # Logging every overshoot here means the next regression shows up in a
+    # grep instead of in a live demo.
+    reply_text = result.get("reply") or ""
+    if reply_text and session.walkthrough_step is not None:
+        step_obj = WALKTHROUGH_STEPS_BY_INDEX.get(session.walkthrough_step)
+        if step_obj is not None:
+            fired = session.walkthrough_fired_actions
+            nxt = next(
+                (a for a in STEP_SUB_ACTIONS.get(step_obj.index, []) if a not in fired),
+                None,
+            )
+            beat_obj = sub_beat_for(nxt) if step_obj.index in (6, 7) else None
+            allowed = (beat_obj.max_words if beat_obj is not None else step_obj.max_words)
+            spoken = len(reply_text.split())
+            # +15 mirrors the "at the very most" slack quoted to the model,
+            # so this only fires on a genuine overrun, not on normal variance.
+            if spoken > allowed + 15:
+                logger.warning(
+                    f"[{session.visitor_id}] LENGTH OVERSHOOT: step {step_obj.index}"
+                    f"{'/' + nxt if nxt else ''} spoke {spoken} words, budget {allowed} "
+                    f"(+{spoken - allowed}) — {reply_text[:70]!r}"
+                )
 
     if result.get("action"):
         session.current_page = result["action"]["page"]

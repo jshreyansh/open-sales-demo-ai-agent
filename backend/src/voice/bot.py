@@ -187,11 +187,27 @@ async def _watch_idle(agent: AgentRuntimeProcessor, worker: PipelineWorker, visi
                 asyncio.create_task(_save_call_summary(visitor_id))
                 return
 
-            # Not idle long enough to end the call yet — but might be long
-            # enough to owe the one check-in above.
-            if checkin_owed and idle_for >= checkin_threshold:
-                checkin_owed = False
-                await agent.speak_idle_checkin()
+            # The mid-silence check-in used to fire here. Removed.
+            #
+            # It read as nagging rather than attentive. Real sessions kept
+            # landing it at the worst possible moments: while the prospect
+            # was still mid-sentence (speak_idle_checkin has no guards at
+            # all — it never checked whether anyone was talking), while they
+            # watched a rendered video with nothing to say, and — the one
+            # that decided it — 35 seconds after a prospect deliberately
+            # asked for quiet to do some work. Being asked "still there?"
+            # right after saying "give me a minute" is worse than silence.
+            #
+            # A real rep in that situation says nothing. So now the call
+            # simply stays quiet and, if nobody speaks for
+            # IDLE_TIMEOUT_SECS, hangs up with the farewell below —
+            # one clean ending instead of a nag followed by an ending.
+            #
+            # speak_idle_checkin() itself is left in place on the processor:
+            # nothing calls it, and deleting it would also drop the
+            # transcript-persistence pattern that the farewell still relies
+            # on. checkin_owed/checkin_threshold below are now unused but
+            # kept so the streak-reset bookkeeping above reads unchanged.
     except asyncio.CancelledError:
         pass
 

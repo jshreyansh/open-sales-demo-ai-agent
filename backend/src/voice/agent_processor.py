@@ -777,7 +777,23 @@ class AgentRuntimeProcessor(FrameProcessor):
             return
 
         if isinstance(frame, VADUserStartedSpeakingFrame):
-            self._last_activity = time.monotonic()
+            # Deliberately does NOT bump _last_activity any more.
+            #
+            # VAD fires on any sound above threshold — a cough, a keyboard, a
+            # door, mic bleed from the shared screen's own audio. Treating
+            # that as "the prospect is engaged" meant an empty room with a
+            # fan in it re-armed the idle clock forever, so a call nobody was
+            # on never hung up: a real session ran 63 minutes, announced
+            # twice that it was leaving, and stayed. That mattered less while
+            # a check-in nagged every 30s; now that the check-in is gone, the
+            # hangup is the ONLY thing ending an abandoned call, so it has to
+            # actually work.
+            #
+            # Activity now means a real finalized transcript (see
+            # _maybe_handle_transcript), a typed message, or a hand-raise —
+            # things a person definitely did. _user_speaking is still set
+            # here, because barge-in detection genuinely does want the
+            # earliest possible signal.
             self._user_speaking = True
             # Real speech starting is the single clearest "abort whatever's
             # scheduled" signal there is — cancel a pending auto-continue
@@ -812,7 +828,8 @@ class AgentRuntimeProcessor(FrameProcessor):
             # than from when they started, which is what let it race ahead
             # of a still-in-progress sentence earlier tonight.
             self._user_speaking = False
-            self._last_activity = time.monotonic()
+            # Same reasoning as VADUserStartedSpeakingFrame above: a VAD stop
+            # only means a sound ended, not that a person spoke.
             # Every time they stop, the consolidation window restarts. A new
             # fragment therefore pushes the reply further out instead of
             # racing one of its own — which is exactly what turns five
@@ -1106,6 +1123,10 @@ class AgentRuntimeProcessor(FrameProcessor):
         walkthrough/qualification handling to a spoken one, just reported
         under the surface it actually came from."""
         logger.info(f"[{self._visitor_id}] heard: {text!r}")
+        # THE definition of activity: a real finalized transcript. VAD no
+        # longer bumps this clock (see VADUserStartedSpeakingFrame), so this
+        # is what keeps a live call alive and what an abandoned one lacks.
+        self._last_activity = time.monotonic()
         self._current_reply_source = source
         session = get_session(self._visitor_id)
         # Defensive second cancellation point — VAD-start and an STT
@@ -1726,6 +1747,10 @@ class AgentRuntimeProcessor(FrameProcessor):
         instead of talking over it."""
         if session.walkthrough_step is None or session.walkthrough_awaiting_answer:
             return
+        # Hard stop: nothing schedules a beat while the prospect has asked
+        # for quiet.
+        if session.walkthrough_user_stopped:
+            return
         # Never schedule a beat while the prospect has unanswered words
         # waiting. Firing here restarts the bot speaking, which blocks the
         # settle-window drain and strands their input (see
@@ -1776,6 +1801,16 @@ class AgentRuntimeProcessor(FrameProcessor):
                 # WALKTHROUGH_LATCH_MAX_SECS. Past that the pause is treated
                 # as stuck rather than intentional and cleared here, which is
                 # the escape hatch the latch never had.
+                # An explicit human stop is absolute. No ceiling, no
+                # watchdog, no timer — the prospect said stop, so the tour
+                # stays down until THEY say otherwise. This check sits above
+                # the latch ceiling deliberately: the ceiling exists for a
+                # model that froze on a garbled transcript, and applying it
+                # here is exactly what resumed the tour 45s after a real
+                # person asked for quiet (see SessionState.walkthrough_user_stopped).
+                if session.walkthrough_user_stopped:
+                    self._latch_since = None
+                    continue
                 if session.walkthrough_awaiting_answer:
                     if self._latch_since is None:
                         self._latch_since = time.monotonic()
@@ -1855,6 +1890,12 @@ class AgentRuntimeProcessor(FrameProcessor):
             self._pending_auto_continue = None
             return
         self._pending_auto_continue = None
+        # Re-checked at the last possible moment, not only at schedule time:
+        # a stop can land during the pause countdown, after this beat was
+        # already queued.
+        if get_session(self._visitor_id).walkthrough_user_stopped:
+            logger.info(f"[{self._visitor_id}] beat cancelled — prospect asked to stop")
+            return
         await self.auto_continue_walkthrough(session, direction)
 
     async def auto_continue_walkthrough(self, session, direction: FrameDirection) -> None:

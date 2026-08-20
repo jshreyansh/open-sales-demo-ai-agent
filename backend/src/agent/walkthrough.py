@@ -14,6 +14,40 @@ class WalkthroughStep:
     title: str
     action: Optional[WalkthroughAction]
     guidance: str
+    # Spoken-length budget for THIS beat, in words, surfaced to the model as a
+    # number for this beat specifically rather than as a global plea.
+    #
+    # A global "be brief" instruction demonstrably does not work: the tool
+    # schema has said "one or two short sentences by default" since the
+    # beginning, and a real production call (visitor 35ad314a, 73 agent
+    # turns) came back with a median of 39 words, p90 of 72, and a single
+    # reply of 171 — roughly 68 seconds of uninterrupted speech. Prose about
+    # length competes with all the other prose and loses whenever the content
+    # feels rich.
+    #
+    # A per-beat number is different in kind: it is specific, it is attached
+    # to the thing being narrated, and _finalize_turn logs every overshoot so
+    # drift shows up in a query instead of in a demo.
+    max_words: int = 40
+
+
+@dataclass
+class SubBeat:
+    """One sub-stage inside the MagicReel/MagicAvatar studio flows.
+
+    Steps 6 and 7 each cover a whole wizard (13 and 6 sub-actions), and their
+    step.guidance used to be a single 434-word / 192-word block describing
+    ALL of them — re-sent to the model on EVERY turn of that step. Having the
+    entire flow in front of it on turn one is why it narrated the entire flow
+    on turn one; the model was doing what it was shown, not misbehaving.
+
+    Splitting the prose per sub-action lets _walkthrough_note surface only
+    the beat actually being performed. The sub-action ORDER and the state
+    machine around it are unchanged — this is purely about how much of the
+    script is visible at a time.
+    """
+    guidance: str
+    max_words: int = 32
 
 
 # The scripted platform tour's fixed sequence and target actions, hardcoded
@@ -240,3 +274,95 @@ STEP_SUB_ACTIONS = {
         "start-generation",
     ],
 }
+
+
+# Per-sub-beat narration for the two studio flows, replacing the single
+# all-at-once block that used to live in steps 6 and 7's `guidance`.
+#
+# Keyed by the sub-action name already tracked in STEP_SUB_ACTIONS and
+# already resolved to "the next one" by _walkthrough_note, so this needs no
+# new state — it only changes how much of the script is visible per turn.
+#
+# Every constraint that mattered in the old prose is preserved, just attached
+# to the beat it governs instead of being restated in a wall of text:
+#   - the "step-source"/"step-brief" landing turns stay one-sentence
+#     transitions, because their sub-parts each get explained a turn later
+#     and a preview here just gets said twice
+#   - "generate-script" and "start-generation" keep their own dedicated turn,
+#     so the prospect actually sees the button press and the render
+SUB_BEATS: dict[str, SubBeat] = {
+    # ---- MagicReel (step 6) ----
+    "step-source": SubBeat(
+        "Landing on Source. One sentence only: name the stage and say it has a few options. "
+        "Do NOT list or describe them — each gets its own turn next.",
+        max_words=22,
+    ),
+    "select-source-dossier": SubBeat(
+        "The brand dossier option: pulls the approved label, references and claims library. "
+        "Say it's the usual starting point.",
+    ),
+    "select-source-news": SubBeat(
+        "The news-article option: drop in a recent readout or approval and it builds from that angle.",
+    ),
+    "select-source-custom": SubBeat(
+        "The custom-brief option: type your own angle. Then land back on the dossier, since that's "
+        "what the rest of the flow uses.",
+    ),
+    "step-brief": SubBeat(
+        "Landing on Brief. One sentence only: name the stage and say it has three parts. "
+        "Do NOT describe them — each gets its own turn next.",
+        max_words=22,
+    ),
+    "brief-audience": SubBeat(
+        "Audience configuration: HCP or patient, and the journey stage. Say it tunes tone and reading level.",
+    ),
+    "brief-voice-language": SubBeat(
+        "Voice and language: the voiceover, plus the 13 supported languages with subtitles and audio.",
+    ),
+    "brief-brand-product": SubBeat(
+        "Brand and product: locks to the Brand Kit so claims, colours and logo stay on-brand automatically.",
+    ),
+    "step-script": SubBeat(
+        "Landing on Script. One sentence: this is where structure and length get set, and the draft "
+        "gets generated. Do not generate yet — that's the next turn.",
+        max_words=26,
+    ),
+    "generate-script": SubBeat(
+        "Fire the generate button as this turn's own action and narrate it briefly, e.g. "
+        "'let's draft that script'. This turn exists so the press is actually seen.",
+        max_words=24,
+    ),
+    "step-scenes": SubBeat(
+        "The scene breakdown: narration and visual direction per scene, editable before rendering.",
+    ),
+    "step-generate": SubBeat(
+        "Landing on Generate: pick the render tier. Do not fire the render yet — that's the next turn.",
+        max_words=24,
+    ),
+    "start-generation": SubBeat(
+        "Fire the render as this turn's own action and narrate what's coming, e.g. 'let's render it'. "
+        "Only once the finished result is actually on screen is this step done.",
+        max_words=26,
+    ),
+    # ---- MagicAvatar (step 7) ----
+    "generate-breakdown": SubBeat(
+        "Fire the breakdown generation as this turn's own action and narrate it briefly. "
+        "This turn exists so the press is actually seen.",
+        max_words=24,
+    ),
+    "step-options": SubBeat(
+        "Options: render tier and background music for the piece.",
+    ),
+}
+
+
+def sub_beat_for(action_name: Optional[str]) -> Optional[SubBeat]:
+    """The narration for one sub-stage, or None if it has no scripted beat.
+
+    Falls back to None rather than raising: a sub-action present in
+    STEP_SUB_ACTIONS but missing here should degrade to the outer step's own
+    guidance, not break the tour.
+    """
+    if not action_name:
+        return None
+    return SUB_BEATS.get(action_name)
