@@ -227,6 +227,27 @@ CONSOLIDATION_SETTLE_MAX_SECS = 2.6
 # is the same breath, however VAD chose to cut it.
 FRAGMENT_PAUSE_MIN_GAP_SECS = 0.8
 
+# Hard ceiling on how long the deferred-interruption buffer may hold the
+# floor before it gets answered no matter what.
+#
+# That buffer's drain requires FIVE conditions at once — VAD silent, settle
+# window elapsed, Smart Turn calling the utterance complete, no half
+# transcript in hand, no turn or speech running. Each is individually right,
+# but together they form an AND with no timeout, so any single one sticking
+# holds the prospect's words indefinitely. Worse, _maybe_schedule_auto_continue
+# refuses to queue a walkthrough beat while ANY buffer is non-empty, so a
+# stuck buffer doesn't just delay one answer — it silences the tour.
+#
+# Prod session 92a7ddaf logged nineteen consecutive
+#   "auto-continue chain stalled ... could NOT be rescheduled
+#    (blocked by: pending fragment)"
+# while the prospect sat asking why nothing was happening.
+#
+# So the buffer gets a deadline. Past it, whatever is held gets answered
+# even if the quiet-checks still object: replying to a slightly-early
+# utterance is a small cost, going mute for the rest of the call is not.
+PENDING_INTERRUPTION_MAX_HOLD_SECS = 6.0
+
 
 # Hard ceiling on how long a walkthrough pause may last before the tour
 # resumes on its own.
@@ -447,6 +468,16 @@ class AgentRuntimeProcessor(FrameProcessor):
     bot itself is still silently working on the first one).
     """
 
+    # When _pending_interruption_text last went empty -> non-empty, bounding
+    # how long it may hold the floor (see PENDING_INTERRUPTION_MAX_HOLD_SECS).
+    #
+    # Declared at class level, not only in __init__, so it exists on any
+    # instance however it was constructed. Anything reading it before
+    # __init__ has run would otherwise raise AttributeError deep inside the
+    # drain path — a crash in the one code path whose entire job is to stop
+    # the pipeline getting stuck.
+    _pending_interruption_since: Optional[float] = None
+
     def __init__(self, visitor_id: str):
         super().__init__()
         self._visitor_id = visitor_id
@@ -476,6 +507,7 @@ class AgentRuntimeProcessor(FrameProcessor):
         # text once one finally judges COMPLETE (or the watchdog below
         # gives up waiting).
         self._pending_fragment_text = ""
+        self._pending_interruption_since = None
         self._last_fragment_activity = time.monotonic()
         self._pending_fragment_watch_task: Optional[asyncio.Task] = None
         self._bot_speaking = False
@@ -754,6 +786,8 @@ class AgentRuntimeProcessor(FrameProcessor):
                 f"(now {combined!r})"
             )
             self._pending_interruption_text = combined
+            if self._pending_interruption_since is None:
+                self._pending_interruption_since = time.monotonic()
             self._pending_interruption_source = "voice"
             self._note_fragment_gap()
             # Real words arrived — the barge-in was genuine, so cancel the
@@ -1035,13 +1069,28 @@ class AgentRuntimeProcessor(FrameProcessor):
                     #  4. nothing half-transcribed still in hand
                     #
                     # Any one of them saying "not yet" keeps accumulating.
-                    and time.monotonic() - self._last_user_speech_ended_at
-                    >= self._settle_window()
-                    and not self._last_turn_incomplete
-                    and not self._pending_fragment_text
+                    and (
+                        (
+                            time.monotonic() - self._last_user_speech_ended_at
+                            >= self._settle_window()
+                            and not self._last_turn_incomplete
+                            and not self._pending_fragment_text
+                        )
+                        # ...or the deadline passed. See
+                        # PENDING_INTERRUPTION_MAX_HOLD_SECS: the AND above
+                        # has no timeout of its own, so one sticky signal
+                        # can hold these words — and the whole walkthrough —
+                        # for the rest of the call.
+                        or (
+                            self._pending_interruption_since is not None
+                            and time.monotonic() - self._pending_interruption_since
+                            >= PENDING_INTERRUPTION_MAX_HOLD_SECS
+                        )
+                    )
                 ):
                     pending = self._pending_interruption_text
                     self._pending_interruption_text = None
+                    self._pending_interruption_since = None
                     pending_source = self._pending_interruption_source
                     self._pending_interruption_source = "voice"
                     logger.info(
@@ -2337,8 +2386,12 @@ class AgentRuntimeProcessor(FrameProcessor):
             # are two things the prospect said, not a race for one slot.
             if self._pending_interruption_text:
                 self._pending_interruption_text = f"{self._pending_interruption_text} {text}".strip()
+                if self._pending_interruption_since is None:
+                    self._pending_interruption_since = time.monotonic()
             else:
                 self._pending_interruption_text = text
+                if self._pending_interruption_since is None:
+                    self._pending_interruption_since = time.monotonic()
             self._pending_interruption_source = "chat"
             # Typed text is proof-positive of intent — even more so than a
             # transcript, since there's no chance it was noise. Same

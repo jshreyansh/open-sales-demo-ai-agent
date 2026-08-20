@@ -3471,7 +3471,11 @@ body {
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding: 7vh 24px 3vh;
+  /* Top padding pulled in from 7vh: the hero card is now a tall 9:16 portrait
+     rather than the old squarer photo, so the header + card stack is taller and
+     needs the room back. Still generous enough that the kicker doesn't sit on
+     the top edge, and the whole stack still clears 100vh on a short laptop. */
+  padding: 5vh 24px 3vh;
   /* SwishX's own brand wallpaper as the backdrop — contain, not cover, so
      the full image always shows uncropped (letterboxed into the dark
      background color on whichever axis has leftover room), under a
@@ -3613,8 +3617,23 @@ body {
 }
 
 .persona-card--hero {
-  width: clamp(260px, 26vw, 360px);
-  height: clamp(360px, 58vh, 500px);
+  /* 10:17, matching fiona-loop.mp4's 720x1224 exactly. The card used to be a
+     squarer 360x500 built around the still; holding the clip's own ratio
+     instead means it fills the card edge to edge with no letterboxing and
+     `object-fit: cover` has nothing left to crop off her face. (1224, not the
+     source's 1280, because the bottom 56px carried a generator watermark and
+     were cropped off before the file was committed.) */
+  aspect-ratio: 10 / 17;
+  /* Sized off viewport *height*, deliberately. This screen never scrolls
+     (.prejoin is 100vh with overflow: hidden), so vertical space is the scarce
+     resource and a portrait card is what runs out of it first — driving off vw
+     would let a wide-but-short laptop window push the card past the bottom
+     edge. 43.5vh of width works out to ~74vh of height at 10:17, which is
+     what's left under the header plus a margin of safety. The vw cap only ever
+     applies in a very narrow window, where the layout has already wrapped to a
+     single column and the card would otherwise be wider than the page. */
+  width: min(clamp(200px, 43.5vh, 384px), calc(100vw - 48px));
+  height: auto;
   flex-shrink: 0;
   border-color: rgba(255, 255, 255, 0.14);
   /* Elevated, not outlined — a soft dark drop shadow reading as "this card
@@ -3624,7 +3643,26 @@ body {
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5), 0 4px 14px rgba(0, 0, 0, 0.35);
 }
 
-.persona-card__photo {
+/* Below ~720px the flex-wrap in .prejoin__layout kicks in and the card stops
+   sitting *beside* the form and starts sitting *above* it — at which point it no
+   longer has the column's full height to itself and the desktop sizing pushes
+   the header off the top of the screen. (.prejoin clips its overflow, so that
+   failure is silent: the kicker and title just aren't there.) Roughly half the
+   height instead, which lands the card back on the footprint it had before it
+   went portrait, with the header and the whole form still on screen. */
+@media (max-width: 720px) {
+  .persona-card--hero {
+    width: min(clamp(170px, 34.1vh, 300px), calc(100vw - 48px));
+  }
+}
+
+/* The still and the looping clip are interchangeable fills for the same box —
+   identical geometry so swapping one for the other (reduced motion, or a
+   persona with no video) can't shift anything around them. `cover` is a no-op
+   while the card and the clip share a 10:17 ratio, but it's what keeps the
+   differently-shaped still from stretching when it's the one on show. */
+.persona-card__photo,
+.persona-card__loop {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -3682,6 +3720,19 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* Her still, demoted to a thumbnail beside her name now that the loop owns the
+   full card. Sits in the overlay row so it lands on the dark end of the bottom
+   scrim and reads at this size; the light hairline separates it from whatever
+   frame of the video happens to be behind it. */
+.persona-card__thumb {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1.5px solid rgba(255, 255, 255, 0.5);
 }
 
 .persona-card__name {

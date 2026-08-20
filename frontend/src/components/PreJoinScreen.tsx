@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PERSONAS } from "../lib/personas";
 import { getVisitorId, getVisitorProfile } from "../lib/session";
 import type { VisitorProfile } from "../lib/session";
@@ -19,6 +19,28 @@ interface PreJoinScreenProps {
 // one persona is real, at which point this goes back to a picker.
 const AVAILABLE_PERSONAS = PERSONAS.filter((p) => p.available);
 
+// The hero card's looping clip is decoration — it exists to make a static
+// waiting screen feel like a person is on the other end of it, and it carries
+// no information the still doesn't. So for anyone who's told the OS they don't
+// want motion, we don't play it at all (not "play it slower"): they get the
+// same photo the card showed before, which is a complete fallback rather than a
+// degraded one. Read live via a listener because macOS/iOS let this flip
+// mid-session from Settings, and a card frozen on the old answer looks broken.
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(
+    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => setReduced(query.matches);
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
+
+  return reduced;
+}
+
 // Meeting Mode's first screen — before the join countdown, not instead of
 // it. Identity capture (email → name/company, or straight through for a
 // returning email) is delegated to VisitorGateForm, shared with the
@@ -33,6 +55,24 @@ const AVAILABLE_PERSONAS = PERSONAS.filter((p) => p.available);
 export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
   const persona = AVAILABLE_PERSONAS[0];
   const [busy, setBusy] = useState(false);
+  const reducedMotion = usePrefersReducedMotion();
+  const loopRef = useRef<HTMLVideoElement>(null);
+  const showLoop = Boolean(persona.video) && !reducedMotion;
+
+  // The `autoPlay` attribute alone isn't enough to trust. Safari and iOS only
+  // honour it when the element is *already* muted and inline at the moment they
+  // evaluate it, and React assigns `muted` as a DOM property after the element
+  // is created — so we re-assert it here and start playback ourselves. If the
+  // browser still says no (some do, in a background tab or under stricter
+  // autoplay settings), the rejected promise is swallowed on purpose: the
+  // poster is her photo, so refusing to play leaves exactly the static card
+  // that shipped before this, with nothing to report and nothing to retry.
+  useEffect(() => {
+    const video = loopRef.current;
+    if (!video) return;
+    video.muted = true;
+    void video.play().catch(() => {});
+  }, [showLoop]);
 
   async function handleGated(profile: VisitorProfile) {
     const ok = await onJoin(profile.name, profile.company, profile.email);
@@ -69,7 +109,27 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
 
         <div className="prejoin__layout">
           <div className="persona-card persona-card--hero">
-            {persona.photo ? (
+            {/* The card fill, in descending order of liveliness: the silent
+                loop, her still, then a gradient. `poster` is that same still,
+                so the first paint is identical either way — no black frame
+                while the video decodes, and no layout shift, since the card's
+                box is fixed by CSS rather than by the media's intrinsic size.
+                aria-hidden + no controls: it's a backdrop, not something to
+                watch or operate. */}
+            {showLoop ? (
+              <video
+                ref={loopRef}
+                src={persona.video}
+                poster={persona.photo}
+                className="persona-card__loop"
+                autoPlay
+                loop
+                muted
+                playsInline
+                preload="auto"
+                aria-hidden="true"
+              />
+            ) : persona.photo ? (
               <img src={persona.photo} alt="" className="persona-card__photo" />
             ) : (
               <div className="persona-card__placeholder" />
@@ -77,6 +137,15 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
             <span className="persona-card__status persona-card__status--available">Available now</span>
             <div className="persona-card__overlay">
               <div className="persona-card__row">
+                {/* Her still, kept on the card as a thumbnail now that the loop
+                    has taken over the full bleed. It's the same image the
+                    meeting tile and chat launcher use, so the face that
+                    introduces her here is the one that follows her through the
+                    rest of the session — and it's still visible on the card
+                    when the video is playing over the top of the poster. */}
+                {persona.photo && showLoop ? (
+                  <img src={persona.photo} alt="" className="persona-card__thumb" />
+                ) : null}
                 <span className="persona-card__name">
                   {persona.name}
                   <span className="persona-card__verified" title="Verified">

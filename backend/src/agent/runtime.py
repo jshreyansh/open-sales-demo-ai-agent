@@ -1550,6 +1550,21 @@ _CONTINUE_NEGATION = re.compile(
 )
 
 
+def _reply_hands_over_the_floor(text: str) -> bool:
+    """True when the reply ENDS on a question to the prospect.
+
+    A reply whose last sentence is a question has handed the floor over —
+    whatever it asked, it is now their turn. A question in the middle
+    ("What does that mean for you? It means...") is rhetorical: she answers
+    it herself and keeps going, so it must not park the tour. Ending on one
+    is the reliable signal, and it is the same cue a person reads.
+    """
+    if not text:
+        return False
+    tail = text.rstrip().rstrip('"\u201d\')')
+    return tail.endswith("?")
+
+
 def _sub_actions_remaining(session: SessionState, step) -> list:
     """Sub-actions of `step` that haven't fired yet this run.
 
@@ -1872,6 +1887,39 @@ def _finalize_turn(
         logger.warning(
             f"[{session.visitor_id}] prospect explicitly asked for a {requested} walkthrough but "
             f"the model never started one — starting at step {session.walkthrough_step}"
+        )
+
+    # FLOOR HANDOVER — if she ended on a question, the tour waits. Always.
+    #
+    # walkthrough_awaiting_answer was model-elected, and prod session
+    # 92a7ddaf shows what that costs. Consecutive turns logged:
+    #
+    #   step 7 -> 7  awaiting_answer=True     ...she asks, tour holds
+    #   step 7 -> 7  awaiting_answer=False    ...she asks, tour rolls on
+    #
+    # Same behaviour from the prospect's side, opposite behaviour from the
+    # system, decided turn by turn by the model. They named it exactly:
+    # "you asked me, but then you continued. Right? By yourself." and "a lot
+    # of times you're not even asking that we should move ahead, and you
+    # stop." It isn't that either choice is wrong — it's that it was
+    # unpredictable, so they could never tell whether silence meant "your
+    # turn" or "she's still going."
+    #
+    # Ending a turn on a question is an unambiguous handover of the floor,
+    # and it is observable in the text she just produced, so the backend can
+    # decide it instead of asking the model to remember. The model can still
+    # set the field itself for cases this misses — a question phrased
+    # without a question mark, say — this only guarantees the obvious case
+    # can never be missed.
+    if (
+        session.walkthrough_step is not None
+        and not session.walkthrough_awaiting_answer
+        and _reply_hands_over_the_floor(result.get("reply") or "")
+    ):
+        session.walkthrough_awaiting_answer = True
+        logger.info(
+            f"[{session.visitor_id}] reply ended on a question — holding the walkthrough "
+            f"at step {session.walkthrough_step} until they answer"
         )
 
     # STOP-LATCH ALIGNMENT — the reply promised to carry on, but the tour

@@ -1,4 +1,5 @@
 import agentPhoto from "../assets/fiona.png";
+import agentLoop from "../assets/fiona-loop.mp4";
 
 // The one place the agent's name lives on the frontend (see backend/src/persona.py
 // for its backend twin — the two can't share a literal across languages, but each
@@ -6,6 +7,11 @@ import agentPhoto from "../assets/fiona.png";
 export const AGENT_NAME = "Fiona";
 export const AGENT_INITIAL = AGENT_NAME.charAt(0).toUpperCase();
 export const AGENT_PHOTO = agentPhoto;
+// A short silent portrait loop of her (720x1224, no audio track at all), used as
+// the pre-join card's fill. AGENT_PHOTO stays the canonical still — it's this
+// clip's poster frame and every small avatar (chat launcher, meeting tile) still
+// uses it, because a looping clip at 32px is noise, not identity.
+export const AGENT_VIDEO = agentLoop;
 
 // Mirrors backend/src/context/store.py's OPENING_GREETING — kept in sync by hand
 // (this is what the browser shows instantly, before the voice pipeline's own copy

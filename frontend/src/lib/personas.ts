@@ -1,4 +1,4 @@
-import { AGENT_NAME, AGENT_PHOTO } from "./persona";
+import { AGENT_NAME, AGENT_PHOTO, AGENT_VIDEO } from "./persona";
 
 // The pre-join "pick your rep" screen's catalog. Only one persona actually
 // has a working agent behind it right now (AGENT_NAME/AGENT_PHOTO from
@@ -20,6 +20,12 @@ export interface Persona {
   // meaningful persona data, just not what's rendered right now.
   location: string;
   photo?: string;
+  // Optional silent loop for the pre-join hero card. `photo` stays required-ish
+  // in practice because it doubles as this video's poster frame and as the
+  // persona's thumbnail everywhere else — a persona with `video` but no `photo`
+  // would flash black before the first frame decodes, so treat photo as the
+  // baseline and video as the upgrade.
+  video?: string;
   available: boolean;
 }
 
@@ -33,6 +39,7 @@ export const PERSONAS: Persona[] = [
     flag: "🇺🇸",
     location: "New Jersey, United States",
     photo: AGENT_PHOTO,
+    video: AGENT_VIDEO,
     available: true,
   },
   {
