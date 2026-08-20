@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap");
 
 :root {
   --accent: #ff4f00;
@@ -6934,4 +6934,524 @@ body {
 
 .docs-not-found {
   color: #9aa0a6;
+}
+
+
+/* ============================================================
+   LANDING  ("/")  — the live-demo front door
+   ============================================================
+
+   One job: convince a time-poor, demo-fatigued pharma marketer that a real
+   conversation is one click away, then get them into it.
+
+   The palette is the brand's own dark + orange, but built as a palette
+   rather than black-with-a-pop: the greys are biased WARM toward the accent
+   so they read as chosen, and the orange appears on exactly one element in
+   the whole page — the button that starts the call. Everything competing
+   with that button would be working against the single job.
+
+   Type is Inter (as the rest of the app) given real treatment, plus IBM Plex
+   Mono for status and meta only. Mono because this audience lives in MLR
+   codes, version stamps and audit trails — it is their vernacular, and it
+   isn't the face every other AI product reaches for.
+
+   The composition is deliberately not two columns. The join row starts
+   inside her frame and reaches out, so the thing standing between arriving
+   and talking to her is physically attached to her. That overlap is the one
+   bold move; everything around it stays quiet. */
+
+.lp {
+  --lp-ink: #09090b;
+  --lp-raise: #131316;
+  --lp-line: rgba(255, 255, 255, 0.09);
+  --lp-text: #f5f3f0;
+  /* Warm-biased grey. A pure neutral here reads as un-chosen; leaning it a
+     few degrees toward the accent ties the whole surface together. */
+  --lp-muted: #8a837b;
+  --lp-live: #45c08a;
+
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--lp-ink);
+  color: var(--lp-text);
+  font-family: var(--font);
+  overflow-x: hidden;
+}
+
+.lp__glow {
+  position: absolute;
+  top: -14vh;
+  right: -12vw;
+  width: 62vw;
+  height: 62vw;
+  max-width: 900px;
+  max-height: 900px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 79, 0, 0.13), transparent 62%);
+  filter: blur(28px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ---- nav ---- */
+.lp__nav {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 26px clamp(20px, 5vw, 64px) 0;
+}
+
+.lp__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--lp-text);
+}
+
+.lp__nav-links {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+
+.lp__nav-links a {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--lp-muted);
+  text-decoration: none;
+  transition: color 0.16s;
+}
+
+.lp__nav-links a:hover {
+  color: var(--lp-text);
+}
+
+.lp__nav-links a:focus-visible,
+.lp__schedule:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* ---- stage: the overlap composition ---- */
+.lp__stage {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: grid;
+  /* The columns intentionally overlap in the gutter: the figure ends inside
+     column 2, and the join row begins inside column 1. */
+  grid-template-columns: minmax(240px, 400px) minmax(300px, 600px);
+  align-items: center;
+  align-content: center;
+  justify-content: center;
+  gap: clamp(28px, 5vw, 76px);
+  padding: clamp(20px, 4vh, 48px) clamp(20px, 5vw, 64px);
+}
+
+.lp__figure {
+  position: relative;
+  margin: 0;
+  aspect-ratio: 720 / 1224;
+  height: min(70vh, 660px);
+  width: auto;
+  justify-self: end;
+  /* Deliberately off the copy column's baseline: it starts below the eyebrow
+     and finishes below the last control, so the page never resolves into two
+     tidy stacked halves. This is the whole reason the layout doesn't read as
+     a template two-column hero. */
+  align-self: start;
+  margin-top: clamp(0px, 6vh, 74px);
+  border-radius: 20px;
+  overflow: hidden;
+  background: var(--lp-raise);
+  border: 1px solid var(--lp-line);
+  /* Lifted off the ground so she reads as a live feed rather than a flat
+     image pasted onto the page. */
+  box-shadow: 0 40px 90px -30px rgba(0, 0, 0, 0.9);
+}
+
+.lp__video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Broadcast lower-third — the "this is live" signal, in TV's own language. */
+.lp__onair {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border-radius: 8px;
+  background: rgba(9, 9, 11, 0.62);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  /* Never wrap: this sits on a fixed-width card, and a three-line "badge"
+     reads as broken rather than informative. The location drops first. */
+  white-space: nowrap;
+  max-width: calc(100% - 28px);
+}
+
+.lp__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--lp-live);
+  box-shadow: 0 0 0 0 rgba(69, 192, 138, 0.6);
+  animation: lp-pulse 2.4s ease-out infinite;
+}
+
+@keyframes lp-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(69, 192, 138, 0.55); }
+  70% { box-shadow: 0 0 0 9px rgba(69, 192, 138, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(69, 192, 138, 0); }
+}
+
+.lp__onair-label {
+  color: var(--lp-live);
+  font-weight: 500;
+}
+
+.lp__onair-place {
+  color: rgba(245, 243, 240, 0.45);
+}
+
+.lp__onair-time {
+  color: rgba(245, 243, 240, 0.62);
+  /* Seconds tick — without this the label jitters as digit widths change. */
+  font-variant-numeric: tabular-nums;
+}
+
+.lp__plate {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 44px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: linear-gradient(to top, rgba(9, 9, 11, 0.92), transparent);
+}
+
+.lp__plate-name {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.lp__plate-role {
+  font-size: 12.5px;
+  color: rgba(245, 243, 240, 0.66);
+}
+
+/* ---- copy column ---- */
+.lp__copy {
+  position: relative;
+  max-width: 560px;
+}
+
+.lp__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 20px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--lp-live);
+}
+
+.lp__title {
+  margin: 0;
+  font-size: clamp(40px, 5.8vw, 76px);
+  line-height: 0.98;
+  font-weight: 600;
+  /* Tight tracking is what separates a display setting of Inter from a
+     scaled-up UI label. */
+  letter-spacing: -0.038em;
+  text-wrap: balance;
+}
+
+/* The weight and colour break lands on the word that carries the whole
+   pitch: this demo is not a recording you sit through. */
+.lp__title em {
+  font-style: normal;
+  font-weight: 300;
+  color: var(--lp-muted);
+}
+
+.lp__sub {
+  margin: 20px 0 0;
+  max-width: 42ch;
+  font-size: clamp(14.5px, 1.15vw, 16.5px);
+  line-height: 1.55;
+  color: var(--lp-muted);
+}
+
+/* The signature: this row starts left of the copy column, reaching back
+   across the gutter into her frame. */
+.lp__join {
+  position: relative;
+  z-index: 2;
+  margin-top: 32px;
+}
+/* An earlier pass had this block reach left across the gutter and sit on the
+   card, to physically tie "the thing that starts the call" to the person it
+   calls. Built, screenshotted, cut: a solid form panel landing on a photo
+   reads as a z-index accident rather than a decision, and it put grey
+   microcopy over a bright image where the first words stopped being legible.
+   The asymmetry it was reaching for is now carried by the figure's vertical
+   offset instead, which costs nothing to read. */
+
+.lp__instant {
+  margin: 12px 0 0;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: rgba(138, 131, 123, 0.85);
+}
+
+.lp__schedule {
+  margin-top: 20px;
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: var(--font);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--lp-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-color: rgba(138, 131, 123, 0.35);
+}
+
+.lp__schedule:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* ---- form, restyled in place ----
+   VisitorGateForm owns the gating logic and its own markup; this only
+   redresses it, so the email/known/new steps all keep working. */
+.lp .prejoin__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.lp .prejoin__name {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  /* Both explicit: the shared .prejoin__name rule centres its contents for
+     the old layout, and inherited centring is not something a later rule
+     overrides by accident. */
+  align-items: flex-start;
+  text-align: left;
+}
+
+.lp .prejoin__name label {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--lp-muted);
+}
+
+.lp .prejoin__name input {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--lp-line);
+  background: var(--lp-raise);
+  color: var(--lp-text);
+  font-family: var(--font);
+  font-size: 15px;
+  transition: border-color 0.16s, background 0.16s;
+}
+
+.lp .prejoin__name input::placeholder {
+  color: rgba(138, 131, 123, 0.7);
+}
+
+.lp .prejoin__name input:focus {
+  outline: none;
+  border-color: rgba(255, 79, 0, 0.55);
+  background: #16161a;
+}
+
+.lp .prejoin__name input:disabled {
+  color: var(--lp-muted);
+}
+
+/* The one orange element on the page. */
+.lp .prejoin__join {
+  width: 100%;
+  padding: 15px 22px;
+  border-radius: 12px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--font);
+  font-size: 15.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition: transform 0.14s, box-shadow 0.18s, background 0.14s;
+  box-shadow: 0 12px 34px -12px rgba(255, 79, 0, 0.65);
+}
+
+.lp .prejoin__join:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 42px -12px rgba(255, 79, 0, 0.8);
+}
+
+.lp .prejoin__join:disabled {
+  background: #26262b;
+  color: var(--lp-muted);
+  box-shadow: none;
+  cursor: default;
+}
+
+.lp .prejoin__join:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.lp .prejoin__change-email {
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--lp-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.lp .prejoin__known-identity {
+  padding: 13px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--lp-line);
+  background: var(--lp-raise);
+  font-size: 15px;
+}
+
+.lp .prejoin__field-error {
+  font-size: 12.5px;
+  color: #ff7a54;
+}
+
+/* ---- meta strip ---- */
+.lp__meta {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  padding: 0 clamp(20px, 5vw, 64px) 26px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: rgba(138, 131, 123, 0.75);
+}
+
+/* Hairline separators, drawn rather than typed, so the rhythm stays even. */
+.lp__meta span + span {
+  position: relative;
+  padding-left: 22px;
+}
+
+.lp__meta span + span::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 10px;
+  height: 1px;
+  background: var(--lp-line);
+}
+
+/* ---- entrance ----
+   One short orchestrated sequence on load, then nothing moves again except
+   the clock and the live dot. Scattered animation is what makes a page feel
+   generated; a single settling moment feels directed. */
+@media (prefers-reduced-motion: no-preference) {
+  .lp__figure,
+  .lp__title,
+  .lp__sub,
+  .lp__join,
+  .lp__schedule {
+    animation: lp-rise 0.62s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .lp__figure { animation-delay: 0.02s; }
+  .lp__title { animation-delay: 0.1s; }
+  .lp__sub { animation-delay: 0.17s; }
+  .lp__join { animation-delay: 0.24s; }
+  .lp__schedule { animation-delay: 0.3s; }
+}
+
+@keyframes lp-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---- narrow ---- */
+@media (max-width: 900px) {
+  .lp__stage {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 30px;
+    padding-top: 24px;
+  }
+  .lp__figure {
+    justify-self: center;
+    height: min(42vh, 380px);
+  }
+  .lp__copy {
+    text-align: center;
+    max-width: 460px;
+  }
+  .lp__join {
+    margin-left: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .lp .prejoin__fields { align-items: stretch; }
+  .lp__sub { margin-inline: auto; }
+  .lp__meta { justify-content: center; }
+  .lp__nav-links { gap: 18px; }
+}
+
+@media (max-width: 560px) {
+  .lp__nav-links a:first-child { display: none; }
+  .lp__figure { height: min(38vh, 330px); }
+  .lp__onair-place { display: none; }
+  .lp__onair { font-size: 9.5px; padding: 6px 9px; }
+  /* Match the centred hero copy so the form doesn't read as a stray column. */
+  .lp .prejoin__name { align-items: center; text-align: center; }
 }

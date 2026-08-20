@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { PERSONAS } from "../lib/personas";
 import { getVisitorId, getVisitorProfile } from "../lib/session";
 import type { VisitorProfile } from "../lib/session";
-import MeetIcon from "./MeetIcons";
+import SwishXMark from "./docs/SwishXMark";
+import SwishXWordmark from "./SwishXWordmark";
 import VisitorGateForm from "./VisitorGateForm";
 
 interface PreJoinScreenProps {
@@ -52,10 +53,33 @@ function usePrefersReducedMotion(): boolean {
 // earlier stacked one: with a single persona to show, a whole horizontal
 // scroll lane above the form was doing a lot of layout work for one card.
 // Still designed to fit one viewport with no page scroll.
+
+// Her local time, ticking.
+//
+// "Available now" is a claim; a clock whose seconds visibly move is evidence.
+// This page's whole job is to make someone believe a real conversation is one
+// click away — no calendar, no waiting on a rep — and nothing argues that as
+// cheaply as a number that changes while you read it.
+function useLiveClock(timeZone: string) {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+    timeZone,
+  }).format(now);
+}
+
 export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
   const persona = AVAILABLE_PERSONAS[0];
   const [busy, setBusy] = useState(false);
   const reducedMotion = usePrefersReducedMotion();
+  const localTime = useLiveClock("America/New_York");
   const loopRef = useRef<HTMLVideoElement>(null);
   const showLoop = Boolean(persona.video) && !reducedMotion;
 
@@ -100,115 +124,101 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
   }
 
   return (
-    <div className="prejoin">
-      <div className="prejoin__inner">
-        <div className="prejoin__header">
-          <div className="prejoin__kicker">SwishX · Live Demo</div>
-          <h1 className="prejoin__title">AI Marketing and design agency at your fingertips</h1>
-        </div>
+    <div className="lp">
+      {/* Ambient warmth behind the composition. One soft accent bloom, off to
+          the right where nothing sits on top of it — atmosphere, not decoration. */}
+      <div className="lp__glow" aria-hidden="true" />
 
-        <div className="prejoin__layout">
-          <div className="persona-card persona-card--hero">
-            {/* The card fill, in descending order of liveliness: the silent
-                loop, her still, then a gradient. `poster` is that same still,
-                so the first paint is identical either way — no black frame
-                while the video decodes, and no layout shift, since the card's
-                box is fixed by CSS rather than by the media's intrinsic size.
-                aria-hidden + no controls: it's a backdrop, not something to
-                watch or operate. */}
-            {showLoop ? (
-              <video
-                ref={loopRef}
-                src={persona.video}
-                poster={persona.photo}
-                className="persona-card__loop"
-                autoPlay
-                loop
-                muted
-                playsInline
-                preload="auto"
-                aria-hidden="true"
-              />
-            ) : persona.photo ? (
-              <img src={persona.photo} alt="" className="persona-card__photo" />
-            ) : (
-              <div className="persona-card__placeholder" />
-            )}
-            <span className="persona-card__status persona-card__status--available">Available now</span>
-            <div className="persona-card__overlay">
-              <div className="persona-card__row">
-                {/* Her still, kept on the card as a thumbnail now that the loop
-                    has taken over the full bleed. It's the same image the
-                    meeting tile and chat launcher use, so the face that
-                    introduces her here is the one that follows her through the
-                    rest of the session — and it's still visible on the card
-                    when the video is playing over the top of the poster. */}
-                {persona.photo && showLoop ? (
-                  <img src={persona.photo} alt="" className="persona-card__thumb" />
-                ) : null}
-                <span className="persona-card__name">
-                  {persona.name}
-                  <span className="persona-card__verified" title="Verified">
-                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-                      <circle cx="12" cy="12" r="12" fill="#22c55e" />
-                      <path
-                        d="M8.2 12.4l2.4 2.4 5.2-5.6"
-                        stroke="#fff"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        fill="none"
-                      />
-                    </svg>
-                  </span>
-                </span>
-              </div>
-              <div className="persona-card__position">{persona.position}</div>
-              <div className="persona-card__location">
-                <MeetIcon name="location" size={14} />
-                {persona.location}
-              </div>
-            </div>
+      <header className="lp__nav">
+        <div className="lp__brand">
+          <SwishXMark size={26} />
+          <SwishXWordmark height={17} />
+        </div>
+        {/* The two other ways into the product. Demoted to nav on purpose:
+            they are real destinations, but this page has one job. */}
+        <nav className="lp__nav-links">
+          <a href="/demo/dashboard">Explore the platform</a>
+          <a href="/docs">Docs</a>
+        </nav>
+      </header>
+
+      <main className="lp__stage">
+        <figure className="lp__figure">
+          {showLoop ? (
+            <video
+              ref={loopRef}
+              src={persona.video}
+              poster={persona.photo}
+              className="lp__video"
+              autoPlay
+              loop
+              muted
+              playsInline
+              preload="auto"
+              aria-hidden="true"
+            />
+          ) : persona.photo ? (
+            <img src={persona.photo} alt="" className="lp__video" />
+          ) : null}
+
+          {/* Broadcast lower-third. Borrowed deliberately from live TV, which
+              is the one visual language everybody already reads as "this is
+              happening right now, not a recording." */}
+          <div className="lp__onair">
+            <span className="lp__dot" aria-hidden="true" />
+            <span className="lp__onair-label">Live</span>
+            <span className="lp__onair-time">{localTime}</span>
+            <span className="lp__onair-place">· {persona.location.split(",")[0]}</span>
           </div>
 
-          <div className="prejoin__form">
+          <figcaption className="lp__plate">
+            <span className="lp__plate-name">{persona.name}</span>
+            <span className="lp__plate-role">{persona.position}</span>
+          </figcaption>
+        </figure>
+
+        <div className="lp__copy">
+          {/* The eyebrow states the one fact that makes this page worth
+              acting on: she is available this second, not on a calendar. */}
+          <div className="lp__eyebrow">
+            <span className="lp__dot" aria-hidden="true" />
+            Live now — no scheduling
+          </div>
+          <h1 className="lp__title">
+            A demo you can<br />
+            <em>interrupt.</em>
+          </h1>
+          <p className="lp__sub">
+            {persona.name} runs SwishX live on this screen — brand dossier to MLR-ready
+            asset. Talk over her whenever.
+          </p>
+
+          {/* The join row is the signature: it starts inside her frame and
+              reaches out to you, so the one thing between arriving and
+              talking to her is physically connected to her. */}
+          <div className="lp__join">
             <VisitorGateForm
               visitorId={getVisitorId()}
               path="meet"
-              submitLabel="Join Product Demo"
-              submittingLabel="Checking…"
+              submitLabel="Join the call"
+              submittingLabel="Connecting…"
               onGated={handleGated}
               initialProfile={getVisitorProfile() ?? undefined}
             />
-
-            <div className="prejoin__actions">
-              <button type="button" className="prejoin__schedule" disabled title="Coming soon">
-                Schedule for later
-              </button>
-            </div>
-
-            {/* The other two ways into the product. These used to live on a
-                separate chooser page at "/" whose only job was routing —
-                it put a page and a click between arriving and joining a
-                call, which is the single thing this product exists to do.
-                That page is gone; these come with it, sitting below the
-                join flow so the hierarchy still reads primary-then-side-door.
-
-                Plain <a> rather than navigate(): /docs and /demo/dashboard
-                are separate destinations a visitor may well want to open in
-                a new tab, and an anchor gets middle-click, cmd-click and
-                "copy link" for free. */}
-            <div className="prejoin__alt">
-              <a className="prejoin__alt-btn" href="/demo/dashboard">
-                Try &amp; Use Demo Platform
-              </a>
-              <a className="prejoin__alt-btn" href="/docs">
-                Platform Documentation
-              </a>
-            </div>
+            <p className="lp__instant">Starts the second you press it. No calendar, no wait.</p>
           </div>
+
+          <button type="button" className="lp__schedule" disabled title="Coming soon">
+            Schedule instead
+          </button>
         </div>
-      </div>
+      </main>
+
+      <footer className="lp__meta">
+        <span>10 minutes</span>
+        <span>No slides</span>
+        <span>No sales engineer</span>
+      </footer>
     </div>
   );
 }
