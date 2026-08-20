@@ -17,6 +17,7 @@ noticeable.
 
 import asyncio
 import os
+import random
 
 import aiohttp
 from dotenv import load_dotenv
@@ -50,6 +51,7 @@ from ..context.store import start_session
 from ..data import gate_log
 from .agent_processor import (
     IDLE_CHECK_INTERVAL_SECS,
+    IDLE_CHECKIN_THRESHOLD_SECS,
     IDLE_TIMEOUT_SECS,
     AgentRuntimeProcessor,
     TTSLevelReporter,
@@ -122,28 +124,74 @@ async def _watch_idle(agent: AgentRuntimeProcessor, worker: PipelineWorker, visi
     to compare two timestamps read from `agent` — so this can't add latency
     to the actual conversation; the only work on the live audio/frame path
     is the one-line timestamp bumps already in AgentRuntimeProcessor.
+
+    Also fires one short spoken check-in (agent.speak_idle_checkin) the
+    first time idle time crosses IDLE_CHECKIN_THRESHOLD_SECS — filling the
+    otherwise-dead air before the real IDLE_TIMEOUT_SECS farewell, the way
+    a real rep breaks a long silence once rather than saying nothing until
+    hanging up (and not more than once — a rep doesn't keep asking "still
+    there?" every 15 seconds either). `checkin_owed` tracks whether this
+    idle streak still owes its one nudge, jittered by a few seconds at
+    streak-start so it doesn't land on the exact same second every call;
+    it's reset whenever agent.last_activity_timestamp() changes (real
+    activity happened — a fresh streak starts, the nudge is owed again).
+    Compares the raw timestamp, not the derived seconds-since-activity
+    value — an earlier version compared the derived value and an
+    automated stress test caught it silently swallowing a reset that
+    happened while this loop was blocked inside its own
+    await agent.speak_idle_checkin() call (see last_activity_timestamp's
+    docstring for why the derived value can't reliably catch that).
+
+    seconds_since_activity() reads _last_activity — the SAME clock
+    _watch_auto_continue_stall uses, deliberately: a visitor silently
+    listening to an active, still-progressing walkthrough is real
+    engagement, not abandonment, and this clock has to see it that way or
+    the farewell fires mid-walkthrough (confirmed live: a call where the
+    visitor said one thing, then just listened to seven straight
+    walkthrough beats for two minutes — real, continuous progress the
+    whole time — still got disconnected as abandoned, back when this read
+    a visitor-only clock instead). The one thing that must NOT bump this
+    clock is the check-in/farewell's own speech — agent.speak_idle_checkin/
+    speak_idle_farewell guard that themselves (see
+    _speak_without_activity_bump's docstring), so this loop's view of
+    elapsed idle time is never thrown off by the utterances it triggers.
     """
+    checkin_threshold = IDLE_CHECKIN_THRESHOLD_SECS + random.uniform(-3, 3)
+    checkin_owed = True
+    last_activity_ts = agent.last_activity_timestamp()
     try:
         while True:
             await asyncio.sleep(IDLE_CHECK_INTERVAL_SECS)
-            if agent.seconds_since_activity() < IDLE_TIMEOUT_SECS:
-                continue
-            logger.info(f"[{visitor_id}] idle for {IDLE_TIMEOUT_SECS}s, ending call")
-            await agent.speak_idle_farewell()
-            # Give TTS a moment to actually start (BotStartedSpeakingFrame
-            # lags slightly behind pushing the text) before polling for it
-            # to finish — otherwise this could see "not speaking yet" and
-            # cut the farewell off before a word of it plays. Capped at ~10s
-            # total so a stuck flag can't wedge this task forever.
-            await asyncio.sleep(0.5)
-            for _ in range(95):
-                if not agent.is_bot_speaking():
-                    break
-                await asyncio.sleep(0.1)
-            await worker.cancel()
-            await _release_voice_lock(visitor_id)
-            asyncio.create_task(_save_call_summary(visitor_id))
-            return
+            current_ts = agent.last_activity_timestamp()
+            if current_ts != last_activity_ts:
+                # Real activity landed at some point since the last poll —
+                # new streak, the nudge is owed again.
+                last_activity_ts = current_ts
+                checkin_threshold = IDLE_CHECKIN_THRESHOLD_SECS + random.uniform(-3, 3)
+                checkin_owed = True
+            idle_for = agent.seconds_since_activity()
+
+            if idle_for >= IDLE_TIMEOUT_SECS:
+                logger.info(f"[{visitor_id}] idle for {IDLE_TIMEOUT_SECS}s, ending call")
+                await agent.speak_idle_farewell()
+                # speak_idle_farewell (via _speak_without_activity_bump) already
+                # waits for its own playback to finish, so this is a fast no-op
+                # in the common case — kept as a safety net in case that wait
+                # was ever cut short for some reason.
+                for _ in range(95):
+                    if not agent.is_bot_speaking():
+                        break
+                    await asyncio.sleep(0.1)
+                await worker.cancel()
+                await _release_voice_lock(visitor_id)
+                asyncio.create_task(_save_call_summary(visitor_id))
+                return
+
+            # Not idle long enough to end the call yet — but might be long
+            # enough to owe the one check-in above.
+            if checkin_owed and idle_for >= checkin_threshold:
+                checkin_owed = False
+                await agent.speak_idle_checkin()
     except asyncio.CancelledError:
         pass
 
@@ -218,7 +266,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     # (and a hard length cap) past a short, high-value set.
     stt = GroqSTTService(
         api_key=os.getenv("GROQ_API_KEY"),
-        prompt="ContentIQ, SwishX, walkthrough, MagicReel, MagicAvatar, Content Studio, MLR, dossier",
+        prompt="SwishX, walkthrough, MagicReel, MagicAvatar, Content Studio, MLR, dossier",
     )
     tts = CartesiaTTSService(
         api_key=os.getenv("CARTESIA_API_KEY"),

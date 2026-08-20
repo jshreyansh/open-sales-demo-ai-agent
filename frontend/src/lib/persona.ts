@@ -1,4 +1,4 @@
-import agentPhoto from "../assets/rachel.jpg";
+import agentPhoto from "../assets/fiona.png";
 
 // The one place the agent's name lives on the frontend (see backend/src/persona.py
 // for its backend twin — the two can't share a literal across languages, but each

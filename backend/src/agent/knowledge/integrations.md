@@ -21,21 +21,21 @@ Enterprise," not "available now."
 
 Veeva Vault PromoMats is the de facto MLR workflow and digital-asset-management standard for
 promotional pharma content (it generates the FDA Form 2253 package); Vault MedComms governs medical
-and MSL content. ContentIQ's stated position is to **interoperate with Vault, not compete with it**
+and MSL content. SwishX's stated position is to **interoperate with Vault, not compete with it**
 — this is a cross-cutting integration point across all 30 content formats, not a per-format feature.
 
-**Import (from Vault into ContentIQ):**
+**Import (from Vault into SwishX):**
 - Approved claims libraries and their linked references, so generation is grounded in already-cleared evidence.
 - Brand templates, ISI, and fair-balance modules maintained in Vault.
 - Approval status and lineage for modular content fragments, so reused content inherits its cleared state.
 
-**Export (from ContentIQ into Vault):**
+**Export (from SwishX into Vault):**
 - Form 2253-ready packages, every claim annotated to its supporting reference.
 - Assets structured for Vault's own review workflow, already carrying the MLR inputs it expects.
 - Modular components tagged for reuse, matching Vault's parent-child content model.
 
 **Competitive framing:** Veeva has its own AI review agents (Quick Check, Content Agent) and,
-per industry reporting, Veeva Falcon MLR. ContentIQ's position is to sit *upstream* of these — it
+per industry reporting, Veeva Falcon MLR. SwishX's position is to sit *upstream* of these — it
 generates already-compliant assets rather than competing on the review step. The platform makes
 content that enters clean; Vault's tools confirm it faster. Complementary, not competitive.
 

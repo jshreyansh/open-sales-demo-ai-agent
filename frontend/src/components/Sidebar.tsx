@@ -2,7 +2,12 @@ import { useEffect, useState } from "react";
 import { NAV_REGISTRY } from "../registry/pages";
 import { getApprovals } from "../lib/api";
 import Icon from "./Icon";
-import logo from "../assets/contentiq-lockup-light.png";
+import SwishXMark from "./docs/SwishXMark";
+// The SwishX lockup: brand mark + "swishx" wordmark. This is the supplied
+// brand SVG with its 3451x3630 embedded bitmap swapped for the same 256px
+// mark SwishXMark uses (1.1MB -> 62KB); the wordmark is untouched vector, so
+// it stays crisp at any size.
+import logo from "../assets/swishx-lockup.svg";
 
 interface SidebarProps {
   activePageId: string;
@@ -24,10 +29,10 @@ export default function Sidebar({ activePageId, onNavigate }: SidebarProps) {
       <div className="sidebar__top">
         {collapsed ? (
           <span className="sidebar__mark">
-            X<Icon name="sparkles" size={9} />
+            <SwishXMark size={22} />
           </span>
         ) : (
-          <img src={logo} alt="ContentIQ by swishx" className="sidebar__logo" />
+          <img src={logo} alt="SwishX" className="sidebar__logo" />
         )}
         <button
           className="sidebar__collapse-btn"

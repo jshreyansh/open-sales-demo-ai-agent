@@ -1,4 +1,7 @@
+import type { Ref } from "react";
 import Icon from "../Icon";
+import AssetVideoPlayer, { type AssetVideoPlayerHandle } from "./AssetVideoPlayer";
+import { DEFAULT_REEL_VIDEO_URL } from "../../registry/studioData";
 
 interface ReelResultProps {
   name: string;
@@ -9,6 +12,7 @@ interface ReelResultProps {
   onEditScenes: () => void;
   onBackToAssets: () => void;
   onSubmitForReview: () => void;
+  playerRef?: Ref<AssetVideoPlayerHandle>;
 }
 
 export default function ReelResult({
@@ -20,6 +24,7 @@ export default function ReelResult({
   onEditScenes,
   onBackToAssets,
   onSubmitForReview,
+  playerRef,
 }: ReelResultProps) {
   return (
     <div className="studio-card reel-result">
@@ -32,16 +37,8 @@ export default function ReelResult({
       </div>
 
       <div className="reel-result__body">
-        <div className="scene-inspector__player reel-result__preview">
-          <div className="scene-inspector__logo">{brand.slice(0, 1)}</div>
-          <div className="scene-inspector__title">{brand}</div>
-          <div className="scene-inspector__subtitle">{topic}</div>
-          <div className="scene-inspector__playbar">
-            <Icon name="play" size={13} />
-            <span className="scene-inspector__time">0:00 / 0:50</span>
-            <div className="scene-inspector__scrub" />
-            <Icon name="chevron-down" size={13} />
-          </div>
+        <div className="reel-result__preview">
+          <AssetVideoPlayer ref={playerRef} src={DEFAULT_REEL_VIDEO_URL} />
         </div>
 
         <dl className="reel-details">

@@ -1,4 +1,7 @@
+import type { Ref } from "react";
 import Icon from "../Icon";
+import AssetVideoPlayer, { type AssetVideoPlayerHandle } from "./AssetVideoPlayer";
+import { DEFAULT_AVATAR_VIDEO_URL } from "../../registry/studioData";
 
 interface AvatarResultProps {
   name: string;
@@ -8,6 +11,7 @@ interface AvatarResultProps {
   cards: string;
   onBackToAssets: () => void;
   onSubmitForReview: () => void;
+  playerRef?: Ref<AssetVideoPlayerHandle>;
 }
 
 export default function AvatarResult({
@@ -18,6 +22,7 @@ export default function AvatarResult({
   cards,
   onBackToAssets,
   onSubmitForReview,
+  playerRef,
 }: AvatarResultProps) {
   return (
     <div className="studio-card reel-result">
@@ -30,16 +35,8 @@ export default function AvatarResult({
       </div>
 
       <div className="reel-result__body">
-        <div className="scene-inspector__player reel-result__preview">
-          <div className="scene-inspector__logo">{name.slice(0, 1).toUpperCase() || "M"}</div>
-          <div className="scene-inspector__title">{name}</div>
-          <div className="scene-inspector__subtitle">{persona}</div>
-          <div className="scene-inspector__playbar">
-            <Icon name="play" size={13} />
-            <span className="scene-inspector__time">0:00 / 0:45</span>
-            <div className="scene-inspector__scrub" />
-            <Icon name="chevron-down" size={13} />
-          </div>
+        <div className="reel-result__preview">
+          <AssetVideoPlayer ref={playerRef} src={DEFAULT_AVATAR_VIDEO_URL} />
         </div>
 
         <dl className="reel-details">

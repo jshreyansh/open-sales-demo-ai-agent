@@ -293,7 +293,7 @@ def _content_studio_components() -> List[RegistryComponent]:
 # copy already written for the product (the Content Studio hero banner,
 # Brand Kit's subtitle, etc.) rather than invented, so the agent doesn't
 # improvise claims that aren't backed by anything in the actual UI.
-PRODUCT_OVERVIEW = """ContentIQ (by SwishX) is an AI content platform for pharma marketing teams. \
+PRODUCT_OVERVIEW = """SwishX is an AI content platform for pharma marketing teams. \
 Its core differentiator: medical-grade, MLR-ready content in minutes, not weeks. MLR readiness — \
 on-label claims, references, fair balance, ISI — is built in at generation time, not a downstream \
 compliance check, so content enters review clean instead of bouncing back and forth with legal/medical \
@@ -465,6 +465,7 @@ UI_REGISTRY: List[RegistryPage] = [
                     RegistryAction(id="select-tier-hd", description="On the Generate step, select the HD quality tier"),
                     RegistryAction(id="select-tier-cinematic", description="On the Generate step, select the Cinematic 4K quality tier"),
                     RegistryAction(id="start-generation", description="On the Generate step, actually press 'Generate reel' — starts rendering and shows the loading screen, then the result"),
+                    RegistryAction(id="play", description="On the result screen (after generation), play the rendered reel's preview video"),
                 ],
             ),
             _scroll_component(),
@@ -508,6 +509,7 @@ UI_REGISTRY: List[RegistryPage] = [
                     RegistryAction(id="select-tier-cinematic", description="On the Options step, select the Cinematic 4K quality tier"),
                     RegistryAction(id="step-generate", description="Jump to the Generate step (render the master)"),
                     RegistryAction(id="start-generation", description="On the Generate step, actually press 'Generate' — starts rendering and shows the loading screen, then the result"),
+                    RegistryAction(id="play", description="On the result screen (after generation), play the rendered master's preview video"),
                 ],
             ),
             _scroll_component(),
@@ -530,6 +532,35 @@ UI_REGISTRY: List[RegistryPage] = [
                 actions=[RegistryAction(id="highlight", description="Draw attention to the palette editor")],
             ),
             _scroll_component(),
+        ],
+    ),
+    RegistryPage(
+        id="meeting",
+        label="Meeting",
+        components=[
+            RegistryComponent(
+                id="example-gallery",
+                label="Example gallery",
+                description=(
+                    "A browsable slider of pre-loaded example videos/images, shown on the shared "
+                    "screen for the visitor to click through themselves (arrow buttons, not driven "
+                    "by you) — this is the meeting-only surface for when a prospect explicitly asks "
+                    "for real, live generation from scratch (not just walking a flow). See instruction "
+                    "13 for exactly when to fire this."
+                ),
+                actions=[RegistryAction(id="open", description="Open the example gallery slider on the shared screen")],
+            ),
+            RegistryComponent(
+                id="booking-portal",
+                label="Booking portal",
+                description=(
+                    "Opens the real scheduling page in a NEW BROWSER TAB so the prospect can pick a "
+                    "time with a human rep. This leaves the demo screen alone — the call keeps "
+                    "running in this tab. Only fire it AFTER the prospect has actually said yes to "
+                    "opening it (see instruction 14); never open a tab on someone unasked."
+                ),
+                actions=[RegistryAction(id="open", description="Open the booking portal in a new tab")],
+            ),
         ],
     ),
 ]

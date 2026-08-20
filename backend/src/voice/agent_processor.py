@@ -11,10 +11,13 @@ from typing import Callable, Optional
 import aiohttp
 from loguru import logger
 
+from pipecat.audio.turn.base_turn_analyzer import EndOfTurnState
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     Frame,
+    InputAudioRawFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     OutputTransportMessageFrame,
@@ -27,7 +30,14 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from ..agent.runtime import commit_prefetched_turn, run_turn_stream, run_walkthrough_continuation
+from ..agent.runtime import (
+    CUTOFF_MARKER,
+    NOTHING_SPOKEN_MARKER,
+    amend_last_agent_turn,
+    commit_prefetched_turn,
+    run_turn_stream,
+    run_walkthrough_continuation,
+)
 from ..context.store import OPENING_GREETING, get_session
 from ..data import gate_log
 
@@ -39,16 +49,33 @@ from ..data import gate_log
 # continuous presenter talking, not "waiting for a response" silence.
 AUTO_CONTINUE_PAUSE_SECS = 0.1
 
+# Upper bound on how long _auto_continue_after_pause will wait for the
+# CURRENT beat's own speech to genuinely finish (via _speech_finished)
+# before it even starts the AUTO_CONTINUE_PAUSE_SECS countdown — see that
+# method's docstring for why this wait exists. Generous on purpose: a real
+# walkthrough sentence can legitimately run long, and the only cost of
+# waiting a little too long here is falling back to the exact bail-and-let-
+# the-watchdog-catch-it behavior this file already had before, not a new
+# failure mode.
+AUTO_CONTINUE_SPEECH_WAIT_TIMEOUT_SECS = 15.0
+
 # Safety-net poll interval for _watch_auto_continue_stall (see that method's
 # docstring) — cheap (a few attribute reads), so this doesn't need to be
 # tight; it only affects how quickly a dead auto-continue chain gets
-# noticed and revived, not anything on the live speaking path.
-AUTO_CONTINUE_WATCHDOG_INTERVAL_SECS = 2.0
+# noticed and revived, not anything on the live speaking path. Tightened
+# from 2.0 (confirmed live: a chain that fell through to this watchdog paid
+# up to AUTO_CONTINUE_WATCHDOG_INTERVAL_SECS + AUTO_CONTINUE_STALL_GRACE_SECS
+# of pure dead air, repeatedly, across a multi-beat step — reading as the
+# agent going silent mid-thought, not a rare fallback).
+AUTO_CONTINUE_WATCHDOG_INTERVAL_SECS = 0.75
 # How long things must have been quiet (no VAD/turn activity) before the
 # watchdog will self-heal a stalled chain — long enough that a real
 # in-progress utterance (VAD fired, transcript still pending) isn't mistaken
-# for a dead chain.
-AUTO_CONTINUE_STALL_GRACE_SECS = 2.0
+# for a dead chain. The _user_speaking check right above this one in
+# _watch_auto_continue_stall is what actually guards that case (it waits
+# indefinitely, not just this long) — this grace period is a secondary
+# buffer on top of that, so it's safe to keep tight too.
+AUTO_CONTINUE_STALL_GRACE_SECS = 0.75
 
 # How often _poll_hand_raise checks the REST API's mailbox for a raised
 # hand. Used to be 1.0s — a raise landing right after a tick meant up to a
@@ -63,7 +90,168 @@ HAND_RAISE_POLL_INTERVAL_SECS = 0.3
 # actual thing the visitor wants answered.
 MEETING_CHAT_POLL_INTERVAL_SECS = 0.3
 
+# Safety-net poll interval for _watch_pending_fragment_stall (see that
+# method's docstring) — a held-back fragment isn't spoken over the top of
+# anything if it sits a beat longer than it needs to, so this can be a
+# little tighter than the auto-continue watchdog without any downside.
+# Tightened 1.0 -> 0.25 when the consolidation window landed. This loop is
+# now the thing that decides WHEN a reply happens, not just a stall safety
+# net, so its period is dead time added to every single answer: at 1.0s a
+# settled turn waited an extra 0-1s at random, which reads as her being
+# slow and inconsistent. The body is a handful of attribute reads.
+PENDING_FRAGMENT_WATCHDOG_INTERVAL_SECS = 0.25
+# How long a pending fragment sits genuinely untouched (bot not speaking, no
+# turn running, VAD not mid-utterance) before the watchdog gives up waiting
+# for Smart Turn to ever call it COMPLETE and just answers what's been said
+# so far. Comfortably above Silero VAD's own stop_secs (1.0) and Smart
+# Turn's own internal silence safety net (3s, see SmartTurnParams.stop_secs)
+# so it only ever kicks in as a true last resort, not a competing timer.
+PENDING_FRAGMENT_STALL_GRACE_SECS = 4.0
+
+# How long a fragment may sit held in silence before the agent audibly
+# acknowledges it's still listening. Measured on a real demo: 8 of 20 turns
+# were held, 3 of them for the full stall grace above — up to 5.2 seconds
+# during which NOTHING was spoken (the filler lives inside _handle_real_turn,
+# which doesn't run until the fragment is released). Five seconds of dead air
+# after a person finishes a sentence reads as "it isn't listening," and in
+# that session it made the prospect repeat himself, which then tripped the
+# "still catching up" recovery. Deliberately shorter than the stall grace so
+# it lands DURING the hold rather than replacing it.
+FRAGMENT_BACKCHANNEL_AFTER_SECS = 1.5
+
+# Spoken once per held fragment while waiting — the conversational equivalent
+# of a nod. Short on purpose: this must not read as the agent taking the
+# floor, only as evidence it's still there. Kept separate from THINKING_FILLERS
+# / FLOOR_FILLERS because those bridge to an answer that's already coming,
+# whereas these bridge to "keep going, I'm with you."
+BACKCHANNELS = ["Mm-hm.", "Right.", "Mm.", "Sure."]
+
+# How long to wait, after a barge-in cut the agent off, for the transcript
+# that would prove the barge-in was real. If nothing arrives in this window
+# and the room is quiet, it wasn't speech that interrupted — it was a cough,
+# a door, a keyboard, mic bleed from the shared screen's own audio — and the
+# agent should pick up where it was cut off instead of silently abandoning
+# the rest of its answer.
+#
+# This is LiveKit's `resume_false_interruption`, which ships enabled by
+# default for exactly this reason: VAD fires, no transcript materializes,
+# the framework waits out a timeout and resumes. Without it a 120ms noise
+# spike (our Silero start_secs) permanently destroys the remainder of
+# whatever was being explained, and the tour appears to skip ahead.
+#
+# 1.6s: comfortably longer than Groq Whisper's observed finalization lag on
+# a short segment (~0.4-0.9s), so a REAL barge-in's transcript essentially
+# always beats it and this never fires on genuine speech.
+# Measured from the moment VAD says the visitor STOPPED, not from when the
+# interruption began. Timing it from the start (as this first shipped) is
+# unfixable by tuning: a transcript cannot exist until the sentence is
+# finished, and only then does VAD wait out stop_secs=1.0 and Whisper
+# transcribe. For anything longer than one word that total always exceeded
+# the window, so the timer beat the transcript on genuine speech and the
+# agent resumed on top of a real question. Confirmed live (visitor
+# 5b7b77ff, turns 2-8): three replies to one question.
+FALSE_INTERRUPTION_GRACE_AFTER_SILENCE_SECS = 2.5
+
+# How much continuous VAD-active speech counts as a real barge-in rather
+# than a noise blip. Below this, nothing a person could have meant fits, so
+# the reply is worth resuming; at or above it, assume they said something
+# real and NEVER resume — even if the transcript is late or never lands.
+# This is LiveKit's `min_interruption_duration`, and it is the signal that
+# actually separates the two cases. A cough or a door is ~0.2-0.4s; the
+# shortest real word people barge in with ("wait", "stop") still clears 0.6.
+MIN_REAL_INTERRUPTION_SECS = 0.6
+
+
+# How long the room must stay genuinely quiet before anything the prospect
+# said gets answered.
+#
+# This is what turns N replies into ONE. Silero's stop_secs is 1.0, so VAD
+# calls someone "not speaking" a single second after they stop making noise —
+# far shorter than a normal mid-thought pause. The replay path fired on
+# exactly that boolean, which produced the machine-gun pattern reported live:
+# say something, pause, she answers, you carry on, she stashes it, answers
+# again — five fragments, five separate answers, none of them aware of the
+# others.
+#
+# A person listening to a colleague doesn't do that. They let the whole
+# thought land, holding each piece, and reply once to all of it. This window
+# is that behaviour: every fragment keeps accumulating (see queue_frame)
+# and nothing is answered until the prospect has actually stopped for real.
+#
+# 1.8s is deliberately longer than a breath and shorter than a turn handover
+# feels broken. It sits on TOP of stop_secs, so the true silence before a
+# reply is ~2.8s from the last sound — close to what Gemini Live feels like,
+# and the reason it can hold a long rambling input without cutting in.
+# The consolidation window ADAPTS to how the person is talking, because one
+# fixed number can't serve both cases. Short and it chops up a rambler; long
+# and every quick "what does it cost?" sits in dead air.
+#
+# So: start impatient, grow patient as evidence arrives. Someone who has
+# already paused-and-continued twice is telling you they're mid-thought, and
+# the window stretches to match. Someone who says one sentence and stops gets
+# answered promptly.
+#
+#   1 fragment  -> 1.5s   (a one-liner; answer briskly)
+#   2 fragments -> 1.95s
+#   3 fragments -> 2.4s
+#   4+          -> 2.6s   (a genuine ramble; wait them out)
+#
+# Measured against the reported failure: six fragments with 0.8-1.6s breaths
+# came back as six answers before this, one answer after.
+CONSOLIDATION_SETTLE_BASE_SECS = 1.5
+CONSOLIDATION_SETTLE_STEP_SECS = 0.45
+CONSOLIDATION_SETTLE_MAX_SECS = 2.6
+
+
+# Hard ceiling on how long a walkthrough pause may last before the tour
+# resumes on its own.
+#
+# walkthrough_awaiting_answer is a latch: easy to set (any garbled transcript
+# trips it) and, by design, exitable ONLY by the model volunteering
+# resume_walkthrough — which its own schema tells it to be conservative
+# about. Worse, the self-healing watchdog switches itself OFF while the latch
+# is set, so the one mechanism built to recover a dead tour is disabled in
+# precisely the state that kills it.
+#
+# Confirmed live (visitor a335c780): the tour froze repeatedly and the
+# prospect had to say "continue", "why are you waiting for me", "do it" five
+# separate times. The moment the flag cleared, nine steps ran perfectly with
+# no input at all — it was never unwillingness, it was a deadlock.
+#
+# 45s: far longer than any genuine "let me answer their question" pause, so a
+# real tangent is never cut short, but bounded so a stuck latch can no longer
+# end the demo. Resuming a tour one beat early is a small cost; silently
+# ending it is not.
+WALKTHROUGH_LATCH_MAX_SECS = 45.0
+
+# Spoken before resuming, so picking the thread back up doesn't sound like a
+# glitch or like the agent ignored something. Deliberately not an apology —
+# nothing went wrong from the prospect's side.
+FALSE_INTERRUPTION_RESUME_PREFIXES = ["Sorry, where was I —", "Anyway —", "So, as I was saying —"]
+
+# Short affirmations that Smart Turn sometimes judges INCOMPLETE even though
+# they are unmistakably a whole turn — confirmed live: a bare "Yeah." sat
+# held for 4.85 seconds. Matched after stripping punctuation/case, and only
+# when the fragment is this word ALONE (a single word can't be the front of a
+# longer sentence in any way that matters here). Anything longer still goes
+# through Smart Turn normally: the fast-track exists to fix an obvious
+# false-negative, not to second-guess the turn detector generally.
+FAST_TRACK_AFFIRMATIONS = {
+    "yeah", "yes", "yep", "yup", "ok", "okay", "sure", "right", "correct",
+    "no", "nope", "nah", "exactly", "perfect", "great", "cool", "thanks",
+}
+
 REST_API_URL = "http://localhost:8787"
+
+# Fired when the prospect explicitly pushes for real, live generation
+# instead of just walking a flow — see runtime.py's instruction 13 and
+# registry.py's "meeting"/"example-gallery" entry. Matched exactly against
+# the action dict _report_action receives, to trigger the booking-link chat
+# message below alongside it.
+EXAMPLE_GALLERY_ACTION = {"page": "meeting", "component": "example-gallery", "method": "open"}
+# The real booking link. No code change needed elsewhere if this ever
+# changes again — this is the only place it's referenced.
+BOOKING_LINK_URL = "https://www.swishx.com/calendar"
 
 # Ends the call after this much total silence from both sides — someone who
 # mutes and walks away without hanging up would otherwise hold this box's
@@ -78,6 +266,31 @@ IDLE_TIMEOUT_SECS = 120
 # tight; it only affects how quickly an abandoned call is caught, not
 # anything in the live path.
 IDLE_CHECK_INTERVAL_SECS = 15
+
+# One nudge partway through a silence, not a whole escalating sequence — a
+# real rep breaks a long silence once, they don't keep asking "still there?"
+# every 15 seconds. bot.py's _watch_idle fires this once per idle streak,
+# the first time total idle time crosses this threshold (still well short
+# of IDLE_TIMEOUT_SECS, so there's always room to respond before the real
+# farewell). A small random jitter is added at each new idle streak (see
+# _watch_idle) so it doesn't land on the exact same second on every call.
+#
+# Raised 15 -> 30 after a real demo where the nudge repeatedly landed while
+# the prospect was simply watching a rendered video play (nothing for them to
+# say for a minute at a time) or thinking through a real answer. 15s is a
+# normal length for a considered pause in a sales conversation; 30s is not.
+# Note this only became a genuine 30 seconds alongside the BotStoppedSpeakingFrame
+# clock fix above — before it, a long agent answer consumed most of the
+# budget before the room ever went quiet.
+IDLE_CHECKIN_THRESHOLD_SECS = 30
+
+# Picked at random so back-to-back demo calls don't all hear the identical
+# line. Named/unnamed variants — prospect_name may not be captured yet this
+# early in some calls (see SessionState.prospect_name).
+IDLE_CHECKIN_MESSAGES = {
+    "named": ["Hey {name}, just checking you're still with me.", "Still there, {name}? Take your time."],
+    "unnamed": ["Hey, just checking you're still with me.", "Still there? Take your time."],
+}
 
 # Fills the "thinking" gap while run_turn() resolves (an LLM round trip,
 # ~1-3s). Spoken immediately on hearing a transcript, before run_turn() even
@@ -105,14 +318,33 @@ IDLE_CHECK_INTERVAL_SECS = 15
 # _pick_filler / _is_question) rather than mixed together at random:
 # THINKING_FILLERS ("Hmm —") for when the prospect asked a real question and
 # the agent needs a beat to actually think before answering; FLOOR_FILLERS
-# ("Um —") for when they just made a statement/comment and the agent is
-# simply holding the floor for a moment before continuing, not thinking hard.
-# Previously both cases drew from an overlapping pool, which read as
+# ("Hmm, right —") for when they just made a statement/comment and the agent
+# is simply holding the floor for a moment before continuing, not thinking
+# hard. Previously both cases drew from an overlapping pool, which read as
 # unnatural (e.g. "Hmm —" before a plain acknowledgment).
+#
+# FLOOR_FILLERS used to be "Um —"/"Mm —"/"Okay, um —"/"Sure, um —" —
+# confirmed live (real call transcript) as consistently the wrong register:
+# reads as a person stalling, not a curious listener. Every filler in this
+# file is now Hmm-based, in a curious/thinking tone, never "um"/"uh"/"oh".
 THINKING_FILLERS = ["Hmm —", "Hmm, let's see —", "Hmm, good question —", "Let me think —"]
-FLOOR_FILLERS = ["Um —", "Mm —", "Okay, um —", "Sure, um —"]
+FLOOR_FILLERS = ["Hmm —", "Hmm, right —", "Hmm, I see —", "Hmm, okay —"]
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _is_fast_track_affirmation(text: str) -> bool:
+    """True for a bare one-word affirmation ("Yeah", "Okay.", "Sure!").
+
+    Smart Turn occasionally rules these INCOMPLETE — reasonable in the
+    abstract (someone may well be about to continue) but wrong often enough
+    to hurt: a lone "Yeah." was held 4.85s on a real call. A single word
+    can't have a meaningful continuation withheld by answering it, and these
+    particular words are the ones a prospect uses to hand the floor BACK,
+    which is exactly when a delay is most damaging.
+    """
+    stripped = text.strip().strip(".,!?;:").lower()
+    return bool(stripped) and " " not in stripped and stripped in FAST_TRACK_AFFIRMATIONS
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -193,6 +425,34 @@ class AgentRuntimeProcessor(FrameProcessor):
     def __init__(self, visitor_id: str):
         super().__init__()
         self._visitor_id = visitor_id
+        # Judges whether a VAD-stop-driven STT segment is an actually
+        # complete thought or just a mid-utterance pause — see
+        # _analyze_smart_turn/_maybe_handle_transcript. Silero VAD's
+        # stop_secs=1.0 alone is a flat silence timer with no idea whether a
+        # sentence was finished; this is pipecat's own bundled local ONNX
+        # classifier (no network dependency, already-installed onnxruntime),
+        # layered on top rather than replacing VAD — VAD still owns
+        # start/stop timing (barge-in stays exactly as responsive as
+        # before), this only gates whether a stop is treated as "they're
+        # actually done" before a reply gets generated for it. Confirmed
+        # live as a real bug otherwise: a real call got two separate replies
+        # to "Hmm..." and "I'm just" before the prospect ever finished their
+        # actual question.
+        self._smart_turn = LocalSmartTurnAnalyzerV3()
+        # Set from analyze_end_of_turn()'s verdict at the most recent VAD
+        # stop — read by _maybe_handle_transcript when the matching
+        # transcript for that same segment arrives a moment later. Defaults
+        # to False (i.e. "complete") so a segment this was never computed
+        # for (should not normally happen, but fails open rather than fails
+        # silent) behaves exactly like today, not like a stuck hold.
+        self._last_turn_incomplete = False
+        # Text held back because the last segment judged INCOMPLETE — see
+        # _maybe_handle_transcript. Concatenated onto the next segment's
+        # text once one finally judges COMPLETE (or the watchdog below
+        # gives up waiting).
+        self._pending_fragment_text = ""
+        self._last_fragment_activity = time.monotonic()
+        self._pending_fragment_watch_task: Optional[asyncio.Task] = None
         self._bot_speaking = False
         self._last_filler = None
         self._greeted = False
@@ -232,12 +492,58 @@ class AgentRuntimeProcessor(FrameProcessor):
         # NEXT sentence right after. Those loops check this flag themselves
         # to stop speaking early instead of talking over the interruption.
         self._interrupted_this_turn = False
+        # Sentences from THIS turn's reply that were actually played to the
+        # end, in order — the ground truth for what the prospect really
+        # heard. Only ever appended to after `_speech_finished` confirms real
+        # playback finished, never at the point text was merely queued for
+        # TTS. Read by _amend_interrupted_turn when a barge-in cuts a reply
+        # short, so the history entry can be corrected down from the full
+        # intended reply to the spoken prefix (see runtime.amend_last_agent_turn).
+        # Set once a backchannel has been spoken for the fragment currently
+        # being held, so a long hold gets one acknowledgement, not one per
+        # watchdog tick. Cleared whenever the held fragment changes or is
+        # released (see _maybe_handle_transcript).
+        self._fragment_backchannel_sent = False
+        self._last_backchannel = ""
+        self._spoken_parts: list[str] = []
+        # The sentence that was mid-playback when an interruption landed —
+        # genuinely heard in part, so it's recorded with a cut-off marker
+        # rather than either dropped outright (which would under-report) or
+        # kept whole (which would over-report).
+        self._cut_off_part: Optional[str] = None
         # Bumped on any real speech from either side (see BotStartedSpeakingFrame/
-        # VADUserStartedSpeakingFrame below) — read via seconds_since_activity()
-        # by bot.py's idle watcher to detect an abandoned call. A plain
-        # timestamp write is the only per-frame cost, so tracking this adds
-        # no measurable latency to the actual conversation.
+        # VADUserStartedSpeakingFrame below) — read both by
+        # _watch_auto_continue_stall (walkthrough staleness) AND by bot.py's
+        # idle watcher (seconds_since_activity(), abandonment detection +
+        # the 15s check-in). One clock for both, deliberately: a visitor
+        # silently listening to an active, still-progressing walkthrough is
+        # not "idle" by any reasonable definition — the pre-check-in version
+        # of the 120s farewell got this right for free, since it only ever
+        # read this single, all-speech clock. Confirmed live: a call where
+        # you said one thing ("give me a walkthrough") and then just
+        # listened for two straight minutes of continuous real narration —
+        # nothing else — still got disconnected as abandoned once
+        # seconds_since_activity() was pointed at a visitor-only clock
+        # instead. _suppress_activity_bump below is the ONE deliberate
+        # exception: the check-in/farewell's own filler speech must not
+        # bump this, or it resets its own countdown (see that flag's
+        # docstring for the exact bug that caused, and how the fix here
+        # differs from the version that didn't work).
         self._last_activity = time.monotonic()
+        # Guards BotStartedSpeakingFrame below so a check-in/farewell's own
+        # speech can't bump _last_activity — without this, "still there?"
+        # would reset the very clock it exists to observe, which is exactly
+        # what happened previously: this flag existed before, cleared right
+        # after the (non-blocking) _speak() call returned rather than after
+        # the utterance actually finished playing — but the real
+        # BotStartedSpeakingFrame this triggers doesn't arrive until
+        # Cartesia actually starts that audio, well after _speak() itself
+        # returns, so the flag was already back to False by the time it
+        # needed to matter and every check-in reset its own countdown
+        # anyway. Fixed this time by having _speak_without_activity_bump
+        # (below) hold this flag until the utterance's real
+        # BotStoppedSpeakingFrame arrives, not until _speak() returns.
+        self._suppress_activity_bump = False
         # The scheduled "speak the next walkthrough beat on your own" task
         # (see _maybe_schedule_auto_continue) — held so it can be cancelled
         # the instant real speech starts (VADUserStartedSpeakingFrame below)
@@ -271,6 +577,32 @@ class AgentRuntimeProcessor(FrameProcessor):
         # _pending_interruption_text itself, so the eventual reply gets
         # reported with the right source — see _current_reply_source below.
         self._pending_interruption_source: str = "voice"
+        # Set to time.monotonic() the moment a barge-in cuts speech off, and
+        # cleared the moment any real transcript lands (which proves the
+        # barge-in was genuine). If it survives FALSE_INTERRUPTION_TIMEOUT_SECS
+        # it was a false positive — see _watch_pending_fragment_stall.
+        self._interrupted_at: Optional[float] = None
+        # When the interrupting speech began, and when VAD said it ended.
+        # The gap between them is what decides real-vs-noise; the second is
+        # what the recovery grace is measured from.
+        self._interruption_speech_started_at: Optional[float] = None
+        self._interruption_quiet_since: Optional[float] = None
+        # When VAD last said the prospect stopped making sound. The
+        # consolidation window (see the adaptive settle window) is measured
+        # from here, so every new fragment pushes the reply back rather than
+        # triggering one of its own.
+        self._last_user_speech_ended_at: float = 0.0
+        # When the walkthrough latch was last observed set, so
+        # WALKTHROUGH_LATCH_MAX_SECS can bound it. None whenever the tour
+        # isn't paused.
+        self._latch_since: Optional[float] = None
+        # How many separate utterances have piled up since the last answer.
+        # Drives the adaptive settle window (see the constants above) and
+        # resets to 0 every time something is actually answered.
+        self._burst_fragments = 0
+        # The tail of the reply the prospect never heard, captured when a
+        # turn ends interrupted. Spoken on false-interruption recovery.
+        self._unspoken_remainder: Optional[str] = None
         # Which surface the CURRENTLY RUNNING turn's replies should be
         # reported under (see _report_reply) — "voice" for everything
         # (narration, real spoken turns, hand-raise handoffs) except a real
@@ -283,15 +615,6 @@ class AgentRuntimeProcessor(FrameProcessor):
         # last left it as.
         self._current_reply_source: str = "voice"
         self._meeting_chat_poll_task: asyncio.Task | None = None
-        # Counts consecutive stash-replays chained back-to-back with no
-        # normal, non-replayed turn in between (see _advance_after_turn) —
-        # capped at one. Without a cap, someone saying two or three
-        # different things in a row while the bot was mid-turn each got
-        # a full, separate answer chained one after another, which reads
-        # as the agent "queuing up" and reciting multiple unrelated replies
-        # instead of engaging with what's current. Reset to 0 any time a
-        # turn ends with nothing left stashed.
-        self._interruption_replay_depth = 0
         # Background task generating the NEXT walkthrough beat's content
         # ahead of time, kicked off the moment the CURRENT beat's own
         # state is settled but its audio may still be playing (see
@@ -317,6 +640,16 @@ class AgentRuntimeProcessor(FrameProcessor):
         # mutates whatever session object it's given, so driving it against
         # the real session would commit a beat nobody may ever hear.
         self._prefetch_session_clone = None
+
+    def _pick_backchannel(self) -> str:
+        """Short 'still listening' token for a held fragment. Avoids
+        repeating the previous one back-to-back, same reason _pick_filler
+        does: hearing the identical sound twice is what makes it read as a
+        recording rather than a person."""
+        pool = [b for b in BACKCHANNELS if b != self._last_backchannel] or BACKCHANNELS
+        choice = random.choice(pool)
+        self._last_backchannel = choice
+        return choice
 
     def _pick_filler(self, heard_text: str) -> str:
         pool = THINKING_FILLERS if _is_question(heard_text) else FLOOR_FILLERS
@@ -354,9 +687,47 @@ class AgentRuntimeProcessor(FrameProcessor):
             # speech happened while we were mid-turn; _advance_after_turn
             # replays it as a real turn the instant the in-flight beat ends,
             # so it's always heard and answered instead of silently skipped.
-            logger.info(f"[{self._visitor_id}] stashing transcript mid-turn: {frame.text!r}")
-            self._pending_interruption_text = frame.text
+            #
+            # ACCUMULATE, never overwrite. This was `= frame.text` — a plain
+            # assignment — which meant that if the prospect said two things
+            # while one beat was in flight, the FIRST was silently destroyed
+            # by the second. Confirmed against a real call (visitor
+            # a335c780, turns 68-76): STT inverted "they are NOT tech savvy"
+            # into "they are very tech savvy", the prospect immediately
+            # corrected it mid-beat, and the correction was thrown away by
+            # this line. He had to repeat it six turns later.
+            #
+            # This is also what every serious voice stack does. OpenAI's
+            # Realtime API appends into a continuous server-side
+            # input_audio_buffer and only commits at a detected endpoint, so
+            # there is no such thing as speech arriving "at a bad time" to be
+            # dropped. Joining here gives the same property: whatever the
+            # prospect said during the beat is answered as ONE turn, in the
+            # order they said it, rather than one utterance winning a race.
+            #
+            # Whitespace-joined rather than newline/punctuation-joined for
+            # the same reason _maybe_handle_transcript does it: these are
+            # segments of one continuous stretch of speech, not separate
+            # messages, and the model reads them best as one sentence-ish run.
+            if self._pending_interruption_text:
+                combined = f"{self._pending_interruption_text} {frame.text}".strip()
+            else:
+                combined = frame.text
+            logger.info(
+                f"[{self._visitor_id}] stashing transcript mid-turn "
+                f"(now {combined!r})"
+            )
+            self._pending_interruption_text = combined
             self._pending_interruption_source = "voice"
+            self._burst_fragments += 1
+            # Real words arrived — the barge-in was genuine, so cancel the
+            # false-positive recovery and drop the unheard tail. Resuming an
+            # explanation the prospect deliberately cut off is worse than
+            # losing it: they interrupted precisely because they didn't want
+            # to hear the rest.
+            self._interrupted_at = None
+            self._interruption_quiet_since = None
+            self._unspoken_remainder = None
             return
         await super().queue_frame(frame, direction, callback)
 
@@ -369,25 +740,39 @@ class AgentRuntimeProcessor(FrameProcessor):
             # everything else downstream) has already run its own StartFrame
             # setup by the time _greet() pushes real audio-bound frames at it.
             self._audio_out_sample_rate = frame.audio_out_sample_rate
+            self._smart_turn.set_sample_rate(frame.audio_in_sample_rate)
             await self.push_frame(frame, direction)
             if not self._greeted:
                 self._greeted = True
                 self._hand_raise_poll_task = asyncio.create_task(self._poll_hand_raise())
                 self._meeting_chat_poll_task = asyncio.create_task(self._poll_meeting_chat())
                 self._auto_continue_watchdog_task = asyncio.create_task(self._watch_auto_continue_stall())
+                self._pending_fragment_watch_task = asyncio.create_task(self._watch_pending_fragment_stall())
                 await self._greet(direction)
             return
 
         if isinstance(frame, BotStartedSpeakingFrame):
             self._bot_speaking = True
             self._speech_finished.clear()
-            self._last_activity = time.monotonic()
+            if not self._suppress_activity_bump:
+                self._last_activity = time.monotonic()
             await self.push_frame(frame, direction)
             return
 
         if isinstance(frame, BotStoppedSpeakingFrame):
             self._bot_speaking = False
             self._speech_finished.set()
+            # Bump the idle clock on speech ENDING, not just on it starting.
+            # Confirmed live (2026-08-20 05:20:45): a 13-second sentence
+            # started at :30.3 and ended at :43.4, but the clock had been set
+            # at :30.3 — so the 15s check-in fired at :45.5, giving the
+            # prospect 2.1 seconds of actual silence before being asked
+            # "Still there?". The longer and more useful the agent's answer,
+            # the sooner it accused the prospect of leaving. Idle has to mean
+            # "quiet since the room went quiet", not "since someone last
+            # started talking".
+            if not self._suppress_activity_bump:
+                self._last_activity = time.monotonic()
             await self.push_frame(frame, direction)
             return
 
@@ -409,6 +794,12 @@ class AgentRuntimeProcessor(FrameProcessor):
             if self._bot_speaking:
                 get_session(self._visitor_id).was_interrupted = True
                 self._interrupted_this_turn = True
+                # Arm false-positive recovery and note when the speech
+                # began. Whether it turns out to be a real barge-in or a
+                # noise blip is decided on VAD-stop, by how long it lasted.
+                self._interrupted_at = time.monotonic()
+                self._interruption_speech_started_at = time.monotonic()
+                self._interruption_quiet_since = None
                 await self.broadcast_interruption()
             await self.push_frame(frame, direction)
             return
@@ -422,14 +813,281 @@ class AgentRuntimeProcessor(FrameProcessor):
             # of a still-in-progress sentence earlier tonight.
             self._user_speaking = False
             self._last_activity = time.monotonic()
+            # Every time they stop, the consolidation window restarts. A new
+            # fragment therefore pushes the reply further out instead of
+            # racing one of its own — which is exactly what turns five
+            # fragments into one answer instead of five.
+            self._last_user_speech_ended_at = time.monotonic()
+            # Decide, right here, whether what just ended was a real
+            # barge-in or a noise blip — this is the only moment both the
+            # start and end of the segment are known, and it happens well
+            # before the transcript could arrive. Long enough to be speech
+            # means a reply is owed to THEM, so the interrupted explanation
+            # is abandoned for good; too short to be speech means nothing
+            # was said and the explanation is still worth finishing.
+            if self._interrupted_at is not None:
+                started = self._interruption_speech_started_at
+                spoke_for = (time.monotonic() - started) if started is not None else 0.0
+                if spoke_for >= MIN_REAL_INTERRUPTION_SECS:
+                    logger.info(
+                        f"[{self._visitor_id}] real barge-in ({spoke_for:.2f}s of speech) "
+                        f"— not resuming, waiting for their words"
+                    )
+                    self._interrupted_at = None
+                    self._unspoken_remainder = None
+                else:
+                    # Start the grace clock only now that the room is quiet.
+                    self._interruption_quiet_since = time.monotonic()
+                    logger.info(
+                        f"[{self._visitor_id}] possible false interruption "
+                        f"({spoke_for:.2f}s) — will resume if no transcript lands"
+                    )
+            # Judge the segment that's ending right now, before its
+            # transcript even arrives — see _analyze_smart_turn's docstring.
+            # TranscriptionFrame reads the verdict this sets a moment later,
+            # once STT actually finishes transcribing.
+            await self._analyze_smart_turn()
+            await self.push_frame(frame, direction)
+            return
+
+        if isinstance(frame, InputAudioRawFrame):
+            # Fed continuously so the analyzer has the actual audio to judge
+            # once analyze_end_of_turn() is triggered above — see
+            # LocalSmartTurnAnalyzerV3/BaseSmartTurn. append_audio also
+            # carries its own internal silence safety net (COMPLETE once
+            # ~3s of raw silence passes even without an explicit VAD-stop
+            # trigger); checked here for that rare case too, mirroring
+            # pipecat's own reference turn-strategy.
+            state = self._smart_turn.append_audio(frame.audio, self._user_speaking)
+            if state == EndOfTurnState.COMPLETE:
+                await self._analyze_smart_turn()
             await self.push_frame(frame, direction)
             return
 
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
-            await self._handle_real_turn(frame.text, direction)
+            await self._maybe_handle_transcript(frame.text, direction)
             return
 
         await self.push_frame(frame, direction)
+
+    async def _analyze_smart_turn(self) -> None:
+        """Runs Smart Turn's ML judgment on the audio buffered since the
+        last call, storing the verdict for _maybe_handle_transcript to read
+        once the matching transcript arrives. Cheap to call speculatively
+        (a single ONNX inference on a short audio clip, off the event loop
+        via BaseSmartTurn's own thread executor) — called from both the
+        explicit VAD-stop trigger and append_audio's own internal silence
+        safety net above."""
+        state, _ = await self._smart_turn.analyze_end_of_turn()
+        self._last_turn_incomplete = state == EndOfTurnState.INCOMPLETE
+
+    async def _maybe_handle_transcript(self, text: str, direction: FrameDirection) -> None:
+        """Gates a finalized transcript segment on whether Smart Turn judged
+        the audio it came from a genuinely complete thought (see
+        _analyze_smart_turn) instead of treating every VAD-stop-driven STT
+        segment as its own complete turn — Silero VAD's stop_secs=1.0 alone
+        can't tell "actually done talking" from "paused mid-sentence,"
+        confirmed live as a real bug: a real call got two separate replies
+        to "Hmm..." and "I'm just" before the prospect ever finished their
+        actual question.
+
+        An INCOMPLETE verdict holds this segment's text rather than
+        answering it — appended to whatever's already pending from an
+        earlier INCOMPLETE segment in the same still-forming utterance.
+        Nothing is spoken while held (no filler, no reply): silence while
+        the prospect finishes their thought is the whole point, not a
+        flicker of "still thinking" between fragments.
+
+        A COMPLETE verdict releases everything held so far, combined with
+        this segment's own text, as one real turn. _watch_pending_fragment_stall
+        is the safety net for a verdict that never arrives.
+        """
+        # Same proof-of-genuineness as the mid-turn stash path above.
+        self._interrupted_at = None
+        self._interruption_quiet_since = None
+        self._unspoken_remainder = None
+        combined = f"{self._pending_fragment_text} {text}".strip() if self._pending_fragment_text else text
+        if self._last_turn_incomplete and not _is_fast_track_affirmation(combined):
+            self._pending_fragment_text = combined
+            self._last_fragment_activity = time.monotonic()
+            self._fragment_backchannel_sent = False
+            self._burst_fragments += 1
+            logger.info(f"[{self._visitor_id}] holding incomplete fragment: {combined!r}")
+            return
+        if self._last_turn_incomplete:
+            # Fast-tracked past an INCOMPLETE verdict — see
+            # FAST_TRACK_AFFIRMATIONS for why this specific carve-out. These
+            # hand the floor BACK ("yeah", "okay"), so they answer at once
+            # rather than sitting out the consolidation window below.
+            logger.info(f"[{self._visitor_id}] fast-tracking short affirmation past INCOMPLETE: {combined!r}")
+            self._pending_fragment_text = ""
+            self._fragment_backchannel_sent = False
+            await self._handle_real_turn(combined, direction)
+            return
+        # COMPLETE — but "complete sentence" is not "finished talking".
+        # Answering here is what produced one reply per fragment: six
+        # sentences with ordinary breaths between them came back as six
+        # separate answers, because each one was individually a valid whole
+        # sentence. Smart Turn is judging grammar; the prospect is mid-
+        # THOUGHT.
+        #
+        # So hold it and let the consolidation window decide, exactly like
+        # the mid-turn stash path. Anything else they say keeps appending,
+        # and _watch_pending_fragment_stall answers all of it once the room
+        # has actually been quiet for the adaptive settle window. Found by
+        # the stress harness, which drove six fragments through the real
+        # idle path and got six answers back.
+        self._pending_fragment_text = combined
+        self._last_fragment_activity = time.monotonic()
+        self._fragment_backchannel_sent = False
+        self._burst_fragments += 1
+        logger.info(
+            f"[{self._visitor_id}] holding fragment {self._burst_fragments} "
+            f"(window now {self._settle_window():.1f}s): {combined!r}"
+        )
+
+    async def _watch_pending_fragment_stall(self) -> None:
+        """Safety net for a fragment Smart Turn keeps calling INCOMPLETE —
+        a model misfire, or someone who trails off and never actually comes
+        back. Without this, a wrong verdict would hold the prospect's words
+        forever with no reply at all, which is worse than the premature-
+        interruption bug this whole mechanism exists to fix. Same
+        lightweight polling pattern as _watch_auto_continue_stall, but
+        independent of walkthrough state — this applies to every turn, not
+        just an active tour."""
+        try:
+            while True:
+                await asyncio.sleep(PENDING_FRAGMENT_WATCHDOG_INTERVAL_SECS)
+                # A stashed mid-beat interruption that _advance_after_turn
+                # deliberately left behind because the prospect was still
+                # talking when the beat ended (see its docstring). Now that
+                # the room is quiet, answer it — this is the only thing that
+                # will, since _advance_after_turn has already returned and
+                # nothing else drains this buffer.
+                if (
+                    self._pending_interruption_text
+                    and not self._turn_in_progress
+                    and not self._bot_speaking
+                    and not self._user_speaking
+                    # Every signal this pipeline has, all pointing at "they
+                    # are genuinely finished", before a single word is said
+                    # back. Free VAD alone can't tell a breath from a turn
+                    # handover, so it is deliberately the weakest of the four:
+                    #
+                    #  1. VAD says silent            (_user_speaking False)
+                    #  2. silent for long enough     (settle window below)
+                    #  3. Smart Turn v3 calls the last segment a COMPLETE
+                    #     thought — semantic, not acoustic, so "so the thing
+                    #     is..." trailing off still counts as unfinished
+                    #  4. nothing half-transcribed still in hand
+                    #
+                    # Any one of them saying "not yet" keeps accumulating.
+                    and time.monotonic() - self._last_user_speech_ended_at
+                    >= self._settle_window()
+                    and not self._last_turn_incomplete
+                    and not self._pending_fragment_text
+                ):
+                    pending = self._pending_interruption_text
+                    self._pending_interruption_text = None
+                    pending_source = self._pending_interruption_source
+                    self._pending_interruption_source = "voice"
+                    logger.info(
+                        f"[{self._visitor_id}] draining deferred interruption: {pending!r}"
+                    )
+                    await self._handle_real_turn(
+                        pending, FrameDirection.DOWNSTREAM, source=pending_source
+                    )
+                    continue
+                # False-interruption recovery. Something cut the agent off,
+                # the timeout has passed, and no transcript ever arrived to
+                # justify it — so it was noise, and the rest of the answer is
+                # still owed. All four quiet-checks must hold: resuming into
+                # someone who IS talking would be the very cut-in this fixes.
+                if (
+                    self._interrupted_at is not None
+                    and self._unspoken_remainder
+                    and not self._turn_in_progress
+                    and not self._bot_speaking
+                    and not self._user_speaking
+                    and not self._pending_interruption_text
+                    and not self._pending_fragment_text
+                    # Never before VAD has confirmed the room went quiet AND
+                    # the segment was classified as too short to be speech.
+                    # This is None while they're still talking and gets
+                    # cleared outright on a real barge-in, so neither case
+                    # can reach the resume below.
+                    and self._interruption_quiet_since is not None
+                    and time.monotonic() - self._interruption_quiet_since
+                    >= FALSE_INTERRUPTION_GRACE_AFTER_SILENCE_SECS
+                ):
+                    remainder = self._unspoken_remainder
+                    self._interrupted_at = None
+                    self._interruption_quiet_since = None
+                    self._interruption_speech_started_at = None
+                    self._unspoken_remainder = None
+                    prefix = random.choice(FALSE_INTERRUPTION_RESUME_PREFIXES)
+                    logger.info(
+                        f"[{self._visitor_id}] false interruption — resuming: {remainder[:80]!r}"
+                    )
+                    # Bypasses the model entirely (this is text it already
+                    # produced), so it persists and reports itself the way
+                    # every other spoken line does — otherwise it would be a
+                    # silent gap in the transcript DB and the chat UI.
+                    resumed = f"{prefix} {remainder}"
+                    session = get_session(self._visitor_id)
+                    if session.visitor_id:
+                        gate_log.append_transcript_turn(session.visitor_id, "agent", resumed)
+                    self._current_reply_source = "voice"
+                    asyncio.create_task(self._report_reply(resumed))
+                    await self._speak(resumed, FrameDirection.DOWNSTREAM)
+                    continue
+                if not self._pending_fragment_text:
+                    continue
+                if self._turn_in_progress or self._bot_speaking or self._user_speaking:
+                    continue
+                # Settled: Smart Turn called it a complete thought AND the
+                # room has been quiet long enough that nothing more is
+                # coming. Answer everything held, as one turn. This is the
+                # normal path now; the stall grace below is only the safety
+                # net for a verdict that stays INCOMPLETE forever.
+                if (
+                    not self._last_turn_incomplete
+                    and not self._pending_interruption_text
+                    and time.monotonic() - self._last_user_speech_ended_at
+                    >= self._settle_window()
+                ):
+                    pending = self._pending_fragment_text
+                    self._pending_fragment_text = ""
+                    self._fragment_backchannel_sent = False
+                    logger.info(f"[{self._visitor_id}] settled — answering once: {pending!r}")
+                    await self._handle_real_turn(pending, FrameDirection.DOWNSTREAM)
+                    continue
+                held_for = time.monotonic() - self._last_fragment_activity
+                # Audible "I'm still here" partway through the hold, well
+                # before the flush below. Once per held fragment — a nod, not
+                # a nag. Deliberately does NOT touch _pending_fragment_text
+                # or _last_fragment_activity: this is the agent making a
+                # sound, not the prospect speaking, so it must not extend the
+                # hold or reset the stall countdown it sits inside.
+                if (
+                    not self._fragment_backchannel_sent
+                    and held_for >= FRAGMENT_BACKCHANNEL_AFTER_SECS
+                ):
+                    self._fragment_backchannel_sent = True
+                    backchannel = self._pick_backchannel()
+                    logger.info(
+                        f"[{self._visitor_id}] fragment held {held_for:.1f}s — backchanneling {backchannel!r}"
+                    )
+                    await self._speak_without_activity_bump(backchannel)
+                    continue
+                if held_for < PENDING_FRAGMENT_STALL_GRACE_SECS:
+                    continue
+                pending = self._pending_fragment_text
+                self._pending_fragment_text = ""
+                logger.warning(f"[{self._visitor_id}] pending fragment stalled, flushing: {pending!r}")
+                await self._handle_real_turn(pending, FrameDirection.DOWNSTREAM)
+        except asyncio.CancelledError:
+            pass
 
     async def _handle_real_turn(self, text: str, direction: FrameDirection, source: str = "voice") -> None:
         """Processes one real turn — the prospect's actual words — through
@@ -461,6 +1119,10 @@ class AgentRuntimeProcessor(FrameProcessor):
         self._cancel_prefetch()
         self._turn_in_progress = True
         self._interrupted_this_turn = False
+        # Answered — the burst is over, so the next one starts impatient
+        # again rather than inheriting a stretched window.
+        self._burst_fragments = 0
+        self._begin_spoken_tracking()
 
         try:
             filler = self._pick_filler(text)
@@ -506,6 +1168,13 @@ class AgentRuntimeProcessor(FrameProcessor):
                     asyncio.create_task(self._report_reply(reply))
                     await self._speak_reply(reply, direction)
 
+            # Correct the history entry BEFORE _advance_after_turn below: a
+            # stashed interruption replays as a whole new turn from there and
+            # appends its own entries, at which point the entry this needs to
+            # fix is no longer the last one and the guard would (correctly)
+            # refuse to touch it.
+            self._amend_interrupted_turn(session, result)
+
             if self._hand_raised and not self._hand_ack_sent:
                 # Either a raise landed right as the last sentence
                 # finished (too late for _speak_reply's own per-sentence
@@ -529,57 +1198,47 @@ class AgentRuntimeProcessor(FrameProcessor):
         scripted beat, so a genuine barge-in never just gets silently
         skipped over in favor of the tour continuing on schedule.
 
-        Only ever chains ONE such replay in a row (_interruption_replay_depth).
-        _pending_interruption_text already always holds just the latest
-        overwrite, never a backlog — but a person can genuinely say two or
-        three different things in the seconds it takes to work through each
-        one, and chaining a full reply for every single one back-to-back is
-        what read as the agent "queuing up" and answering several unrelated
-        things in a row instead of engaging with what's current. Capping at
-        one still guarantees the most recent thing said is never silently
-        dropped; anything stacked on top of that gets a short, honest
-        "still catching up" instead of another full unrelated answer."""
+        _pending_interruption_text now ACCUMULATES everything said during the
+        beat (see queue_frame), so this replays one turn carrying all of it
+        rather than one turn per utterance. That removes the reason the old
+        depth cap existed: the cap was there because replaying N separate
+        stashes produced N unrelated answers back-to-back ("queuing up"), and
+        its overflow branch spoke a canned "still catching up — could you say
+        that again?" INSTEAD of the prospect's words. That branch is gone.
+        Confirmed against a real call (visitor a335c780, turns 57 and 71):
+        both of those canned lines were this cap firing, not speech-to-text
+        failing, and turn 71 discarded a correction the prospect had to
+        repeat six turns later. Joining the utterances answers all of them
+        once, which is what the cap was trying to approximate by dropping.
+
+        Chaining is naturally bounded now — a replay only follows a replay if
+        the prospect spoke again DURING the replay, which is just a
+        conversation, not a runaway.
+
+        Defers while _user_speaking: replaying the instant a beat ends, while
+        the prospect is still mid-sentence, is exactly the premature cut-in
+        this whole redesign is about. _watch_pending_fragment_stall drains it
+        once the room is actually quiet."""
         pending = self._pending_interruption_text
         if pending is not None:
-            self._pending_interruption_text = None
-            pending_source = self._pending_interruption_source
-            self._pending_interruption_source = "voice"
-            if self._interruption_replay_depth >= 1:
-                self._interruption_replay_depth = 0
-                catching_up = "Sorry, I'm still catching up — could you say that again?"
-                # Both sides of this exchange used to be invisible outside
-                # the raw pipeline log — neither the superseded transcript
-                # nor this recovery reply ever went through _handle_real_turn/
-                # _finalize_turn (the only place transcript_turns rows and
-                # history entries normally get written), since this path
-                # bypasses the model entirely. Confirmed live: reviewing a
-                # call afterward, this exchange was real (present in the raw
-                # log) but read as a mysterious gap in the transcript DB and
-                # the frontend chat UI, which both only ever show what's
-                # persisted here. Persist and report the same way every
-                # other real turn does.
-                if session.visitor_id:
-                    gate_log.append_transcript_turn(session.visitor_id, "user", pending)
-                    gate_log.append_transcript_turn(session.visitor_id, "agent", catching_up)
-                self._current_reply_source = pending_source
-                asyncio.create_task(self._report_reply(catching_up))
-                await self._speak(catching_up, direction)
-                # This message is spoken directly here, never through the
-                # model's own tool call — so it's the one place that has to
-                # set the sticky pause itself instead of relying on the
-                # model to set "walkthrough_awaiting_answer" (see runtime.py's
-                # _finalize_turn). Without this, _maybe_schedule_auto_continue
-                # right below would go ahead and fire the next scripted beat
-                # anyway, the exact "asked me to repeat, then kept going
-                # without listening" bug confirmed live.
-                if session.walkthrough_step is not None:
-                    session.walkthrough_awaiting_answer = True
-                self._maybe_schedule_auto_continue(session, direction)
-                return
-            self._interruption_replay_depth += 1
-            await self._handle_real_turn(pending, direction, source=pending_source)
+            # Still mid-sentence — leave it stashed and let it keep
+            # accumulating. _watch_pending_fragment_stall replays it the
+            # moment they actually stop. Deliberately does NOT schedule an
+            # auto-continue on the way out: there is unanswered speech
+            # pending, so firing the next scripted beat here is precisely
+            # the "talked over me" behaviour being fixed.
+            # ALWAYS deferred to _watch_pending_fragment_stall, never
+            # answered inline. Answering here fired the moment VAD flipped
+            # _user_speaking false — one second after the last sound — which
+            # is shorter than an ordinary mid-thought pause. Each fragment
+            # then got its own reply, and a single rambling answer came back
+            # as five disconnected ones. The watchdog holds everything until
+            # the adaptive settle window of real quiet, then replies once to
+            # the joined text.
+            logger.info(
+                f"[{self._visitor_id}] holding stashed interruption for settle window: {pending!r}"
+            )
             return
-        self._interruption_replay_depth = 0
         self._maybe_schedule_auto_continue(session, direction)
 
     async def _greet(self, direction: FrameDirection) -> None:
@@ -606,6 +1265,77 @@ class AgentRuntimeProcessor(FrameProcessor):
         await self.push_frame(TextFrame(text), direction)
         await self.push_frame(LLMFullResponseEndFrame(), direction)
 
+    def _settle_window(self) -> float:
+        """How long the room must stay quiet before answering, given how
+        many fragments are already waiting. See the CONSOLIDATION_* block."""
+        return min(
+            CONSOLIDATION_SETTLE_BASE_SECS
+            + CONSOLIDATION_SETTLE_STEP_SECS * max(0, self._burst_fragments - 1),
+            CONSOLIDATION_SETTLE_MAX_SECS,
+        )
+
+    def _begin_spoken_tracking(self) -> None:
+        """Resets the spoken-prefix accumulator at the start of every turn —
+        real, replayed, or auto-continued."""
+        self._spoken_parts = []
+        self._cut_off_part = None
+
+    def _spoken_so_far(self) -> str:
+        """What the prospect actually heard of this turn's reply, as text.
+
+        Sentence-granular, which is as fine as this pipeline can resolve:
+        `_speech_finished` fires per utterance pushed to TTS, so a sentence
+        is the smallest unit we can confirm was fully played. (pipecat's own
+        aggregator gets word granularity from PTS-stamped word frames, and
+        the Realtime API gets milliseconds from audio_end_ms — both need
+        word timestamps threaded through, which Cartesia supports and we
+        could adopt later. Sentence level already captures the failure that
+        actually hurt: a whole explanation recorded as delivered when the
+        prospect never heard it.)"""
+        parts = list(self._spoken_parts)
+        if self._cut_off_part:
+            parts.append(self._cut_off_part.rstrip() + CUTOFF_MARKER)
+        return " ".join(p.strip() for p in parts if p.strip())
+
+    def _amend_interrupted_turn(self, session, result: Optional[dict]) -> None:
+        """Corrects this turn's history entry down to the spoken prefix when
+        a barge-in cut the reply short. No-op unless the turn was actually
+        interrupted AND something is genuinely missing.
+
+        Zero-sentence case: if the interruption landed before even the first
+        sentence finished playing, the honest record is that none of the
+        reply was delivered — say exactly that rather than inventing a
+        partial. The prospect did hear the filler and possibly a lead_in, but
+        neither of those is part of `reply`, so neither belongs here."""
+        if not self._interrupted_this_turn or not result:
+            return
+        full = result.get("reply")
+        if not full:
+            return
+        spoken = self._spoken_so_far() or NOTHING_SPOKEN_MARKER
+        # Everything the prospect did NOT hear, kept for false-interruption
+        # recovery (see _watch_pending_fragment_stall). Computed from the
+        # sentence list rather than string-slicing `full`, because the
+        # spoken record carries CUTOFF_MARKER and other annotations that
+        # aren't in the original text and would break a naive prefix match.
+        heard = set()
+        for part in self._spoken_parts:
+            heard.add(part.strip())
+        if self._cut_off_part:
+            # Partially heard — repeat it whole rather than guessing where
+            # inside the sentence the cut landed.
+            heard.discard(self._cut_off_part.strip())
+        remainder = " ".join(
+            sent.strip() for sent in _split_sentences(full)
+            if sent.strip() and sent.strip() not in heard
+        ).strip()
+        self._unspoken_remainder = remainder or None
+        if amend_last_agent_turn(session, spoken, full):
+            logger.info(
+                f"[{self._visitor_id}] interrupted mid-reply — history corrected to what was heard "
+                f"({len(spoken)}/{len(full)} chars): {spoken[:90]!r}"
+            )
+
     async def _speak_reply(self, text: str, direction: FrameDirection) -> None:
         """Like _speak, but one sentence at a time — waiting for each
         sentence's real playback to finish (via _speech_finished, set/cleared
@@ -620,7 +1350,12 @@ class AgentRuntimeProcessor(FrameProcessor):
             await self._speak(sentence, direction)
             await self._speech_finished.wait()
             if self._interrupted_this_turn:
+                # Playback of THIS sentence was cut mid-way (the interruption
+                # is what ended the wait above) — partially heard, so it's
+                # recorded as truncated rather than as fully delivered.
+                self._cut_off_part = sentence
                 return
+            self._spoken_parts.append(sentence)
             if self._hand_raised and not self._hand_ack_sent:
                 await self._speak_hand_raise_handoff(direction)
                 return
@@ -756,7 +1491,10 @@ class AgentRuntimeProcessor(FrameProcessor):
                 spoken_anything_yet = True
                 await self._speech_finished.wait()
                 if self._interrupted_this_turn:
+                    # Cut mid-sentence — see the same branch in _speak_reply.
+                    self._cut_off_part = sentence
                     return True
+                self._spoken_parts.append(sentence)
                 if self._hand_raised and not self._hand_ack_sent:
                     await self._speak_hand_raise_handoff(direction)
                     return True
@@ -1003,8 +1741,28 @@ class AgentRuntimeProcessor(FrameProcessor):
             while True:
                 await asyncio.sleep(AUTO_CONTINUE_WATCHDOG_INTERVAL_SECS)
                 session = get_session(self._visitor_id)
-                if session.walkthrough_step is None or session.walkthrough_awaiting_answer:
+                if session.walkthrough_step is None:
+                    self._latch_since = None
                     continue
+                # The latch no longer switches this watchdog off permanently.
+                # It still suppresses it — a paused tour SHOULD stay paused
+                # while a real tangent plays out — but only up to
+                # WALKTHROUGH_LATCH_MAX_SECS. Past that the pause is treated
+                # as stuck rather than intentional and cleared here, which is
+                # the escape hatch the latch never had.
+                if session.walkthrough_awaiting_answer:
+                    if self._latch_since is None:
+                        self._latch_since = time.monotonic()
+                    elif time.monotonic() - self._latch_since >= WALKTHROUGH_LATCH_MAX_SECS:
+                        logger.warning(
+                            f"[{self._visitor_id}] walkthrough latch stuck for "
+                            f"{WALKTHROUGH_LATCH_MAX_SECS:.0f}s at step "
+                            f"{session.walkthrough_step} — releasing so the tour can resume"
+                        )
+                        session.walkthrough_awaiting_answer = False
+                        self._latch_since = None
+                    continue
+                self._latch_since = None
                 if self._turn_in_progress or self._bot_speaking:
                     continue
                 if self._pending_auto_continue is not None:
@@ -1026,6 +1784,24 @@ class AgentRuntimeProcessor(FrameProcessor):
 
     async def _auto_continue_after_pause(self, session, direction: FrameDirection) -> None:
         try:
+            # Wait for the beat that was playing when this got scheduled to
+            # genuinely finish before even starting the pause countdown.
+            # _maybe_schedule_auto_continue fires right as that beat's own
+            # turn wraps up, but its audio can still legitimately be playing
+            # for several more seconds (a long last sentence) — a flat
+            # AUTO_CONTINUE_PAUSE_SECS sleep alone would then land while
+            # _bot_speaking was still true, bail immediately below, and
+            # leave nothing scheduled until _watch_auto_continue_stall
+            # rescued it seconds later. Confirmed live: this was happening
+            # on every beat of a multi-part step, not as a rare fallback.
+            # Bounded the same way _speak_without_activity_bump/
+            # _speak_hand_raise_handoff already wait on this same event —
+            # if it's somehow never set, the bail check right below still
+            # catches it exactly as before this change.
+            try:
+                await asyncio.wait_for(self._speech_finished.wait(), timeout=AUTO_CONTINUE_SPEECH_WAIT_TIMEOUT_SECS)
+            except asyncio.TimeoutError:
+                pass
             await asyncio.sleep(AUTO_CONTINUE_PAUSE_SECS)
         except asyncio.CancelledError:
             return
@@ -1081,6 +1857,10 @@ class AgentRuntimeProcessor(FrameProcessor):
         fires)."""
         self._turn_in_progress = True
         self._interrupted_this_turn = False
+        # Answered — the burst is over, so the next one starts impatient
+        # again rather than inheriting a stretched window.
+        self._burst_fragments = 0
+        self._begin_spoken_tracking()
         # Auto-continue beats are always narration, never a reply to
         # anything typed — reset in case a previous real turn left this set
         # to "chat" (see _current_reply_source).
@@ -1153,6 +1933,8 @@ class AgentRuntimeProcessor(FrameProcessor):
                     asyncio.create_task(self._report_reply(reply))
                     await self._speak_reply(reply, direction)
 
+            self._amend_interrupted_turn(session, result)
+
             if self._hand_raised and not self._hand_ack_sent:
                 await self._speak_hand_raise_handoff(direction)
 
@@ -1170,6 +1952,34 @@ class AgentRuntimeProcessor(FrameProcessor):
                 )
         except Exception:
             logger.exception(f"Failed to report voice action for visitor {self._visitor_id}")
+        if action == EXAMPLE_GALLERY_ACTION:
+            # The spoken reply already explains the sandbox/gallery framing
+            # (see instruction 13) — this is the one place the actual link
+            # lands, since a spoken URL isn't something anyone can click or
+            # copy. Fired alongside the action, not gated on the reply, so
+            # it lands even if this turn's reply itself needed the
+            # _maybe_backfill_reply path above.
+            asyncio.create_task(
+                self._report_chat_message(f"Here's the link to book a live platform showcase with a human rep: {BOOKING_LINK_URL}")
+            )
+
+    async def _report_chat_message(self, text: str) -> None:
+        """Pushes a message straight into Meeting Mode's chat panel,
+        unconditionally tagged source="chat" regardless of
+        _current_reply_source — for agent-initiated content (like the
+        example-gallery's booking link) that isn't a reply to anything
+        typed, but still needs to land in the panel rather than only being
+        spoken (see get_voice_reply in server.py — the chat panel filters
+        strictly on source=="chat")."""
+        try:
+            async with aiohttp.ClientSession() as http:
+                await http.post(
+                    f"{REST_API_URL}/internal/voice-reply",
+                    json={"visitorId": self._visitor_id, "reply": text, "source": "chat"},
+                    timeout=aiohttp.ClientTimeout(total=3),
+                )
+        except Exception:
+            logger.exception(f"Failed to report chat message for visitor {self._visitor_id}")
 
     async def _report_reply(self, reply: str) -> None:
         try:
@@ -1211,8 +2021,18 @@ class AgentRuntimeProcessor(FrameProcessor):
         session.was_interrupted = True
         self._cancel_pending_auto_continue()
         self._cancel_prefetch()
-        if session.walkthrough_step is not None:
-            session.walkthrough_awaiting_answer = True
+        # Deliberately does NOT set walkthrough_awaiting_answer any more.
+        # It used to, which welded two unrelated things together: a
+        # hand-raise that fired without the visitor meaning it (stale server
+        # state, a double poll) spoke this line AND froze the tour
+        # permanently, because the latch's only exit is the model
+        # volunteering resume_walkthrough. Confirmed live: three of these in
+        # one call with no user input, each one killing the tour until the
+        # prospect gave up and shouted.
+        #
+        # If they really did raise their hand, their actual question arrives
+        # as a normal transcript within seconds and pauses the tour through
+        # the ordinary path. If they didn't, nothing is stuck.
         handoff = "Yes, go ahead — what's your question?"
         # Persisted directly, same reason and same pattern as the "still
         # catching up" recovery line (see _advance_after_turn) — this is
@@ -1356,8 +2176,20 @@ class AgentRuntimeProcessor(FrameProcessor):
                 await self.broadcast_interruption()
             self._cancel_pending_auto_continue()
             self._cancel_prefetch()
-            self._pending_interruption_text = text
+            # Accumulates for the same reason the voice path does (see
+            # queue_frame): two messages typed while one beat is in flight
+            # are two things the prospect said, not a race for one slot.
+            if self._pending_interruption_text:
+                self._pending_interruption_text = f"{self._pending_interruption_text} {text}".strip()
+            else:
+                self._pending_interruption_text = text
             self._pending_interruption_source = "chat"
+            # Typed text is proof-positive of intent — even more so than a
+            # transcript, since there's no chance it was noise. Same
+            # cancellation as the voice path.
+            self._interrupted_at = None
+            self._interruption_quiet_since = None
+            self._unspoken_remainder = None
             return
         # Genuinely idle — nothing else is going to pick this up, so handle
         # it directly, exactly like a transcript arriving while idle would.
@@ -1366,17 +2198,100 @@ class AgentRuntimeProcessor(FrameProcessor):
         await self._handle_real_turn(text, direction, source="chat")
 
     def seconds_since_activity(self) -> float:
-        """Read by bot.py's idle watcher (see run_bot) — kept here because
-        this is the processor that actually observes real speech from both
-        sides (BotStartedSpeakingFrame/VADUserStartedSpeakingFrame above),
-        not something the watcher could track on its own."""
+        """Read by bot.py's idle watcher (see run_bot) to drive both the
+        15s check-in and the final farewell. Reads _last_activity —
+        deliberately the SAME clock _watch_auto_continue_stall uses, so a
+        visitor silently listening to an active, still-progressing
+        walkthrough is never mistaken for an abandoned call (see
+        _last_activity's docstring in __init__)."""
         return time.monotonic() - self._last_activity
+
+    def last_activity_timestamp(self) -> float:
+        """The raw monotonic timestamp behind seconds_since_activity(),
+        read by bot.py's idle watcher specifically to detect a genuine
+        reset even if one happens while the watcher itself is blocked
+        inside its own await agent.speak_idle_checkin() call. Comparing
+        the DERIVED seconds-since-activity value across polls (as an
+        earlier version did) is unreliable for this: an automated stress
+        test caught a visitor speaking while a check-in was still being
+        spoken failing to re-arm the next streak at all, because by the
+        time the watcher's loop resumed and took its next poll, enough
+        wall-clock time had also passed that the elapsed-seconds value
+        never looked like it had dropped, even though a real reset had
+        happened moments earlier. Comparing this raw timestamp for
+        (in)equality instead is immune to that — any genuine reset changes
+        the value itself, regardless of how long the watcher was blocked."""
+        return self._last_activity
 
     def is_bot_speaking(self) -> bool:
         """Also read by bot.py's idle watcher, to know when a farewell it
         asked for has actually finished playing before it tears down the
         call — see speak_idle_farewell."""
         return self._bot_speaking
+
+    async def _speak_without_activity_bump(self, text: str) -> None:
+        """Like _speak, but holds _suppress_activity_bump across this
+        utterance's ENTIRE real playback, not just the _speak() call
+        itself — _speak() only pushes frames and returns almost instantly;
+        the real BotStartedSpeakingFrame this causes doesn't land until
+        Cartesia actually starts playing the audio, well after that. An
+        earlier version cleared the guard right after _speak() returned
+        and was already off by the time that frame showed up, so every
+        check-in silently bumped _last_activity anyway and reset its own
+        countdown (confirmed live: the 15s nudge re-firing every ~15-30s,
+        the call never reaching the real farewell).
+
+        Waits on _speech_finished (the same asyncio.Event
+        BotStartedSpeakingFrame/BotStoppedSpeakingFrame already
+        clear/set — see __init__) rather than polling _bot_speaking on a
+        timer — a polling version of this was tried first (checking every
+        0.1s) and has its own race: an automated stress test caught it
+        clearing the utterance's own start+stop cycle inside a single
+        0.1s gap between polls, so the "did it start yet" loop never
+        observed True at all and burned its full ~5s timeout for nothing
+        on every single check-in. Waiting on the event instead has no
+        polling interval to be faster than, so it can't miss a transition
+        regardless of how quick the utterance is. Cleared right before
+        speaking so this is definitely OUR utterance's own completion,
+        not a stale set() left over from whatever spoke immediately
+        before it. Used only by speak_idle_checkin/speak_idle_farewell,
+        the two utterances that must never reset the clock they're read
+        against."""
+        self._suppress_activity_bump = True
+        try:
+            self._speech_finished.clear()
+            await self._speak(text, FrameDirection.DOWNSTREAM)
+            try:
+                await asyncio.wait_for(self._speech_finished.wait(), timeout=10.0)
+            except asyncio.TimeoutError:
+                pass  # TTS genuinely never started/stopped — don't hang the idle watcher forever
+        finally:
+            self._suppress_activity_bump = False
+
+    async def speak_idle_checkin(self) -> None:
+        """Called by bot.py's idle watcher the first time total idle time
+        crosses IDLE_CHECKIN_THRESHOLD_SECS — one nudge partway through a
+        silence, the way a real rep would naturally break it instead of
+        saying nothing until the full IDLE_TIMEOUT_SECS farewell. Picks a
+        named/unnamed variant based on whether SessionState.prospect_name
+        is known yet, and randomly between phrasings so repeated calls
+        don't all sound identical."""
+        name = get_session(self._visitor_id).prospect_name
+        variants = IDLE_CHECKIN_MESSAGES["named"] if name else IDLE_CHECKIN_MESSAGES["unnamed"]
+        message = random.choice(variants).format(name=name)
+        self._current_reply_source = "voice"
+        # Persisted like any other agent turn. These are spoken by code, never
+        # through _finalize_turn, so without this they were genuinely audible
+        # to the prospect yet completely absent from the transcript DB and the
+        # chat panel — a real session review showed four of these firing in
+        # the raw pipeline log while the 46-turn transcript contained none of
+        # them, which made the whole "is it nudging too early?" question
+        # impossible to answer from the transcript alone.
+        session = get_session(self._visitor_id)
+        if session.visitor_id:
+            gate_log.append_transcript_turn(session.visitor_id, "agent", message)
+        asyncio.create_task(self._report_reply(message))
+        await self._speak_without_activity_bump(message)
 
     async def speak_idle_farewell(self) -> None:
         """Called by bot.py's idle watcher once IDLE_TIMEOUT_SECS of total
@@ -1389,8 +2304,13 @@ class AgentRuntimeProcessor(FrameProcessor):
             "Feel free to jump back in anytime!"
         )
         self._current_reply_source = "voice"
+        # Same reasoning as speak_idle_checkin above — a call that ended with
+        # this goodbye should show it in the transcript, not just stop.
+        session = get_session(self._visitor_id)
+        if session.visitor_id:
+            gate_log.append_transcript_turn(session.visitor_id, "agent", farewell)
         asyncio.create_task(self._report_reply(farewell))
-        await self._speak(farewell, FrameDirection.DOWNSTREAM)
+        await self._speak_without_activity_bump(farewell)
 
     async def cleanup(self):
         if self._hand_raise_poll_task is not None:
@@ -1405,6 +2325,10 @@ class AgentRuntimeProcessor(FrameProcessor):
             self._auto_continue_watchdog_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._auto_continue_watchdog_task
+        if self._pending_fragment_watch_task is not None:
+            self._pending_fragment_watch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._pending_fragment_watch_task
         # Same reasoning as the hand-raise poll task above — a walkthrough
         # left mid-tour when the call ends shouldn't leave a dangling task
         # trying to speak into a torn-down pipeline.

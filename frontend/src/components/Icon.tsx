@@ -17,6 +17,11 @@ const PATHS: Record<string, string> = {
   "bar-chart": "M3 3v18h18M7 16v-4M12 16V8M17 16v-7",
   sparkles: "M12 2l1.5 5L19 9l-5.5 2L12 16l-1.5-5L5 9l5.5-2zM19 15l.6 2 2 .6-2 .6-.6 2-.6-2-2-.6 2-.6z",
   play: "M6 4l14 8-14 8V4z",
+  pause: "M7 4h3v16H7zM14 4h3v16h-3z",
+  // Film strip with a play triangle -- the example gallery's featured card.
+  film: "M4 5h16v14H4zM4 10h3M4 15h3M17 10h3M17 15h3M10.5 9.8l4 2.2-4 2.2z",
+  "chevron-left": "M15 6l-6 6 6 6",
+  "chevron-right": "M9 6l6 6-6 6",
   layers: "M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5",
   mail: "M3 5h18v14H3zM3 5l9 7 9-7",
   image: "M3 4h18v16H3zM8 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM21 17l-6-6-4 4-3-3-5 5",
@@ -44,6 +49,9 @@ const PATHS: Record<string, string> = {
   expand: "M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3",
   collapse: "M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3",
   menu: "M3 6h18M3 12h18M3 18h18",
+  target: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 6a6 6 0 1 0 0 12 6 6 0 0 0 0-12zM12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4z",
+  globe: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM2 12h20M12 2c2.5 2.7 4 6.4 4 10s-1.5 7.3-4 10c-2.5-2.7-4-6.4-4-10s1.5-7.3 4-10z",
+  waveform: "M2 12h1M5 8v8M8.5 5v14M12 9v6M15.5 5v14M19 8v8M22 12h0",
 };
 
 export default function Icon({ name, size = 16, className }: IconProps) {

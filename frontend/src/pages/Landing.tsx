@@ -16,7 +16,7 @@ export default function Landing() {
   return (
     <div className="prejoin dashboard-gate">
       <div className="dashboard-gate__card landing__card">
-        <div className="prejoin__kicker">SwishX · ContentIQ</div>
+        <div className="prejoin__kicker">SwishX · LIVE DEMO</div>
         <h1 className="prejoin__title">AI Marketing and design agency at your fingertips</h1>
         <p className="dashboard-gate__subtitle">Pick how you'd like to explore the demo.</p>
         <div className="landing__buttons">

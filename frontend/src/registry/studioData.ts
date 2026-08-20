@@ -7,6 +7,12 @@
  * across the demo.
  */
 
+// Real showcase renders for both wizards' result screens (see
+// AssetVideoPlayer.tsx) -- served from public/videos (Vite copies public/
+// as-is, so these are plain root-relative paths, not bundled imports).
+export const DEFAULT_REEL_VIDEO_URL = "/videos/tecentriq-reel.mp4";
+export const DEFAULT_AVATAR_VIDEO_URL = "/videos/avatar-showcase.mp4";
+
 export interface Scene {
   id: string;
   narration: string;
@@ -36,11 +42,18 @@ export const TOPICS_BY_AUDIENCE: Record<string, string[]> = {
 
 export const GOALS = ["New Launch", "Awareness", "Retention"];
 
+// Tecentriq is first (the wizard's default, DOSSIERS[0]) so the reel it
+// walks through by default matches the real MagicReel showcase render on
+// the result screen (see DEFAULT_REEL_VIDEO_URL) instead of narrating one
+// brand's metadata while a different brand's video plays at the end.
+// Deliberately ONE dossier, not a catalogue. A grid of brands invites
+// "can you show me that one instead?" -- and only this one has a matching
+// real rendered reel on the result screen (DEFAULT_REEL_VIDEO_URL), so any
+// other pick would narrate one brand while a different brand's video plays.
+// The "Add dossier" affordance next to it carries the story that a real
+// workspace holds many, without offering ones we can't actually show.
 export const DOSSIERS = [
-  { id: "oflox", brand: "Oflox OZ", therapy: "Cardiology · Specialists" },
-  { id: "antiflu", brand: "Antiflu", therapy: "Cardiology · Specialists" },
-  { id: "nicotex", brand: "Nicotex", therapy: "Cardiology · GPs" },
-  { id: "maxiflo", brand: "Maxiflo", therapy: "Diabetology & Metabolic Disorders" },
+  { id: "tecentriq", brand: "Tecentriq", therapy: "Oncology · Specialists" },
 ];
 
 export const PRESET_VOICES = [

@@ -3,6 +3,7 @@ import { useRegisterComponent } from "../../lib/uiRegistry";
 import { setFallbackGroups } from "../../lib/highlightBridge";
 import MagicAvatarLaunchpad from "./MagicAvatarLaunchpad";
 import MagicAvatarMasterWizard from "./MagicAvatarMasterWizard";
+import type { AssetVideoPlayerHandle } from "../../components/studio/AssetVideoPlayer";
 import { generateDummyScenes, type Scene } from "../../registry/studioData";
 
 interface MagicAvatarStudioProps {
@@ -60,6 +61,7 @@ export default function MagicAvatarStudio({ onExit, onNavigate }: MagicAvatarStu
   // mounted yet, this is null and the action falls back to navigating to
   // Brief instead of silently doing nothing.
   const segmentAndDirectRef = useRef<(() => void) | null>(null);
+  const playerRef = useRef<AssetVideoPlayerHandle>(null);
 
   function goToStep(target: number) {
     if (target >= 1 && latestScenes.current.length === 0) {
@@ -102,6 +104,9 @@ export default function MagicAvatarStudio({ onExit, onNavigate }: MagicAvatarStu
       goToStep(3);
       setGenerating(true);
     },
+    "play": () => {
+      playerRef.current?.play();
+    },
   });
 
   if (view === "wizard") {
@@ -123,6 +128,7 @@ export default function MagicAvatarStudio({ onExit, onNavigate }: MagicAvatarStu
         onBack={() => setView("launchpad")}
         onBackToAssets={onExit}
         onSubmitForReview={() => onNavigate("mlr-review")}
+        playerRef={playerRef}
       />
     );
   }

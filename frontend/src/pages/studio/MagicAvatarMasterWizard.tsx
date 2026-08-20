@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type Ref } from "react";
 import Icon from "../../components/Icon";
 import StepBar from "../../components/studio/StepBar";
 import TeamDock from "../../components/studio/TeamDock";
 import SceneList from "../../components/studio/SceneList";
 import GenerationScreen from "../../components/studio/GenerationScreen";
 import AvatarResult from "../../components/studio/AvatarResult";
+import type { AssetVideoPlayerHandle } from "../../components/studio/AssetVideoPlayer";
 import { MUSIC_TRACKS, generateDummyScenes, type Scene } from "../../registry/studioData";
 
 const STEPS = ["Brief", "Scenes", "Options", "Generate"];
@@ -31,6 +32,7 @@ interface MagicAvatarMasterWizardProps {
   onBack: () => void;
   onBackToAssets: () => void;
   onSubmitForReview: () => void;
+  playerRef?: Ref<AssetVideoPlayerHandle>;
 }
 
 /**
@@ -71,6 +73,7 @@ export default function MagicAvatarMasterWizard({
   onBack,
   onBackToAssets,
   onSubmitForReview,
+  playerRef,
 }: MagicAvatarMasterWizardProps) {
   const [name, setName] = useState("");
   const [script, setScript] = useState("");
@@ -119,6 +122,7 @@ export default function MagicAvatarMasterWizard({
           cards={[addIntro && "Intro", addOutro && "Outro"].filter(Boolean).join(", ") || "None"}
           onBackToAssets={onBackToAssets}
           onSubmitForReview={onSubmitForReview}
+          playerRef={playerRef}
         />
       </div>
     );

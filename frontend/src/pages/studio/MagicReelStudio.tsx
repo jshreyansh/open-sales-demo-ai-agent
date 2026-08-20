@@ -7,6 +7,7 @@ import TeamDock from "../../components/studio/TeamDock";
 import ScenesWorkspace from "../../components/studio/ScenesWorkspace";
 import GenerationScreen from "../../components/studio/GenerationScreen";
 import ReelResult from "../../components/studio/ReelResult";
+import type { AssetVideoPlayerHandle } from "../../components/studio/AssetVideoPlayer";
 import {
   AUDIENCES,
   DOSSIERS,
@@ -101,6 +102,8 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
   const latest = useRef({ scenes, topics, brandName });
   latest.current = { scenes, topics, brandName };
 
+  const playerRef = useRef<AssetVideoPlayerHandle>(null);
+
   function goToStep(target: number) {
     setView("wizard");
     // Skipping straight to Scenes/Generate before ever hitting "Generate
@@ -164,6 +167,9 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
       goToStep(4);
       setGenerating(true);
     },
+    "play": () => {
+      playerRef.current?.play();
+    },
   });
 
   function toggleTopic(t: string) {
@@ -202,6 +208,7 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
           onEditScenes={() => setView("edit-scenes")}
           onBackToAssets={() => onNavigate("content-studio")}
           onSubmitForReview={() => onNavigate("mlr-review")}
+          playerRef={playerRef}
         />
       </div>
     );
@@ -276,6 +283,12 @@ export default function MagicReelStudio({ onNavigate }: MagicReelStudioProps) {
                     <div className="dossier-card__therapy">{d.therapy}</div>
                   </button>
                 ))}
+                {/* Inert on purpose -- it's the shape of a real workspace
+                    (you'd add your own brands here), not a working upload. */}
+                <button className="dossier-card dossier-card--add" type="button">
+                  <span className="dossier-card__add-plus">+</span>
+                  <span className="dossier-card__add-label">Add Dossier</span>
+                </button>
               </div>
             )}
             {lane === "news" && (

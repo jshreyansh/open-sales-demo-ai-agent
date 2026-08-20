@@ -54,7 +54,14 @@ export function useProductPages() {
   }, [activePageId]);
 
   function handleAgentAction(action: AgentAction) {
-    if (action.page !== activePageId) {
+    // "meeting" isn't a real product page — it's a fixed pseudo-page id
+    // (see registry.py) that exists only so the example gallery's "open"
+    // action can be registered independent of whatever page is actually
+    // active (MeetingShell.tsx registers it directly, always-mounted).
+    // Treating it like a real navigation target replaced the shared
+    // screen with the generic "not built yet" stub behind the gallery —
+    // this is the one action whose page should never drive activePageId.
+    if (action.page !== activePageId && action.page !== "meeting") {
       // Navigating remounts the target page, which registers its
       // components — executeAction queues until that registration lands.
       setActivePageId(action.page);

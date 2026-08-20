@@ -245,6 +245,14 @@ def release_voice_lock(body: VoiceLockRequest):
     global _active_call
     if _active_call is not None and _active_call["visitorId"] == body.visitorId:
         _active_call = None
+    # Per-call scratch state dies with the call. _hand_raise_state is keyed
+    # by visitor_id, and a visitor_id is STABLE across calls — so a hand left
+    # raised when a call ended was still raised when the same person dialled
+    # back in, firing a hand-raise handoff seconds into the new call with
+    # nobody having touched the button. Same for any typed message that was
+    # queued but never delivered.
+    _hand_raise_state.pop(body.visitorId, None)
+    _pending_meeting_chat.pop(body.visitorId, None)
     return {"ok": True}
 
 

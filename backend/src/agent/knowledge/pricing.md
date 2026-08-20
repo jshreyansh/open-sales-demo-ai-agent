@@ -8,7 +8,7 @@ Usage-based credits plus a nominal SaaS access fee, not a flat per-seat license.
 generated asset is priced at roughly 3–10% of what an agency would charge for the equivalent
 deliverable, because the marginal cost of generating an asset is near zero once the platform exists.
 
-| Complexity | Example formats | Agency low end | ContentIQ anchor |
+| Complexity | Example formats | Agency low end | SwishX anchor |
 |---|---|---|---|
 | Simple | Email, infographic, banner, social post, leave-behind, FAQ handler, e-newsletter | $1,000–$3,000 | $100–$300 |
 | Mid | Short video, e-detail deck, HCP brochure, monograph, dosing guide, savings card | $3,000–$10,000 | $300–$800 |

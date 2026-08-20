@@ -233,6 +233,29 @@ def append_transcript_turn(visitor_id: str, role: str, text: str) -> None:
         )
 
 
+def amend_last_agent_turn(visitor_id: str, expected_text: str, new_text: str) -> bool:
+    """Rewrites the most recent agent row for this visitor, but ONLY if it
+    still holds exactly `expected_text` — the caller's proof that the row it
+    means to amend hasn't already been superseded by something else written
+    since (a hand-raise handoff, a "still catching up" recovery line, the
+    next turn entirely). Returns whether a row was actually changed.
+
+    Used when a reply is cut off by a barge-in partway through being spoken:
+    the row was written in full at finalize time, before anyone could know
+    how much would actually be heard, so it gets corrected down to the
+    spoken prefix afterward. See agent_processor's _amend_interrupted_turn."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, text FROM transcript_turns WHERE visitor_id = ? AND role = 'agent' "
+            "ORDER BY id DESC LIMIT 1",
+            (visitor_id,),
+        ).fetchone()
+        if row is None or row["text"] != expected_text:
+            return False
+        conn.execute("UPDATE transcript_turns SET text = ? WHERE id = ?", (new_text, row["id"]))
+    return True
+
+
 def list_transcript(visitor_id: str) -> List[dict]:
     """Oldest first — read top to bottom like an actual conversation, unlike
     the gate/attempts logs above which are newest-first audit trails."""

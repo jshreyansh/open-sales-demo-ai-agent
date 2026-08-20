@@ -60,7 +60,7 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
         title="Overview",
         action=None,
         guidance=(
-            "Give a short, own-words 2-3 sentence overview of what ContentIQ does — pull from "
+            "Give a short, own-words 2-3 sentence overview of what SwishX does — pull from "
             "the product overview above, don't recite it verbatim. No navigation needed for "
             "this step, you're already on the dashboard — but don't frame that as a deliberate "
             "stop either (no \"let's start on the dashboard\" or \"I'll walk you through the "

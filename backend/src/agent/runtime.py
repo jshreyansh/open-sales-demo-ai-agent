@@ -133,6 +133,13 @@ class AgentResult(TypedDict, total=False):
     # Set-once, like the MEDDIC/qual fields — see SessionState.farewell_question_asked
     # for why this needs to persist across turns instead of resetting.
     farewell_question_asked: bool
+    # Internal only — never part of the response contract the frontend/voice
+    # side-channels see. Set by _parse_tool_result when "reply" was missing
+    # and recovered with a bare template; popped and consumed by
+    # _maybe_backfill_reply/_maybe_backfill_reply_sync, which replace the
+    # template with a real, narrow follow-up completion before any caller
+    # ever sees the result.
+    _reply_needs_backfill: bool
 
 
 DEFAULT_LEAD_IN = "Let me pull that up."
@@ -179,6 +186,45 @@ def _is_valid_action(action: AgentAction) -> bool:
         a.page == action["page"] and a.component == action["component"] and a.method == action["method"]
         for a in FLAT_ACTIONS
     )
+
+
+def _repair_action(action: AgentAction) -> Optional[AgentAction]:
+    """Best-effort recovery for a tool_use action that fails _is_valid_action.
+
+    Observed in production (DeepSeek): for certain wizard sub-step jumps, the
+    model echoes the method name into "component" too — e.g.
+    {"page": "magicreel-studio", "component": "step-brief", "method":
+    "step-brief"} instead of the registry's real
+    {"component": "wizard", "method": "step-brief"}. "page" and "method" are
+    consistently the right ones in these cases; only "component" is wrong.
+    Confirmed against real call logs, not guessed: the same exact shape
+    (method value duplicated into component) recurred for several different
+    wizard sub-steps in one session, always paired with a request that was
+    otherwise completely unambiguous.
+
+    Without this, the caller nulls the whole action out and falls back to a
+    generic "no action, no reply" response — the worst possible answer for a
+    request the model actually understood correctly.
+
+    Only ever repairs when exactly one registry entry matches on (page,
+    method) with the given component discarded — an ambiguous or empty match
+    is left alone (returns None) rather than guessing, since a wrong guess
+    here would be worse than the existing "no action" fallback.
+
+    Called from both the streaming early-yield path and the final
+    authoritative _parse_tool_result — see their call sites' comments for why
+    they must never disagree on whether (and how) an action resolves."""
+    if _is_valid_action(action):
+        return action
+    candidates = [
+        a for a in FLAT_ACTIONS
+        if a.page == action.get("page") and a.method == action.get("method")
+    ]
+    if len(candidates) != 1:
+        return None
+    fixed: AgentAction = {"page": action["page"], "component": candidates[0].component, "method": action["method"]}
+    logger.warning(f"repairing malformed action (component {action.get('component')!r} -> {candidates[0].component!r}): {action!r}")
+    return fixed
 
 
 def _tool_schema() -> dict:
@@ -447,10 +493,11 @@ def _parse_tool_result(data: dict, stop_reason: Optional[str] = None) -> AgentRe
     field-validation/recovery logic either way, so there's one place this
     can go wrong, not two independently-maintained copies."""
     action = data.get("action")
-    if action and not _is_valid_action(action):
-        action = None
+    if action:
+        action = _repair_action(action)
 
     reply = data.get("reply")
+    reply_needs_backfill = False
     if not reply:
         # Observed in production (DeepSeek): the model sometimes returns a
         # perfectly valid action + lead_in but omits "reply" entirely, even
@@ -468,6 +515,18 @@ def _parse_tool_result(data: dict, stop_reason: Optional[str] = None) -> AgentRe
                 None,
             )
             reply = f"This is the {match.component_label}." if match else "Here it is."
+            # A real bug in production (Dushyant, 2026-08-18): this bare
+            # template is all that ever gets spoken when it happens — by the
+            # time it's discovered here, action+lead_in are already spoken
+            # live (see _stream_with_claude's incremental extractors), so a
+            # full-turn retry risks a fresh reply contradicting what was just
+            # said (the exact reason _consume_turn_stream never retries a
+            # partially-spoken turn either). Marked here, backfilled by the
+            # caller (see _maybe_backfill_reply/_maybe_backfill_reply_sync)
+            # with a narrow follow-up asking ONLY for the missing reply text,
+            # conditioned on the action+lead_in as already-settled fact —
+            # this template stays the last-resort value if that also fails.
+            reply_needs_backfill = True
         else:
             reply = "Sorry, could you say that again?"
 
@@ -524,6 +583,8 @@ def _parse_tool_result(data: dict, stop_reason: Optional[str] = None) -> AgentRe
         "lead_in": data.get("lead_in") or DEFAULT_LEAD_IN,
         **captured_fields,
     }
+    if reply_needs_backfill:
+        result["_reply_needs_backfill"] = True
     return result
 
 
@@ -545,7 +606,7 @@ def _parse_tool_result(data: dict, stop_reason: Optional[str] = None) -> AgentRe
 # gets the same two halves concatenated into one plain string, unaffected —
 # cache_control is an Anthropic-only mechanism, only applied when
 # _provider == "anthropic" (see _build_system).
-STATIC_ROLE_INTRO = """You are {agent_name} — one of the best reps SwishX has, on a live call with someone evaluating ContentIQ, an AI content platform for pharma marketing teams. You sell the way top consultative reps actually sell: genuinely curious about the prospect's world before you pitch anything, confident without being pushy, and every single thing you show or say ties back to what THEY told you they care about — never a generic feature tour. Talk like a sharp, attentive person having a real conversation, not someone reading from a deck.
+STATIC_ROLE_INTRO = """You are {agent_name} — one of the best reps SwishX has, on a live call with someone evaluating SwishX, an AI content platform for pharma marketing teams. You sell the way top consultative reps actually sell: genuinely curious about the prospect's world before you pitch anything, confident without being pushy, and every single thing you show or say ties back to what THEY told you they care about — never a generic feature tour. Talk like a sharp, attentive person having a real conversation, not someone reading from a deck.
 
 You work out of {agent_location}. If asked where you're based, say so confidently — don't say you don't know, and don't guess somewhere else.
 
@@ -567,7 +628,7 @@ How to behave, in priority order:
 
 0. Your opening line already offered a choice — walkthrough, or something specific first — don't repeat that offer, and don't turn the start of the call into a discovery interview by stacking multiple questions at once. If the prospect volunteers their name (or role/company) at any point, set the "prospect_name" field, acknowledge it naturally in a few words, and keep going with whatever they actually asked — don't make it its own detour.
 
-0a. Any time the prospect expresses wanting the platform tour — in ANY phrasing, not just a fixed template, including a correction like "no, give me a WHOLE walkthrough" — set "start_walkthrough" true (see that field's own description for real example phrasings) and start it right there in this same reply: give a short, own-words 2-3 sentence overview of what ContentIQ does (pull from the product overview above, don't recite it verbatim), and set NO action this turn (you're already on the dashboard, nothing to click or highlight yet — but don't frame that as a deliberate stop either, no "let's start on the dashboard" or "I'll walk you through the dashboard first," since nothing here actually gets toured or explained beyond this overview; the dashboard's own explicit, deliberate visit is the tour's wrap-up step, not this one). From your NEXT reply onward, follow the walkthrough note below (which will now be populated) instead of freelancing your own navigation — it already covers what step 1 asked for, so don't repeat the overview, move straight into step 2. If they instead ask about something specific, answer that first per the instructions below — the walkthrough is opt-in, not the default path through the call.
+0a. Any time the prospect expresses wanting the platform tour — in ANY phrasing, not just a fixed template, including a correction like "no, give me a WHOLE walkthrough" — set "start_walkthrough" true (see that field's own description for real example phrasings) and start it right there in this same reply: give a short, own-words 2-3 sentence overview of what SwishX does (pull from the product overview above, don't recite it verbatim), and set NO action this turn (you're already on the dashboard, nothing to click or highlight yet — but don't frame that as a deliberate stop either, no "let's start on the dashboard" or "I'll walk you through the dashboard first," since nothing here actually gets toured or explained beyond this overview; the dashboard's own explicit, deliberate visit is the tour's wrap-up step, not this one). From your NEXT reply onward, follow the walkthrough note below (which will now be populated) instead of freelancing your own navigation — it already covers what step 1 asked for, so don't repeat the overview, move straight into step 2. If they instead ask about something specific, answer that first per the instructions below — the walkthrough is opt-in, not the default path through the call.
 
 0b. If the prospect asks to "continue"/"keep going with" the walkthrough and your own conversation history below already shows you delivering the full tour (something like "that wraps up the full tour" or reaching the dashboard as the final stop) — there's nothing left to continue TO. Don't just repeat the last step you showed again (confirmed live: this produced a near-duplicate of the exact same dashboard/Content-Studio paragraph you'd already just said). Instead say plainly that you've already covered the full platform, and ask what specifically they'd like to revisit or dig into. This does NOT apply when they explicitly ask to restart/redo the tour from the beginning ("give me the walkthrough from the start," "start over") — that's a genuine fresh pass, set "start_walkthrough" true and actually deliver it same as always; the distinction is a vague "continue" with nowhere left to go versus an explicit request for a new full pass.
 
@@ -598,7 +659,11 @@ Second, when something's genuinely still missing (or only half-answered per abov
 Question 5 in particular must genuinely be asked before the call ends — unlike the other four, it's a question you have to ask, not something they'll volunteer, so watch for it specifically; see the qualification note below for exactly when to raise it. Beyond these 5, build a deeper picture opportunistically using MEDDIC: Metrics (the actual result they're trying to move), Economic Buyer (who owns budget / signs off), Decision Criteria (what they're evaluating this against), Decision Process (steps and timeline to a decision), Champion (who internally wants this to happen) — same extract-first, bridge-don't-interview approach, but these are bonus depth, not required. (Identify Pain isn't tracked separately — question 1 above already covers it.) Check the qualification note below before asking anything — it tracks exactly what's captured, what's missing, and how much runway you've had.
 9. When the prospect clearly signals they want to move faster — "yes, show me", "send me the video", "I'm sold, what's next" — honor that immediately instead of continuing your own planned walkthrough. A direct request always overrides the default step-by-step order; this applies even mid-explanation, not just between turns.
 10. Don't spread equal weight across every feature you know about. The two or three things worth repeating whenever they're relevant are: MLR-ready cinematic content, medically grounded claims, and content sourced straight from the brand's own dossier. Reach for these specifically when they connect to what the prospect cares about, rather than a flat, everything-gets-equal-airtime tour — deliberate repetition of a few real anchors is what actually sticks, not covering more ground.
-11. Pace toward the call-length note below — it's a target for the whole conversation, not a hard cutoff mid-sentence. Running long is a signal to prioritize what they're actually asking over covering everything you could."""
+11. Pace toward the call-length note below — it's a target for the whole conversation, not a hard cutoff mid-sentence. Running long is a signal to prioritize what they're actually asking over covering everything you could.
+12. This is a sandbox for evaluating and exploring the product's flow, not a live generation pipeline — most of what you show is a pre-loaded example, not something actually produced from what the prospect said. Selecting a tier (HD/Cinematic) is real and does change what's shown. Nothing else does: a dossier, audience, voice, language, script structure, or any other option the prospect names doesn't actually switch what's on screen — it stays on whatever's already pre-loaded there, regardless of which method you fire. When the prospect names or asks for a specific one of these, never claim you switched to it — that's a lie the prospect can see disproven on their own screen. Instead, acknowledge what they said by name, then connect it to the pre-loaded example naturally ("since you're thinking cardiology, this pre-loaded example is actually in that same space, so it's a good one to walk through") — sound confident and natural doing this, not like you're apologizing for a limitation.
+13. If the prospect explicitly pushes for real, live generation of a video or image from scratch — not just walking through a flow, but actually asking you to make one right now — don't pretend to generate it and don't run a wizard flow to a fake result for this. Explain plainly that this meeting is for evaluating and exploring the product's flows, that you can't generate directly here, but you can show them numerous real examples to browse — then fire component "example-gallery" action "open" (page "meeting"). Mention that for a real platform showcase with actual generation, they can book time with a human-led session, and that you're sending the link in the chat now.
+
+14. When the prospect asks to be connected with the team, to book a meeting, or to talk to a human: ASK FIRST, then act. Say something like "want me to open the booking portal so you can pick a time?" and set no action on that turn — you're asking, not doing. Only if they actually say yes on the NEXT turn, fire component "booking-portal" action "open" (page "meeting"), which opens the scheduling page in a separate browser tab so this call keeps running. If they say no, or want to just leave it with you, don't fire it — take their email and say the team will reach out. Never open the tab without that explicit yes: a tab opening unasked mid-call is startling, and it's the one action here that leaves the meeting screen."""
 
 # Rendered ONCE at import time into a plain string constant — never
 # reformatted per-request — so the exact same bytes go out on every call,
@@ -1110,6 +1175,109 @@ def _select_with_claude(message: str, session: SessionState, user_content: Optio
     return _parse_tool_result(tool_use.input, msg.stop_reason)
 
 
+def _backfill_reply_messages(action: AgentAction, lead_in: str) -> list:
+    """Shared prompt for backfilling a missing 'reply' (see
+    _parse_tool_result's docstring for why this exists) — used by both the
+    sync and async LLM clients below. Deliberately narrow: action and
+    lead_in already happened and were already spoken live, so this only
+    ever asks for the one missing piece, treating them as settled fact
+    rather than re-deciding the turn (which risks a fresh reply
+    contradicting what's already been said out loud)."""
+    match = next(
+        (a for a in FLAT_ACTIONS if a.page == action["page"] and a.component == action["component"] and a.method == action["method"]),
+        None,
+    )
+    action_desc = f"{match.page_label} — {match.component_label}" if match else action["component"]
+    return [
+        {
+            "role": "user",
+            "content": (
+                f'You just decided to take this action: "{action_desc}", and already said this '
+                f'transition out loud: "{lead_in}". Write ONLY the next 1-2 sentences you would '
+                "say right after that — continuing naturally from the lead-in (don't repeat it), "
+                "explaining what this shows or why it matters to the prospect given the "
+                "conversation so far. Plain spoken text, no markup, no quotes around it."
+            ),
+        }
+    ]
+
+
+def _backfill_reply_sync(action: AgentAction, lead_in: str, session: SessionState) -> Optional[str]:
+    """Sync counterpart to _backfill_reply_async — used by run_turn()'s
+    text-chat-only path, which has no event loop to await into. Best-effort:
+    any failure here just means the caller keeps the bare template that was
+    already in `result["reply"]`, exactly like before this existed."""
+    if _client is None:
+        return None
+    try:
+        msg = _client.messages.create(
+            model=_model,
+            max_tokens=120,
+            system=_build_system(session),
+            thinking={"type": "disabled"},
+            messages=_backfill_reply_messages(action, lead_in),
+        )
+        text = "".join(b.text for b in msg.content if b.type == "text").strip()
+        return text or None
+    except Exception:
+        logger.exception("reply backfill call failed, keeping template fallback")
+        return None
+
+
+async def _backfill_reply_async(action: AgentAction, lead_in: str, session: SessionState) -> Optional[str]:
+    """Async counterpart to _backfill_reply_sync — used by the voice
+    pipeline's streaming/fallback paths, all of which already run inside an
+    event loop."""
+    if _async_client is None:
+        return None
+    try:
+        msg = await _async_client.messages.create(
+            model=_model,
+            max_tokens=120,
+            system=_build_system(session),
+            thinking={"type": "disabled"},
+            messages=_backfill_reply_messages(action, lead_in),
+        )
+        text = "".join(b.text for b in msg.content if b.type == "text").strip()
+        return text or None
+    except Exception:
+        logger.exception("reply backfill call failed, keeping template fallback")
+        return None
+
+
+def _maybe_backfill_reply_sync(result: AgentResult, session: SessionState) -> AgentResult:
+    """Patches a template-recovered reply (see _parse_tool_result) with a
+    real, in-persona explanation, for run_turn()'s sync-only text-chat path.
+    No-op when the marker isn't set or there's no action to ground the
+    backfill in (the "Sorry, could you say that again?" no-action fallback
+    is already a safe response on its own — nothing was already spoken
+    ahead of it, so there's nothing to backfill)."""
+    if not result.pop("_reply_needs_backfill", False):
+        return result
+    action = result.get("action")
+    if not action:
+        return result
+    backfilled = _backfill_reply_sync(action, result.get("lead_in", ""), session)
+    if backfilled:
+        result["reply"] = backfilled
+    return result
+
+
+async def _maybe_backfill_reply(result: AgentResult, session: SessionState) -> AgentResult:
+    """Async counterpart to _maybe_backfill_reply_sync — used by every
+    voice-pipeline call site (run_turn_stream/_stream_with_claude/
+    run_walkthrough_continuation), all of which can await."""
+    if not result.pop("_reply_needs_backfill", False):
+        return result
+    action = result.get("action")
+    if not action:
+        return result
+    backfilled = await _backfill_reply_async(action, result.get("lead_in", ""), session)
+    if backfilled:
+        result["reply"] = backfilled
+    return result
+
+
 def _begin_turn(session: SessionState, message: str) -> None:
     """Shared start-of-turn bookkeeping — logging the prospect's own message
     onto session history/gate_log before any reply is generated. Called
@@ -1373,6 +1541,61 @@ def _finalize_turn(session: SessionState, result: AgentResult, persist: bool = T
     return result
 
 
+# Appended to a reply that was cut off mid-delivery, so the transcript the
+# model reads back agrees with INTERRUPTION_NOTE instead of contradicting it.
+# Deliberately plain-language and bracketed: it has to read as metadata, not
+# as something the agent said out loud.
+CUTOFF_MARKER = " …[cut off here — the prospect interrupted]"
+NOTHING_SPOKEN_MARKER = "[interrupted before any of this reply was spoken aloud]"
+
+
+def amend_last_agent_turn(
+    session: SessionState,
+    spoken_text: str,
+    expected_full_text: str,
+    persist: bool = True,
+) -> bool:
+    """Corrects the last agent history entry down to what was ACTUALLY heard.
+
+    Why this exists as a separate, after-the-fact step rather than just
+    passing the spoken text into _finalize_turn: by the time anyone knows how
+    much was heard, _finalize_turn has already run. It is called inside the
+    streaming generators (see _stream_with_claude / run_walkthrough_continuation)
+    at the moment the model's output is complete — which is BEFORE the
+    consumer has finished speaking the last sentences, and in the streaming
+    case even before some of them have been spoken at all. There is no value
+    that could be handed to it that would be correct. So the entry is written
+    in full, and corrected here once the turn really ends.
+
+    This is the same shape the reference implementations use: pipecat commits
+    its assistant aggregation on the interruption itself, and OpenAI's
+    Realtime API has the client send conversation.item.truncate after the
+    barge-in. Ours is sentence-granular where theirs are word/millisecond
+    granular (see the caller for why that's the right trade here).
+
+    Guarded, never blind-indexed: only amends when the last entry is still an
+    agent entry holding exactly `expected_full_text`. Anything else means
+    something was appended since (a hand-raise handoff, the "still catching
+    up" recovery, a whole new turn) and the row this wanted to fix is no
+    longer the last one — in which case it does nothing rather than corrupt
+    an unrelated entry. Returns whether it amended."""
+    if not session.history:
+        return False
+    last = session.history[-1]
+    if last.role != "agent" or last.text != expected_full_text:
+        logger.warning(
+            f"[{session.visitor_id}] skipping interrupted-turn amendment: last history entry is "
+            f"no longer the reply that was being spoken (role={last.role!r})"
+        )
+        return False
+    if spoken_text == expected_full_text:
+        return False
+    last.text = spoken_text
+    if persist and session.visitor_id:
+        gate_log.amend_last_agent_turn(session.visitor_id, expected_full_text, spoken_text)
+    return True
+
+
 def commit_prefetched_turn(session: SessionState, computed: SessionState, result: AgentResult) -> None:
     """Called by agent_processor.py's _take_ready_prefetch the moment a
     prefetch (see _drain_prefetch, run_walkthrough_continuation's
@@ -1402,6 +1625,7 @@ def run_turn(message: str, session: SessionState) -> AgentResult:
     if _client is not None:
         try:
             result = _select_with_claude(message, session)
+            result = _maybe_backfill_reply_sync(result, session)
         except Exception:
             logger.exception("LLM call failed, falling back to keyword matcher")
             result = _fallback_reply(_keyword_match(message))
@@ -1672,15 +1896,17 @@ async def _stream_with_claude(message: str, session: SessionState, user_content:
                         action_dict = json.loads(action_extractor.value)
                     except Exception:
                         action_dict = None
-                    if action_dict and _is_valid_action(action_dict):
+                    if action_dict:
+                        action_dict = _repair_action(action_dict)
+                    if action_dict:
                         yield ("lead_in", lead_in_extractor.value)
                         yield ("action", action_dict)
-                    # An action span that parsed but failed validation, or
-                    # didn't parse at all, is treated as "no action" for
-                    # streaming purposes too -- _parse_tool_result applies
-                    # the exact same validation to the authoritative result,
-                    # so the two can never disagree on whether an action
-                    # actually fires.
+                    # An action span that parsed but failed validation (even
+                    # after _repair_action's best-effort recovery), or didn't
+                    # parse at all, is treated as "no action" for streaming
+                    # purposes too -- _parse_tool_result applies the exact
+                    # same repair to the authoritative result, so the two can
+                    # never disagree on whether (or how) an action fires.
 
             # Safe to start streaming reply's own text only once we know
             # for certain nothing needs to be said before it: either there's
@@ -1699,6 +1925,7 @@ async def _stream_with_claude(message: str, session: SessionState, user_content:
     if tool_use is None:
         raise RuntimeError("no tool use in streamed response")
     result = _parse_tool_result(tool_use.input, final_message.stop_reason)
+    result = await _maybe_backfill_reply(result, session)
 
     # Only trust that reply's incremental text was genuinely fully spoken
     # already if the fast decoder actually reached a clean close AND agrees
@@ -1762,6 +1989,7 @@ async def run_turn_stream(message: str, session: SessionState) -> AsyncIterator[
     if _client is not None:
         try:
             result = _select_with_claude(message, session)
+            result = await _maybe_backfill_reply(result, session)
         except Exception:
             logger.exception("LLM call failed, falling back to keyword matcher")
             result = _fallback_reply(_keyword_match(message))
@@ -1837,6 +2065,7 @@ async def run_walkthrough_continuation(session: SessionState, persist: bool = Tr
     if _client is not None:
         try:
             result = _select_with_claude("", session, user_content=_WALKTHROUGH_CONTINUE_DIRECTIVE)
+            result = await _maybe_backfill_reply(result, session)
             yield ("done_fallback", _finalize_turn(session, result, persist=persist))
             return
         except Exception:

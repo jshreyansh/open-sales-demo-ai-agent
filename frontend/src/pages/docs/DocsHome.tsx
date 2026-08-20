@@ -34,7 +34,7 @@ export default function DocsHome() {
             <p className="docs-home__card-title">
               Product Documentation <span className="docs-home__soon-badge">Soon</span>
             </p>
-            <p className="docs-home__card-desc">Using ContentIQ itself — coming next.</p>
+            <p className="docs-home__card-desc">Using SwishX itself — coming next.</p>
           </div>
         </div>
       </GridSpotlight>

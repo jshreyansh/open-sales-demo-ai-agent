@@ -142,8 +142,11 @@ body {
   color: var(--accent);
 }
 
+/* The SwishX lockup is a much wider aspect (4.38:1) than the ContentIQ one it
+   replaced (2.57:1), so it renders shorter to fit the 220px sidebar without
+   crowding the collapse button: 28px tall = 123px wide, leaving ~39px of gap. */
 .sidebar__logo {
-  height: 34px;
+  height: 28px;
   width: auto;
   display: block;
   margin-left: 4px;
@@ -1642,7 +1645,9 @@ body {
   position: relative;
   height: 100vh;
   width: 100vw;
-  background: #202124;
+  /* Meet's shell is near-black, not the mid-grey #202124 we had — the tiles
+     and the control bar are the only lifted surfaces. */
+  background: #131314;
   display: flex;
   flex-direction: column;
   font-family: var(--font);
@@ -1762,29 +1767,218 @@ body {
    by default renders as [stage, rail] — visually identical to the pre-chat
    markup where .meet__body's own two direct children were stage then rail
    in that order — so the closed-chat layout is pixel-for-pixel unchanged. */
+/* Three layout stages, one animated container:
+     --solo     you alone, your tile fills the whole area
+     --duo      the agent has joined, two tiles side by side
+     --sharing  she's presenting: screen on the left, tiles in a right rail
+
+   Grid rather than flex specifically because grid-template-columns
+   interpolates — both stages declare exactly two tracks in the same unit
+   (fr), which is what lets the stage open and the rail narrow as one
+   continuous motion instead of a jump. The tiles and the stage are never
+   unmounted across a stage change (see MeetingShell), so nothing snaps in
+   or out; only the tracks around them move. */
 .meet__main {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: row-reverse;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 0fr 1fr;   /* stage collapsed, tiles take everything */
+  /* Explicit single row: without it the row is auto-sized to content and the
+     tiles only fill about half the available height. */
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+  /* No transition on the tracks. The layout snaps and useFlipTiles animates
+     the tiles from where they WERE to where they landed — a CSS track
+     transition here would fight that, since FLIP must measure a settled
+     layout to compute its inverse. Animating the contents rather than the
+     container is also the only way a track-COUNT change (2 cols -> 2 rows)
+     can be smooth at all; CSS cannot interpolate that. */
+}
+
+/* Rail width is a direct trade against the shared screen, which is the
+   thing the visitor is actually here to look at. Meet's own rail measures
+   ~25% of the frame, and matching that exactly (0.35fr) made the two tiles
+   pleasantly square but visibly squeezed the platform beside them. Pulled
+   back to ~18%: the tiles go a little portrait, which matters far less than
+   the product UI having room to breathe. */
+.meet__main--sharing {
+  grid-template-columns: 1fr 0.22fr;
+  gap: 14px;
+}
+
+/* Order is [stage, rail] visually — the stage is declared second in the DOM
+   but belongs in column 1. */
+/* grid-row is pinned as well as grid-column, not just the column: the rail
+   comes FIRST in the DOM (it used to rely on row-reverse), so with auto
+   placement the rail claimed row 1 / col 2 and the stage — asking for col 1,
+   which the cursor had already passed — got pushed into an implicit second
+   row. That left the rail on a 1fr row it shared with nothing and the stage
+   on an auto row, i.e. tiles collapsed to zero height. */
+.meet__main > .meet__stage { grid-column: 1; grid-row: 1; min-width: 0; min-height: 0; }
+.meet__main > .meet__rail  { grid-column: 2; grid-row: 1; min-width: 0; min-height: 0; }
+
+/* The rail's own two tiles: side by side while they have the room, stacked
+   once it narrows into a rail. flex-wrap does the switch off the container's
+   real width, so it follows the container animation rather than fighting it
+   with a second competing transition. */
+/* Grid, not flex-wrap: wrapped flex lines don't reliably stretch to fill a
+   definite height, which left the tiles as short strips with dead space
+   under them. Explicit tracks make each tile fill its share exactly, in
+   every stage. */
+.meet__rail {
+  display: grid;
   gap: 14px;
   min-height: 0;
+  min-width: 0;
+  /* duo: two tiles side by side, each full height */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* solo: one tile filling the whole area */
+.meet__main--solo .meet__rail {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* sharing: stacked in the narrow right rail */
+.meet__main--sharing .meet__rail {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+/* Fill the track. An aspect-ratio here (tried, reverted) left a gap under
+   each tile — Meet's rail has no dead space, the two tiles split the full
+   height between them. */
+.meet__main--sharing .meet__rail > .meet__tile {
+  aspect-ratio: auto;
+  height: 100%;
+  align-self: stretch;
+  justify-self: stretch;
+}
+
+.meet__rail > .meet__tile {
+  min-width: 0;
+  min-height: 0;
+  /* Meet never stretches a tile to the full frame — it caps it and centres
+     the result, so one person doesn't get a wall of colour and two people
+     get a pair of cards rather than two half-screens. justify/align-self
+     keep the capped tile centred in its own track. */
+  justify-self: center;
+  align-self: center;
+  width: 100%;
+  height: 100%;
+}
+
+/* Solo: a single wide card, 16:9, centred with real breathing room. */
+.meet__main--solo .meet__rail > .meet__tile {
+  aspect-ratio: 16 / 9;
+  height: auto;
+  max-height: 100%;
+  max-width: min(100%, 1180px);
+}
+
+/* Duo: two cards side by side, each a touch taller than 16:9 so the pair
+   reads as a pair rather than two letterboxes. */
+.meet__main--duo .meet__rail > .meet__tile {
+  aspect-ratio: 4 / 3;
+  height: auto;
+  max-height: 100%;
+  max-width: 100%;
+}
+
+/* She isn't in the room yet — out of the grid entirely so the single tile
+   really does fill the frame, rather than leaving a phantom track. */
+.meet__main--solo .meet__tile--agent {
+  display: none;
+}
+
+/* Her tile arriving: a short fade + settle, so the two-up layout resolves
+   rather than blinking into place. */
+.meet__main--duo .meet__tile--agent {
+  animation: meet-tile-in 0.45s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+@keyframes meet-tile-in {
+  from { opacity: 0; transform: scale(0.965); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Nothing is in the stage until she shares, so it must not paint a black
+   box in the collapsed state. */
+.meet__main:not(.meet__main--sharing) > .meet__stage {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.meet__stage {
+  transition: opacity 0.4s ease 0.14s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meet__main,
+  .meet__tile,
+  .meet__stage { transition: none; }
+  .meet__main--duo .meet__tile--agent,
+  .meet__main--sharing .meet__tile--agent { animation: none; }
 }
 
 /* With chat open, the tiles move to a strip above the (now shorter) stage —
    matching Google Meet's own in-call-messages layout — instead of sitting
    in a vertical rail beside it. */
-.meet__body--chat-open .meet__main {
-  flex-direction: column;
+/* With chat open, the tiles move to a strip above the (now shorter) stage —
+   matching Google Meet's own in-call-messages layout. Expressed as rows so
+   it composes with the grid above rather than overriding it. */
+.meet__body--chat-open .meet__main--sharing {
+  grid-template-columns: 1fr;
+  grid-template-rows: 132px 1fr;
+  gap: 14px;
 }
 
-.meet__body--chat-open .meet__rail {
+.meet__body--chat-open .meet__main--sharing > .meet__rail {
+  grid-column: 1;
+  grid-row: 1;
+  /* Auto-width columns: each tile keeps a real 16:9 shape sized off the
+     strip's height, so they neither stretch into a banner nor shrink into
+     two cramped chips with a hole beside them. */
+  grid-template-columns: repeat(2, auto);
+  grid-template-rows: minmax(0, 1fr);
+  /* Centered across the strip rather than jammed against the left edge —
+     with only two tiles, `start` left a wide dead run of background to
+     their right that read as a layout bug. */
+  justify-content: center;
+}
+
+.meet__body--chat-open .meet__main--sharing > .meet__rail > .meet__tile {
+  aspect-ratio: 16 / 9;
+  height: 100%;
   width: auto;
-  height: 110px;
-  flex-direction: row;
+  align-self: stretch;
+  justify-self: stretch;
+}
+
+.meet__body--chat-open .meet__main--sharing > .meet__stage {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+/* Local self-view. Fills the tile the way a real participant video does,
+   and mirrored so it behaves like a mirror rather than like footage of you.
+   Sits under the mic badge and name label, both of which are absolutely
+   positioned above it. */
+.meet__self-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+  border-radius: inherit;
+  background: #12161d;
 }
 
 .meet__stage {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -1795,7 +1989,80 @@ body {
   overflow: hidden;
 }
 
+/* "Starting to present" — the handshake beat every conferencing tool shows
+   between hitting share and the picture arriving. Sits over the stage while
+   the app mounts underneath, then fades out to reveal it. */
+.meet__share-loader {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: #0b0c0e;
+  /* Slight delay in: the tiles' slide to the right should read first, then
+     this appears in the space they left. */
+  animation: meet-share-loader-in 0.4s ease 0.18s both;
+  transition: opacity 0.45s ease, visibility 0.45s;
+}
+
+.meet__share-loader--done {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+@keyframes meet-share-loader-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.meet__share-loader-badge {
+  position: relative;
+  width: 62px;
+  height: 62px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #e8eaed;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+/* The sweeping arc — one bright quadrant on a faint track, rotating. */
+.meet__share-loader-ring {
+  position: absolute;
+  inset: -13px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  border-top-color: var(--accent);
+  border-right-color: var(--accent);
+  animation: meet-share-spin 0.95s linear infinite;
+}
+
+@keyframes meet-share-spin {
+  to { transform: rotate(360deg); }
+}
+
+.meet__share-loader-text {
+  font-size: 13.5px;
+  color: #9aa0a6;
+  letter-spacing: 0.01em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meet__share-loader { animation: none; }
+  .meet__share-loader-ring { animation-duration: 3s; }
+}
+
 .meet__stage-inner {
+  /* Fades up as the loader clears, so the two cross over instead of one
+     snapping in after the other. */
+  opacity: 0;
+  transition: opacity 0.5s ease;
   width: 100%;
   height: 100%;
   background: white;
@@ -1822,22 +2089,18 @@ body {
   transform: translateZ(0);
 }
 
-.meet__stage-inner .app-shell {
-  min-height: 100%;
+.meet__stage-inner--live {
+  opacity: 1;
 }
 
-.meet__rail {
-  width: 220px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+.meet__stage-inner .app-shell {
+  min-height: 100%;
 }
 
 .meet__tile {
   position: relative;
   flex: 1;
-  border-radius: 10px;
+  border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1852,18 +2115,137 @@ body {
   background: linear-gradient(160deg, #3a2a1c, #1c1712);
 }
 
+/* Default (idle, mic live): neutral. --off is the muted red everyone reads
+   as "you can't be heard"; --live pulses only while sound is actually being
+   picked up; --listening is the agent's ear. */
 .meet__mic-badge {
   position: absolute;
   top: 8px;
   right: 8px;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(0, 0, 0, 0.42);
   border-radius: 50%;
   width: 22px;
   height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
+  color: #cfd3d7;
+  transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.meet__mic-badge--off {
   color: #f28b82;
+}
+
+/* Genuinely speaking right now — a soft breath, not a strobe. */
+.meet__mic-badge--live {
+  color: #8ce0a8;
+  background: rgba(20, 70, 40, 0.6);
+  box-shadow: 0 0 0 1px rgba(140, 224, 168, 0.5);
+  animation: meet-badge-live 1.1s ease-in-out infinite;
+}
+
+@keyframes meet-badge-live {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(140, 224, 168, 0.5), 0 0 0 0 rgba(140, 224, 168, 0.32); }
+  50%      { box-shadow: 0 0 0 1px rgba(140, 224, 168, 0.75), 0 0 0 6px rgba(140, 224, 168, 0); }
+}
+
+/* The agent is listening. Same green family as a live mic (it means the same
+   thing — audio is getting through) but with the ear glyph, and a slower
+   pulse so it reads as attentive rather than urgent. */
+.meet__mic-badge--listening {
+  color: #7fd7a4;
+  background: rgba(16, 60, 36, 0.65);
+  box-shadow: 0 0 0 1px rgba(127, 215, 164, 0.45);
+  animation: meet-ear-listen 2s ease-in-out infinite;
+}
+
+@keyframes meet-ear-listen {
+  0%, 100% { opacity: 0.62; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.09); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meet__mic-badge--live,
+  .meet__mic-badge--listening { animation: none; }
+}
+
+/* Unread in-call messages. Sits on the chat control's top-right, the
+   position everyone already looks for. */
+.meet__unread-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: #ea4335;
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+  border: 2px solid #202124;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* Nothing shared yet — the stage before the agent starts presenting. Plain
+   on purpose: an empty stage in a real call is empty, not a loading screen. */
+.meet__stage-idle {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.meet__stage-idle-text {
+  font-size: 13.5px;
+  color: #7e858c;
+  text-align: center;
+  max-width: 34ch;
+  line-height: 1.5;
+}
+
+/* Fallback for a booking tab the browser refused to open automatically. */
+.meet__booking-toast {
+  position: fixed;
+  right: 22px;
+  bottom: 96px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px 12px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(32, 33, 36, 0.97);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  color: #e8eaed;
+  font-size: 13.5px;
+}
+
+.meet__booking-toast-go {
+  padding: 7px 14px;
+  border-radius: 18px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.meet__booking-toast-close {
+  border: none;
+  background: transparent;
+  color: #9aa0a6;
+  cursor: pointer;
+  display: flex;
+  padding: 4px;
 }
 
 .meet__tile-label {
@@ -1901,9 +2283,9 @@ body {
    property inline once real audio comes through; this is just what shows
    before that (or if a track never arrives). */
 .meet__avatar--tile {
-  width: 96px;
-  height: 96px;
-  font-size: 32px;
+  width: 76px;
+  height: 76px;
+  font-size: 27px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35), 0 0 0 2px rgba(138, 180, 248, 0.3);
 }
 
@@ -1921,11 +2303,50 @@ body {
 
 .meet__chat-header {
   flex-shrink: 0;
-  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 10px 12px 16px;
   font-size: 14px;
   font-weight: 600;
   color: #e8eaed;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.meet__chat-close {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #9aa0a6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.meet__chat-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e8eaed;
+}
+
+/* Slides in from the right rather than appearing — matches how the panel
+   behaves in Meet, and makes the stage's reflow read as one motion. */
+.meet__chat-panel {
+  animation: meet-chat-in 0.28s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+@keyframes meet-chat-in {
+  from { opacity: 0; transform: translateX(18px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meet__chat-panel { animation: none; }
 }
 
 .meet__chat-messages {
@@ -1966,6 +2387,16 @@ body {
   background: rgba(255, 255, 255, 0.08);
   color: #e8eaed;
   border-bottom-left-radius: 3px;
+}
+
+.meet__chat-message a {
+  color: #8ab4f8;
+  text-decoration: underline;
+  word-break: break-all;
+}
+
+.meet__chat-message--user a {
+  color: white;
 }
 
 .meet__chat-input {
@@ -2014,6 +2445,690 @@ body {
   filter: brightness(1.1);
 }
 
+/* ---- Meeting Mode: standalone example gallery modal ---- */
+/* A real blocking modal over the ENTIRE call (topbar and controls included,
+   both visible-but-dimmed behind it, same as any real modal) -- not a
+   docked sidebar panel. position:fixed to the viewport; mounted at the top
+   level of MeetingShell.tsx, not nested inside .meet__stage, so it isn't
+   confined to the stage's own box (an earlier version anchored to
+   .meet__body/.meet__stage instead, which read as "not really blocking the
+   screen" and clipped the edge arrows against the stage's overflow:hidden).
+   This is still the one meeting surface with real pointer-events -- see
+   ExampleGalleryPanel.tsx's docstring. */
+/* ============================================================
+   Best Content Showcase modal.
+
+   Ported from the Claude Design mock ("Best Content Showcase
+   Modal.dc.html") -- geometry taken from that file directly, since
+   the design is authoritative wherever its accompanying handoff
+   CSS disagreed with it (badge padding, halo offset, config row
+   padding, dot gap, close-button placement).
+
+   Structure: a near-black dimmed (not blurred) backdrop; one
+   liquid-glass card with a fixed two-column grid -- 436px portrait
+   video + flexible info column. The video is the star, so it sets
+   the card's height and gets the larger share of visual weight.
+   The arrows and slide counter sit on the backdrop, lightbox-style;
+   the award badge and close button sit inside the card.
+   ============================================================ */
+
+.meet__gallery-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(4, 4, 6, 0.86);   /* the reference backdrop is near-black */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---- the card ---- */
+.meet__gallery-modal {
+  position: relative;
+  display: grid;
+  /* Overall scale is ~5% under the mock's 1064/436/44/34 figures. The mock
+     was drawn in a fixed 1554x1012 frame around a 2:3 video; our real reels
+     are 9:16, so the same column width produces a much taller card, which
+     was overflowing and scrolling internally on a normal laptop. Trimming
+     the whole card rather than just the video keeps the proportions intact.
+     The column is additionally capped by the height actually available, so
+     the card fits without scrolling on short viewports too. */
+  /* The subtracted 78px is the card's own 2x32px padding plus ~14px of
+     slack: on a short viewport the info column can end up a hair taller
+     than the video, and without the slack that difference reintroduced a
+     couple of pixels of internal scroll. */
+  grid-template-columns: min(414px, calc((92vh - 78px) * 9 / 16)) minmax(0, 1fr);
+  gap: 42px;
+  width: min(1010px, 92vw);
+  /* Belt and braces behind the column cap above -- with that in place the
+     card should never exceed the viewport, but if it somehow does, the spec
+     grid stays reachable instead of running off the bottom of the screen. */
+  max-height: 92vh;
+  overflow-y: auto;
+  padding: 32px;
+  border-radius: 32px;
+  /* Liquid glass, not frosted milk: a DARK translucent fill (a heavy white
+     wash is what made the previous version read as frost), a much stronger
+     blur with saturate + a slight brightness cut, and the light carried by
+     thin specular edges rather than smeared across the surface. */
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background-color: rgba(14, 14, 18, 0.58);
+  background-image: linear-gradient(
+    152deg,
+    rgba(255, 255, 255, 0.1),
+    rgba(255, 255, 255, 0.015) 38%,
+    rgba(255, 255, 255, 0.045)
+  );
+  backdrop-filter: blur(56px) saturate(185%) brightness(0.9);
+  -webkit-backdrop-filter: blur(56px) saturate(185%) brightness(0.9);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.07),
+    0 50px 120px rgba(0, 0, 0, 0.7);
+  animation: meet-gallery-in 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Edge-lit rim: a gradient border masked to 1px, bright at the top-left and
+   bottom-right corners and invisible along the middle of each edge -- the
+   specular ring that makes the surface read as liquid glass rather than
+   frost. */
+.meet__gallery-modal::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: 32px;
+  padding: 1px;
+  background: linear-gradient(
+    140deg,
+    rgba(255, 255, 255, 0.55),
+    rgba(255, 255, 255, 0.06) 26%,
+    rgba(255, 255, 255, 0) 52%,
+    rgba(255, 255, 255, 0.1) 78%,
+    rgba(255, 255, 255, 0.4)
+  );
+  -webkit-mask: linear-gradient(#000, #000) content-box, linear-gradient(#000, #000);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000, #000) content-box, linear-gradient(#000, #000);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+@keyframes meet-gallery-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Award badge -- "hall of fame" ribbon. Sits INSIDE the card, above the
+   heading and aligned to the info column's left edge (34px card padding +
+   436px video + 44px gap = 514px). Deliberately OPAQUE (solid dark fill, not
+   glass): it overlaps the card's own top border region, and a translucent
+   badge let that line show straight through it. Three layers: a gradient rim
+   (the 2px padding on the outer element), a solid dark pill, and a pulsing
+   warm halo behind the whole thing. */
+/* Sits in the info column's normal flow as its first child, NOT absolutely
+   positioned. It used to be pinned at `left: 514px` (34px card padding +
+   436px video + 44px gap), which only aligned with the heading while the
+   video column was exactly 436px — the moment that column got capped by
+   viewport height (see the grid rule above), the info column started
+   further left and the badge visibly drifted right of the heading.
+   In-flow, it is aligned to the heading by construction at any width. */
+.meet__gallery-badge {
+  position: relative;
+  align-self: flex-start;
+  margin-bottom: 20px;
+  z-index: 3;
+  padding: 2px;                 /* becomes the gradient rim */
+  border-radius: 99px;
+  background: linear-gradient(
+    140deg,
+    rgba(255, 196, 120, 0.85),
+    rgba(255, 94, 31, 0.55) 42%,
+    rgba(255, 255, 255, 0.14) 70%,
+    rgba(255, 168, 90, 0.6)
+  );
+  box-shadow:
+    0 14px 34px rgba(0, 0, 0, 0.55),
+    0 6px 26px rgba(255, 110, 40, 0.28);
+  animation: meet-badge-in 0.6s cubic-bezier(0.2, 1.25, 0.4, 1) both;
+}
+
+/* soft warm halo, slow breathe. The 1px extra on the left is the mock's own
+   nudge, kept as-is. */
+.meet__gallery-badge::before {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  left: -9px;
+  border-radius: 99px;
+  background: radial-gradient(ellipse at center, rgba(255, 132, 48, 0.45), rgba(255, 132, 48, 0) 70%);
+  filter: blur(6px);
+  pointer-events: none;
+  animation: meet-badge-halo 3.4s ease-in-out infinite;
+}
+
+.meet__gallery-badge-inner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 21px 10px 18px;
+  border-radius: 99px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #26262c, #131317 60%, #0e0e12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.6);
+}
+
+/* specular sweep every 5s -- the one thing that makes it feel alive */
+.meet__gallery-badge-inner::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 60px;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0));
+  pointer-events: none;
+  animation: meet-badge-sheen 5s ease-in-out infinite;
+}
+
+.meet__gallery-badge-medal {
+  position: relative;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(150deg, #ffc266, #ff6a20);
+  box-shadow:
+    0 3px 10px rgba(255, 106, 32, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+/* dark trophy on the warm medal, not a light-on-dark glyph */
+.meet__gallery-badge-icon {
+  color: #2a1405;
+  animation: meet-badge-trophy 3.4s ease-in-out infinite;
+}
+
+/* two staggered twinkles at the medal's corners */
+.meet__gallery-badge-spark {
+  position: absolute;
+  border-radius: 50%;
+  animation: meet-badge-spark 2.6s ease-in-out infinite;
+}
+
+.meet__gallery-badge-spark--a {
+  top: -3px;
+  right: -4px;
+  width: 4px;
+  height: 4px;
+  background: #fff6e0;
+  box-shadow: 0 0 6px rgba(255, 214, 140, 0.9);
+}
+
+.meet__gallery-badge-spark--b {
+  bottom: -2px;
+  left: -4px;
+  width: 3px;
+  height: 3px;
+  background: #ffd9a0;
+  box-shadow: 0 0 5px rgba(255, 196, 110, 0.9);
+  animation-delay: 1.1s;
+}
+
+.meet__gallery-badge-text {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.meet__gallery-badge-kicker {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 186, 120, 0.9);
+}
+
+.meet__gallery-badge-label {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  color: #fff;
+  white-space: nowrap;
+}
+
+@keyframes meet-badge-in {
+  0%   { opacity: 0; transform: translateY(-14px) scale(0.94); }
+  60%  { opacity: 1; transform: translateY(2px) scale(1.015); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes meet-badge-sheen {
+  0%   { transform: translateX(-140%) skewX(-18deg); }
+  55%  { transform: translateX(240%) skewX(-18deg); }
+  100% { transform: translateX(240%) skewX(-18deg); }
+}
+
+@keyframes meet-badge-halo {
+  0%, 100% { opacity: 0.45; transform: scale(1); }
+  50%      { opacity: 0.9;  transform: scale(1.06); }
+}
+
+@keyframes meet-badge-trophy {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50%      { transform: translateY(-1.5px) rotate(-3deg); }
+}
+
+@keyframes meet-badge-spark {
+  0%, 100% { opacity: 0; transform: scale(0.4); }
+  50%      { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meet__gallery-badge,
+  .meet__gallery-badge::before,
+  .meet__gallery-badge-inner::after,
+  .meet__gallery-badge-icon,
+  .meet__gallery-badge-spark,
+  .meet__gallery-modal { animation: none; }
+}
+
+/* Inside the card's top-right, level with the badge -- the mock places it at
+   21px down / 22px in from the card's own edges, not hanging off the corner. */
+.meet__gallery-close {
+  position: absolute;
+  top: 19px;
+  right: 20px;
+  z-index: 4;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: linear-gradient(180deg, rgba(46, 46, 50, 0.92), rgba(20, 20, 24, 0.88));
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  color: #f1f1f1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 10px 24px rgba(0, 0, 0, 0.5);
+}
+
+.meet__gallery-close:hover {
+  background: linear-gradient(180deg, rgba(62, 62, 68, 0.94), rgba(28, 28, 32, 0.9));
+}
+
+/* Moving between examples. Both columns are keyed on the example id, so
+   React remounts them and this enter animation replays — the incoming slide
+   eases in from the direction of travel instead of the content swapping in a
+   single frame. It also covers the video's own remount flash (a new src
+   paints black for a frame before the first decoded frame lands). */
+.meet__gallery-slide {
+  animation: meet-gallery-slide-next 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.meet__gallery-slide--prev {
+  animation-name: meet-gallery-slide-prev;
+}
+
+@keyframes meet-gallery-slide-next {
+  from { opacity: 0; transform: translateX(26px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes meet-gallery-slide-prev {
+  from { opacity: 0; transform: translateX(-26px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* The info column staggers a touch behind the video, so the pair reads as
+   one movement with depth rather than two things sliding in lockstep. */
+.meet__gallery-modal-info.meet__gallery-slide {
+  animation-delay: 0.05s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meet__gallery-slide { animation: none; }
+}
+
+/* ---- video column ---- */
+/* The mock frames this at 2 / 3 around a poster still, but both real reels are
+   1080x1920 (9:16) -- a 2/3 frame with object-fit:cover would slice ~120px off
+   the top and bottom of every video. Matched to the real source ratio instead,
+   so the reel fills the frame edge to edge with zero crop and no letterbox
+   bars. object-fit below is `contain`, not `cover`: at 9:16 the two are
+   pixel-identical here, but if a landscape asset is ever dropped into the
+   gallery it letterboxes rather than silently cropping the sides off. */
+.meet__gallery-modal-video {
+  position: relative;
+  aspect-ratio: 9 / 16;
+  border-radius: 20px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #111;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+
+/* AssetVideoPlayer keeps its native <video controls>; it just has to fill
+   this frame instead of sizing itself. Its shared root class
+   (.scene-inspector__player) carries a 9/16 aspect-ratio, 20px padding and a
+   12px radius from the wizard result screens -- all three are neutralised
+   here so the reel sits flush to the 2:3 frame's edges. */
+.meet__gallery-modal-video .asset-video-player,
+.meet__gallery-modal-video .asset-video-player__video {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+
+.meet__gallery-modal-video .asset-video-player {
+  aspect-ratio: auto;
+  padding: 0;
+}
+
+.meet__gallery-modal-video .asset-video-player__video {
+  object-fit: contain;
+  display: block;
+}
+
+.meet__gallery-duration-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px 5px 9px;
+  border-radius: 99px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(10, 10, 12, 0.55);
+  backdrop-filter: blur(10px) saturate(160%);
+  -webkit-backdrop-filter: blur(10px) saturate(160%);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.meet__gallery-duration-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(255, 79, 0, 0.85);
+}
+
+/* ---- info column ---- */
+/* The video sets the card's height, so the info column has to FILL that
+   height rather than stopping two-thirds down: header pinned top, spec grid
+   pushed to the bottom with margin-top:auto. */
+.meet__gallery-modal-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0 6px;
+}
+
+/* No top margin needed: the badge is now an in-flow sibling directly above
+   this (see .meet__gallery-badge), rather than an absolutely-positioned
+   overlay this had to leave room for. */
+.meet__gallery-format {
+  font-size: 32px;
+  font-weight: 800;
+  color: #fff;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
+.meet__gallery-tagline {
+  margin: 9px 0 0;
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: rgba(235, 235, 240, 0.55);
+}
+
+/* The featured-generation card -- the premium centrepiece, not a plain inset
+   panel. Two radial gradient bleeds (warm at top-left, deeper orange at
+   bottom-right) over a faint glass base, a glowing warm rim, and a specular
+   hairline across the top edge. */
+.meet__gallery-highlight {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  /* The mock's info column exactly fills a 654px-tall 2:3 video, so it needs
+     no slack absorption. Ours is a 775px 9:16 video (see the frame rule
+     above), which leaves ~120px of dead space between this card and the spec
+     grid below. flex:1 hands that slack to the centrepiece -- the design
+     bundle's own remedy for a hole in the middle of this column -- instead of
+     letting it pool as a void. */
+  flex: 1;
+  gap: 16px;
+  margin-top: 26px;
+  padding: 26px 28px;
+  border-radius: 24px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 158, 91, 0.42);
+  background-color: rgba(255, 255, 255, 0.035);
+  background-image:
+    radial-gradient(120% 130% at 0% 0%, rgba(255, 146, 58, 0.26), rgba(255, 146, 58, 0) 52%),
+    radial-gradient(110% 120% at 100% 100%, rgba(255, 86, 26, 0.24), rgba(255, 86, 26, 0) 55%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.015));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 0 0 1px rgba(255, 138, 61, 0.08),
+    0 22px 60px rgba(255, 110, 40, 0.2);
+}
+
+/* specular hairline along the top edge */
+.meet__gallery-highlight::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 28px;
+  right: 28px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 201, 150, 0.75), rgba(255, 255, 255, 0));
+  pointer-events: none;
+}
+
+.meet__gallery-highlight-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.meet__gallery-highlight-icon {
+  flex-shrink: 0;
+  width: 43px;
+  height: 43px;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: linear-gradient(150deg, #ffb06a, #ff5316);
+  box-shadow:
+    0 8px 22px rgba(255, 94, 31, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.meet__gallery-highlight-titles {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.meet__gallery-kicker {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 175, 110, 0.95);
+}
+
+.meet__gallery-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -0.015em;
+}
+
+.meet__gallery-desc {
+  position: relative;
+  margin: 0;
+  font-size: 14.8px;
+  line-height: 1.65;
+  color: rgba(240, 238, 236, 0.82);
+  text-wrap: pretty;
+}
+
+/* 2x2 spec grid, ruled like the reference: ONE continuous vertical rule down
+   the middle (a pseudo-element, so it doesn't break at the row boundary the
+   way per-cell borders did) plus a short horizontal rule under each cell of
+   the first row only. Zero grid gap -- cell padding does the spacing so the
+   rules land where they should. */
+.meet__gallery-config {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  margin-top: auto;      /* bottom-aligned with the video */
+  padding-top: 28px;
+}
+
+.meet__gallery-config::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.meet__gallery-config-item {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.meet__gallery-config-item:nth-child(odd)  { padding-right: 28px; }
+.meet__gallery-config-item:nth-child(even) { padding-left: 28px; }
+
+/* Row-1 rules stop short of the centre divider, as in the reference -- a
+   border-bottom on the cell would run flush into it, closing the table. The
+   rule is a pseudo-element inside the cell's content box, so the cell's own
+   30px side padding insets it. It's also a flex child, so the column's 16px
+   gap plus this 8px margin puts it 24px under the chips. */
+.meet__gallery-config-item:nth-child(-n + 2)::after {
+  content: "";
+  display: block;
+  height: 1px;
+  margin-top: 8px;
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.meet__gallery-config-item:nth-child(n + 3) { padding-top: 20px; }
+
+.meet__gallery-config-label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: rgba(235, 235, 240, 0.62);
+}
+
+.meet__gallery-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.meet__gallery-chip {
+  font-size: 15px;
+  font-weight: 500;
+  color: #f2f2f4;
+  padding: 10px 18px;
+  border-radius: 99px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.055);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* ---- backdrop chrome ---- */
+.meet__gallery-edge-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.05));
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 10px 26px rgba(0, 0, 0, 0.4);
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.meet__gallery-edge-arrow:hover {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.09));
+  transform: translateY(-50%) scale(1.05);
+}
+
+/* Hugged to the card, not the viewport edge: card half-width (532) + arrow
+   (60) + 28px breathing room, with a 20px floor on narrow screens. */
+.meet__gallery-edge-arrow--prev { left: max(20px, calc(50% - 620px)); }
+.meet__gallery-edge-arrow--next { right: max(20px, calc(50% - 620px)); }
+
+/* Narrower viewports than the mock's 1554px frame: stack the two columns and
+   cap the video height so the card still fits one screen. The badge and close
+   button are pixel-placed against the two-column geometry above, so both move
+   out to the card's edges here rather than landing on top of the video. */
+@media (max-width: 1100px) {
+  .meet__gallery-modal {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+    width: min(560px, 92vw);
+    padding: 26px;
+  }
+  /* Stays 9:16 (never crop the reel) but sizes off the viewport height
+     instead of the column width, which at one column would make a portrait
+     video ~900px tall. aspect-ratio from the base rule derives the width. */
+  .meet__gallery-modal-video {
+    height: 52vh;
+    width: auto;
+    justify-self: center;
+  }
+  .meet__gallery-format { font-size: 25px; }
+  .meet__gallery-edge-arrow--prev { left: 12px; }
+  .meet__gallery-edge-arrow--next { right: 12px; }
+}
+
 .meet__avatar--tiny {
   width: 20px;
   height: 20px;
@@ -2056,16 +3171,180 @@ body {
   font-size: 11px;
 }
 
+/* position:relative so the two edge buttons below can be pinned to the far
+   left/right without pushing the mic/hand/chat/hangup group off centre. */
+/* The row itself is just the full-width band that holds the edge buttons;
+   the centre group sits inside its own rounded strip (below), which is what
+   Meet actually renders — not bare circles floating on the page. */
 .meet__controls {
+  position: relative;
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 10px;
-  padding: 14px 0 22px;
+  padding: 10px 0 18px;
   flex-shrink: 0;
 }
 
+.meet__controls-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 22px;
+  background: #1f2022;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+/* ---- bottom-left: the showcase trigger ----
+   Same "hall of fame" visual language as the badge inside the modal (see
+   .meet__gallery-badge) rather than a plain accent pill: this is the one
+   control that opens the showcase, so it should read as the same object the
+   modal presents. Deliberately opaque, same as the badge. */
+.meet__showcase-btn {
+  position: absolute;
+  left: 22px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 2px;                 /* becomes the gradient rim */
+  border: none;
+  border-radius: 99px;
+  cursor: pointer;
+  background: linear-gradient(
+    140deg,
+    rgba(255, 196, 120, 0.85),
+    rgba(255, 94, 31, 0.55) 42%,
+    rgba(255, 255, 255, 0.14) 70%,
+    rgba(255, 168, 90, 0.6)
+  );
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.5),
+    0 4px 18px rgba(255, 110, 40, 0.26);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.meet__showcase-btn:hover {
+  transform: translateY(-50%) scale(1.03);
+  box-shadow:
+    0 12px 30px rgba(0, 0, 0, 0.55),
+    0 6px 22px rgba(255, 110, 40, 0.38);
+}
+
+.meet__showcase-btn-inner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px 8px 10px;
+  border-radius: 99px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #26262c, #131317 60%, #0e0e12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.6);
+}
+
+/* the same 5s specular sweep the modal badge has */
+.meet__showcase-btn-inner::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 54px;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0));
+  pointer-events: none;
+  animation: meet-badge-sheen 5s ease-in-out infinite;
+}
+
+.meet__showcase-btn-medal {
+  position: relative;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #2a1405;
+  background: linear-gradient(150deg, #ffc266, #ff6a20);
+  box-shadow:
+    0 3px 10px rgba(255, 106, 32, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.meet__showcase-btn-text {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-align: left;
+}
+
+.meet__showcase-btn-kicker {
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 186, 120, 0.9);
+}
+
+.meet__showcase-btn-label {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  color: #fff;
+  white-space: nowrap;
+}
+
+/* ---- bottom-right: talk to the team ----
+   Deliberately plain next to the showcase trigger — it's a secondary,
+   always-available exit to a human, not a feature to show off. */
+.meet__team-btn {
+  position: absolute;
+  right: 22px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 19px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: #e8eaed;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.meet__team-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.26);
+}
+
+.meet__team-btn svg { flex-shrink: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .meet__showcase-btn-inner::after { animation: none; }
+}
+
+/* Below this the two edge buttons would start colliding with the centre
+   control group — drop their labels to icons only rather than overlap. */
+@media (max-width: 900px) {
+  .meet__showcase-btn { left: 12px; }
+  .meet__team-btn { right: 12px; padding: 0 12px; }
+  .meet__showcase-btn-text,
+  .meet__team-btn-label { display: none; }
+  .meet__showcase-btn-inner { padding: 8px 10px; }
+}
+
 .meet__ctrl {
+  position: relative;
   width: 44px;
   height: 44px;
   border-radius: 50%;
@@ -2101,6 +3380,70 @@ body {
 .meet__ctrl--pressed {
   background: var(--accent);
   color: white;
+}
+
+/* The one control with a text label alongside its icon, not just a plain
+   icon circle -- it's a standalone feature (browse pre-loaded examples),
+   not a call-state toggle like mic/hand/chat, so it reads as its own named
+   action rather than blending into the icon row. */
+/* Overflow menu, floating above the control strip like Meet's own. Anchored
+   to .meet__controls-bar (position:relative) rather than the viewport, so it
+   tracks the strip if the row ever reflows. */
+/* Positioned wrapper for the overflow trigger — the menu anchors to this,
+   so it sits over the dots rather than out at the strip's edge. */
+.meet__more {
+  position: relative;
+  display: flex;
+}
+
+.meet__more-menu {
+  position: absolute;
+  bottom: calc(100% + 14px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 70;
+  min-width: 268px;
+  padding: 8px;
+  border-radius: 14px;
+  background: #1f2022;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: meet-more-in 0.16s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+@keyframes meet-more-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px) scale(0.985); }
+  to   { opacity: 1; transform: translateX(-50%); }
+}
+
+.meet__more-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 14px;
+  border-radius: 9px;
+  color: #e8eaed;
+  font-size: 14px;
+  font-family: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.12s ease;
+}
+
+.meet__more-item:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.meet__more-item svg {
+  flex-shrink: 0;
+  color: #c8ccd0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meet__more-menu { animation: none; }
 }
 
 .meet__ctrl--hangup {
@@ -3174,6 +4517,30 @@ body {
   font-family: var(--font);
 }
 
+/* The one non-selectable card in the grid — it's the shape of a real
+   workspace (you'd add your own brands), deliberately inert so nobody asks
+   to open a dossier that doesn't exist. */
+.dossier-card--add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-style: dashed;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: default;
+}
+
+.dossier-card__add-plus {
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-muted);
+}
+
+.dossier-card__add-label {
+  font-size: 14px;
+  font-weight: 500;
+}
+
 .dossier-card--active {
   border-color: var(--accent);
   background: var(--accent-tint-08);
@@ -4080,6 +5447,20 @@ body {
   height: 3px;
   border-radius: 99px;
   background: rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  position: relative;
+}
+
+/* AssetVideoPlayer -- real <video controls> dropped into the same
+   .scene-inspector__player slot the old static mockup used, see
+   AssetVideoPlayer.tsx. Native browser controls, not a custom playbar. */
+.asset-video-player__video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 12px;
 }
 
 .scene-inspector__caption {
