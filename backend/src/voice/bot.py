@@ -41,7 +41,22 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
 from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
-from pipecat.services.deepgram.stt import DeepgramSTTService
+# Imported defensively. The Deepgram SDK is an optional extra, and a
+# top-level import of it took production down: the box didn't have
+# deepgram-sdk installed, this line raised ImportError at module scope, and
+# the voicebot crash-looped — taking voice out entirely rather than falling
+# back to Groq the way STT_PROVIDER was designed to.
+#
+# The fallback below is a RUNTIME choice, so it can only help if this module
+# actually finishes importing. Optional dependencies therefore have to fail
+# soft here, not hard.
+try:
+    from pipecat.services.deepgram.stt import DeepgramSTTService
+except ImportError as _dg_err:  # pragma: no cover - depends on install extras
+    DeepgramSTTService = None
+    _DEEPGRAM_IMPORT_ERROR = str(_dg_err)
+else:
+    _DEEPGRAM_IMPORT_ERROR = None
 from pipecat.services.groq.stt import GroqSTTService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
@@ -344,7 +359,16 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     # be one env var away from working, not a redeploy.
     _stt_provider = (os.getenv("STT_PROVIDER") or "deepgram").strip().lower()
     _deepgram_key = os.getenv("DEEPGRAM_API_KEY")
-    if _stt_provider == "deepgram" and _deepgram_key:
+    if _stt_provider == "deepgram" and _deepgram_key and DeepgramSTTService is None:
+        # Configured for Deepgram, credentialed for it, but the SDK isn't
+        # installed. Say so loudly and take Groq — a degraded ear beats a
+        # dead pipeline.
+        logger.error(
+            f"STT_PROVIDER=deepgram and DEEPGRAM_API_KEY is set, but the Deepgram SDK is "
+            f"missing ({_DEEPGRAM_IMPORT_ERROR}). Falling back to Groq. "
+            f"Fix with: pip install deepgram-sdk"
+        )
+    if _stt_provider == "deepgram" and _deepgram_key and DeepgramSTTService is not None:
         stt = DeepgramSTTService(
             api_key=_deepgram_key,
             settings=DeepgramSTTService.Settings(
