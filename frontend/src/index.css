@@ -494,6 +494,14 @@ body {
   margin: 0;
 }
 
+/* .page__title's 4px bottom margin only exists to tuck a subtitle up under
+   it. On a page that dropped its subtitle, that 4px leaves the heading
+   sitting almost on top of whatever follows — this restores the gap the
+   subtitle used to occupy. */
+.page__title--solo {
+  margin-bottom: 14px;
+}
+
 .page__header-label {
   font-size: 10px;
   font-weight: 600;
@@ -874,14 +882,7 @@ body {
 
 .hero-banner__text h2 {
   font-size: 15px;
-  margin: 0 0 4px;
-}
-
-.hero-banner__text p {
-  font-size: 12px;
-  color: var(--text-muted);
   margin: 0;
-  max-width: 520px;
 }
 
 .hero-banner__stats {
@@ -965,11 +966,6 @@ body {
   margin: 0;
 }
 
-.engine-section__desc {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
 .engine-section__soon {
   margin-left: auto;
   font-size: 12px;
@@ -998,9 +994,32 @@ body {
   cursor: pointer;
 }
 
-.format-card:hover {
+.format-card:hover:not(:disabled) {
   transform: translateY(-2px);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+}
+
+/* A format that isn't built yet. Dimmed per-element rather than with a
+   single `opacity` on the card, because opacity on the parent would take
+   the SOON badge down with everything else — and the badge is the one thing
+   that has to stay readable, since it's the explanation for why the rest of
+   the card looks faded. The `disabled` attribute (set in ContentStudio.tsx)
+   already blocks clicks and focus; these rules make that state visible. */
+.format-card--soon {
+  background: #fbfbfb;
+  cursor: not-allowed;
+}
+
+.format-card--soon .format-card__title,
+.format-card--soon .format-card__tool,
+.format-card--soon .format-card__desc,
+.format-card--soon .format-card__footer {
+  color: var(--text-muted);
+}
+
+.format-card--soon .stage-badge--active {
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--text-muted);
 }
 
 .format-card__head {

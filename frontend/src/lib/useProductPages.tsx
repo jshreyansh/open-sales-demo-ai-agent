@@ -86,6 +86,10 @@ export function useProductPages() {
 
   function renderPage() {
     if (activePageId === "dashboard") return <Dashboard />;
+    // Analytics has no sidebar entry any more (see pages.ts), but it's still
+    // a real page the agent can navigate to — the backend registry lists it
+    // and the scripted walkthrough highlights its funnel. Agent-reachable,
+    // just not visitor-clickable.
     if (activePageId === "analytics") return <Analytics />;
     if (activePageId === "brand-kit") return <BrandKit />;
     if (activePageId === "mlr-review") return <Approvals />;

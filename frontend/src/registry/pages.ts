@@ -14,21 +14,31 @@ export interface NavGroup {
 }
 
 /**
- * Mirrors the real ContentIQ (contentiq.swishx.com) sidebar — grouping and
- * icons matched against real product screenshots (both expanded and
- * collapsed states). MLR Review sits alone under its own "Compliance" group,
- * separate from "Activate".
+ * Started as a mirror of the real ContentIQ (contentiq.swishx.com) sidebar,
+ * now deliberately narrowed to the three groups this demo actually walks a
+ * prospect through: Dashboard, Create, Library. The activation surface
+ * (Campaigns / Audience / Re-engage), Analytics and Claims Library were cut
+ * because nothing behind them is built here, and a nav full of stubs reads
+ * as an unfinished product during a live demo. MLR Review moved out of its
+ * own "Compliance" group into Library — one heading for everything that is
+ * a stored, browsable collection.
+ *
+ * Note: cutting the Analytics nav entry does NOT delete the Analytics page.
+ * The backend agent registry still exposes "analytics" as a navigable page
+ * (backend/src/agent/registry.py) and the scripted walkthrough jumps to it,
+ * so useProductPages.tsx keeps rendering it — it's simply no longer
+ * something the visitor can click to.
+ *
  * Top-level nav only — flows inside each page are out of scope until built
  * individually.
  */
 export const NAV_REGISTRY: NavGroup[] = [
   {
-    id: "overview",
-    label: "Overview",
-    items: [
-      { id: "dashboard", label: "Dashboard", route: "/dashboard", status: "available", icon: "dashboard" },
-      { id: "analytics", label: "Analytics", route: "/analytics/overview", status: "available", icon: "bar-chart" },
-    ],
+    id: "dashboard",
+    // No heading: this group is a single item whose own label already reads
+    // "Dashboard", so a group label above it would just say the word twice.
+    label: null,
+    items: [{ id: "dashboard", label: "Dashboard", route: "/dashboard", status: "available", icon: "dashboard" }],
   },
   {
     id: "create",
@@ -46,25 +56,14 @@ export const NAV_REGISTRY: NavGroup[] = [
     id: "library",
     label: "Library",
     items: [
+      // MLR Review leads the group: it's the only entry here that has work
+      // waiting in it (the sidebar renders its pending count), so it reads
+      // first rather than being buried under the static collections.
+      { id: "mlr-review", label: "MLR Review", route: "/approvals", status: "available", icon: "shield" },
       { id: "brand-dossiers", label: "Brand Dossiers", route: "/studio/dossier", status: "available", icon: "book-open" },
       { id: "brand-kit", label: "Brand Kit", route: "/brand-library", status: "available", icon: "palette" },
       { id: "content-library", label: "Content Library", route: "/content-library", status: "available", icon: "folder" },
-      { id: "claims-library", label: "Claims Library", route: "#", status: "soon", icon: "quote" },
       { id: "templates", label: "Templates", route: "/templates", status: "available", icon: "layout-grid" },
-    ],
-  },
-  {
-    id: "compliance",
-    label: "Compliance",
-    items: [{ id: "mlr-review", label: "MLR Review", route: "/approvals", status: "available", icon: "shield" }],
-  },
-  {
-    id: "activate",
-    label: "Activate",
-    items: [
-      { id: "campaigns", label: "Campaigns", route: "/campaigns", status: "available", icon: "send" },
-      { id: "audience", label: "Audience", route: "/audience", status: "available", icon: "users" },
-      { id: "re-engage", label: "Re-engage", route: "#", status: "soon", icon: "refresh-cw" },
     ],
   },
 ];

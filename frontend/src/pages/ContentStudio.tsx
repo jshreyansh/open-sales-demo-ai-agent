@@ -134,18 +134,16 @@ export default function ContentStudio({ initialTab, onOpenStudio }: ContentStudi
 
   return (
     <div className="page">
-      <h1 className="page__title">Content Studio</h1>
-      <p className="page__subtitle">Thirty content formats across five Magic Engines — each one MLR-ready the moment it is generated.</p>
+      {/* Headline only, no supporting copy. This page is narrated live — the
+          prose underneath every heading competed with what the presenter was
+          already saying, and pushed the actual format grid below the fold. */}
+      <h1 className="page__title page__title--solo">Content Studio</h1>
 
       <div className="hero-banner">
         <div className="hero-banner__text">
           <h2>
             Get medical-grade, MLR-ready content in <span style={{ color: "var(--accent)" }}>minutes, not weeks</span>.
           </h2>
-          <p>
-            MLR readiness is an input, not a downstream check. Every asset is generated already carrying its on-label claims,
-            references, fair balance and ISI — so it enters review clean.
-          </p>
         </div>
         <div className="hero-banner__stats">
           <div>
@@ -218,15 +216,25 @@ export default function ContentStudio({ initialTab, onOpenStudio }: ContentStudi
                 <Icon name={engine.icon} size={15} />
               </span>
               <h3 className="engine-section__title">{engine.label}</h3>
-              <span className="engine-section__desc">{engine.description}</span>
+              {/* engine.description is intentionally not rendered — the cards
+                  below already say what the engine makes. It stays on the
+                  registry record for the format modal / future surfaces. */}
               {soonCount > 0 && <span className="engine-section__soon">{soonCount} coming soon</span>}
             </div>
             <div className="format-grid">
               {formats.map((f) => (
+                // A SOON format is a genuinely unbuilt one, so its card is a
+                // real `disabled` button: unclickable and out of the tab
+                // order, not just styled to look inert. This only closes the
+                // human path — the agent opens a format by calling the
+                // registered `open` handler directly (see the effect above),
+                // which never goes through a DOM click, so a scripted
+                // walkthrough can still preview an unreleased format.
                 <button
                   key={f.title}
                   data-hl={`${formatSlug(f.tool)}:open`}
-                  className="format-card"
+                  className={`format-card ${f.soon ? "format-card--soon" : ""}`}
+                  disabled={f.soon}
                   onClick={() => setSelected({ format: f, engine })}
                 >
                   <div className="format-card__head">
