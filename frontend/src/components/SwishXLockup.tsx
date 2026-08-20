@@ -1,42 +1,43 @@
 import mark from "../assets/swishx-mark.png";
-import SwishXWordmark from "./SwishXWordmark";
+import wordmark from "../assets/swishx-wordmark-white.png";
 
-// The SwishX lockup, reproduced from the brand file's own geometry.
+// The SwishX lockup for dark surfaces.
 //
-// An earlier version placed the mark and the wordmark next to each other by
-// hand with a 10px flex gap and independently chosen heights. That is not the
-// logo — it is two pieces of the logo arranged to taste, and the taste was
-// wrong: the source specifies a gap of ~60 units against a 300-unit mark, so
-// 10px beside a 26px mark was almost twice too wide, and the wordmark was set
-// a point too short. Small enough to look fine in isolation, wrong enough that
-// anyone who knows the mark would see it.
+// Two earlier attempts got this wrong in the same way: they treated the logo
+// as parts to be arranged and coloured. It isn't. On a dark ground the brand
+// is a WHITE mark with a white "swish" and an orange "X" — the supplied
+// White_SX_logo.png is exactly that, so the wordmark is now that file, used
+// as-is with no recolouring at all.
 //
-// So every dimension here is derived from Swish_X_logo_01.svg rather than
-// picked:
+// (The horizontal SVG lockup is the LIGHT-background artwork: black mark,
+// #FD4816 wordmark. Painting the whole thing orange to make it visible on
+// black was my invention, and it was wrong — orange "swish" instead of
+// white.)
 //
-//   viewBox      0 0 1358 310
-//   mark rect    x 1.9   y 4.86   w 285.2   h 300
-//   wordmark     x 347   y 50     w 1009    h 210   (measured, getBBox)
+// The mark still comes through a CSS alpha mask rather than as its own image,
+// because the only copy of it that exists standalone is black-on-transparent.
+// Masking it to #FFFFFF reproduces the white mark from the social asset
+// exactly — same shape, same colour, no reinterpretation.
 //
-// which gives a gap of 347 - 287.1 = 59.9 units, and leaves both halves
-// centred on the same axis (154.86 vs 155.0). One `height` prop drives all
-// three so the proportions can never drift again.
+// Proportions are the brand file's, not eyeballed:
+//
+//   viewBox    0 0 1358 310
+//   mark rect  x 1.9  y 4.86  w 285.2  h 300
+//   wordmark   x 347  y 50    w 1009   h 210   (measured, getBBox)
+//
+// giving a gap of 347 - 287.1 = 59.9 units against a 300-unit mark, with both
+// halves centred on the same axis. One `height` prop drives all three so the
+// spacing can't drift again — an earlier version used a hand-picked 10px gap,
+// nearly double what the artwork specifies.
 const UNIT_TOTAL = 310;
 const UNIT_MARK = 300;
 const UNIT_GAP = 59.9;
+const UNIT_WORDMARK = 210;
 
-// Colour is the brand's own #FD4816, from the same file.
-//
-// The mark ships as a black-on-transparent raster, which is invisible on this
-// product's near-black surfaces, so it is painted through its own alpha as a
-// CSS mask — the same technique SwishXMark has always used, and the only way
-// to place this mark on a dark ground at all. Hue and shape are the brand's;
-// nothing else is reinterpreted.
-const BRAND = "#fd4816";
-
-export default function SwishXLockup({ height = 26 }: { height?: number }) {
+export default function SwishXLockup({ height = 28 }: { height?: number }) {
   const markSize = (UNIT_MARK / UNIT_TOTAL) * height;
   const gap = (UNIT_GAP / UNIT_TOTAL) * height;
+  const typeHeight = (UNIT_WORDMARK / UNIT_TOTAL) * height;
 
   return (
     <span
@@ -51,7 +52,7 @@ export default function SwishXLockup({ height = 26 }: { height?: number }) {
           width: markSize,
           height: markSize,
           flexShrink: 0,
-          background: BRAND,
+          background: "#ffffff",
           WebkitMaskImage: `url(${mark})`,
           maskImage: `url(${mark})`,
           WebkitMaskSize: "contain",
@@ -62,7 +63,7 @@ export default function SwishXLockup({ height = 26 }: { height?: number }) {
           maskPosition: "center",
         }}
       />
-      <SwishXWordmark height={height} />
+      <img src={wordmark} alt="" aria-hidden="true" style={{ height: typeHeight, width: "auto", display: "block" }} />
     </span>
   );
 }
