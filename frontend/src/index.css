@@ -7011,7 +7011,10 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  color: var(--lp-text);
+  /* SwishXMark paints through var(--accent); pinning it here to the brand
+     file's own #FD4816 keeps mark and wordmark identical, and scoping it to
+     the lockup means the CTA below still uses the app's accent. */
+  --accent: #fd4816;
 }
 
 .lp__nav-links {
@@ -7089,52 +7092,42 @@ body {
   position: absolute;
   top: 14px;
   left: 14px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 11px;
-  border-radius: 8px;
-  background: rgba(9, 9, 11, 0.62);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  gap: 7px;
+  padding: 6px 11px 6px 9px;
+  border-radius: 999px;
+  /* Solid, not translucent. The old chip was a blurred grey pill on a bright
+     photo, so its own text sat at roughly 2:1 contrast — legible in theory,
+     invisible in practice. */
+  background: #0c0c0e;
+  border: 1px solid rgba(255, 255, 255, 0.14);
   font-family: "IBM Plex Mono", ui-monospace, monospace;
   font-size: 10.5px;
-  letter-spacing: 0.08em;
+  font-weight: 500;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  /* Never wrap: this sits on a fixed-width card, and a three-line "badge"
-     reads as broken rather than informative. The location drops first. */
+  color: #ffffff;
   white-space: nowrap;
-  max-width: calc(100% - 28px);
+  box-shadow: 0 4px 16px -4px rgba(0, 0, 0, 0.7);
 }
 
 .lp__dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--lp-live);
-  box-shadow: 0 0 0 0 rgba(69, 192, 138, 0.6);
-  animation: lp-pulse 2.4s ease-out infinite;
+  /* Broadcast red, not green. Green reads as a status light ("system ok");
+     red beside the word LIVE is the one signal everyone has already learned
+     means a camera is running right now. */
+  background: #ff3b30;
+  box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.7);
+  animation: lp-pulse 2s ease-out infinite;
 }
 
 @keyframes lp-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(69, 192, 138, 0.55); }
-  70% { box-shadow: 0 0 0 9px rgba(69, 192, 138, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(69, 192, 138, 0); }
-}
-
-.lp__onair-label {
-  color: var(--lp-live);
-  font-weight: 500;
-}
-
-.lp__onair-place {
-  color: rgba(245, 243, 240, 0.45);
-}
-
-.lp__onair-time {
-  color: rgba(245, 243, 240, 0.62);
-  /* Seconds tick — without this the label jitters as digit widths change. */
-  font-variant-numeric: tabular-nums;
+  0% { box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.6); }
+  70% { box-shadow: 0 0 0 8px rgba(255, 59, 48, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 59, 48, 0); }
 }
 
 .lp__plate {
@@ -7160,6 +7153,17 @@ body {
   color: rgba(245, 243, 240, 0.66);
 }
 
+/* Where she is sits with who she is. On the chip it was a third competing
+   item at 10px and nobody's eye ever reached it. */
+.lp__plate-place {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: 12px;
+  color: rgba(245, 243, 240, 0.5);
+}
+
 /* ---- copy column ---- */
 .lp__copy {
   position: relative;
@@ -7167,15 +7171,12 @@ body {
 }
 
 .lp__eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
   margin-bottom: 20px;
   font-family: "IBM Plex Mono", ui-monospace, monospace;
   font-size: 11px;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.11em;
   text-transform: uppercase;
-  color: var(--lp-live);
+  color: rgba(138, 131, 123, 0.9);
 }
 
 .lp__title {
@@ -7189,10 +7190,9 @@ body {
   text-wrap: balance;
 }
 
-/* The weight and colour break lands on the word that carries the whole
-   pitch: this demo is not a recording you sit through. */
-.lp__title em {
-  font-style: normal;
+/* The setup is quiet and the payoff is loud, rather than the other way
+   round — "when you do" is the whole proposition and it should land last. */
+.lp__title-soft {
   font-weight: 300;
   color: var(--lp-muted);
 }
@@ -7420,17 +7420,30 @@ body {
 }
 
 /* ---- narrow ---- */
+/* Below this the two columns stop fitting side by side and stack. Stacking
+   doubles the vertical demand, so the figure has to give back most of what
+   it takes on desktop — otherwise a 900x800 laptop ends up scrolling, which
+   is the one thing this layout was built to avoid. */
 @media (max-width: 900px) {
   .lp__stage {
     grid-template-columns: 1fr;
     justify-items: center;
-    gap: 30px;
-    padding-top: 24px;
+    gap: 22px;
+    padding-top: 12px;
+    padding-bottom: 12px;
   }
   .lp__figure {
     justify-self: center;
-    height: min(42vh, 380px);
+    align-self: center;
+    margin-top: 0;
+    height: min(32vh, 290px);
   }
+  .lp__title { font-size: clamp(32px, 6.4vw, 46px); }
+  .lp__sub { margin-top: 14px; font-size: 14.5px; }
+  .lp__eyebrow { margin-bottom: 14px; }
+  .lp__join { margin-top: 22px; }
+  .lp__nav { padding-top: 18px; }
+  .lp__meta { padding-bottom: 18px; }
   .lp__copy {
     text-align: center;
     max-width: 460px;

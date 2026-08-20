@@ -84,7 +84,7 @@ export default function VisitorGateForm({ visitorId, path, submitLabel, submitti
           <input
             id="gate-email"
             type="email"
-            placeholder="e.g. alex@acmepharma.com"
+            placeholder="you@company.com"
             value={email}
             onChange={(e) => {
               setEmail(e.target.value);
@@ -121,7 +121,7 @@ export default function VisitorGateForm({ visitorId, path, submitLabel, submitti
             <input
               id="gate-name"
               type="text"
-              placeholder="e.g. Alex"
+              placeholder="Your name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {
@@ -135,7 +135,7 @@ export default function VisitorGateForm({ visitorId, path, submitLabel, submitti
             <input
               id="gate-company"
               type="text"
-              placeholder="e.g. Acme Pharma"
+              placeholder="Your company"
               value={company}
               onChange={(e) => setCompany(e.target.value)}
               onKeyDown={(e) => {

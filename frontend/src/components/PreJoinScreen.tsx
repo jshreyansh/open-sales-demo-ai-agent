@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { PERSONAS } from "../lib/personas";
 import { getVisitorId, getVisitorProfile } from "../lib/session";
 import type { VisitorProfile } from "../lib/session";
+import MeetIcon from "./MeetIcons";
 import SwishXMark from "./docs/SwishXMark";
 import SwishXWordmark from "./SwishXWordmark";
 import VisitorGateForm from "./VisitorGateForm";
@@ -54,32 +55,16 @@ function usePrefersReducedMotion(): boolean {
 // scroll lane above the form was doing a lot of layout work for one card.
 // Still designed to fit one viewport with no page scroll.
 
-// Her local time, ticking.
-//
-// "Available now" is a claim; a clock whose seconds visibly move is evidence.
-// This page's whole job is to make someone believe a real conversation is one
-// click away — no calendar, no waiting on a rep — and nothing argues that as
-// cheaply as a number that changes while you read it.
-function useLiveClock(timeZone: string) {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  return new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-    timeZone,
-  }).format(now);
-}
+// The seconds-ticking clock that used to live here is gone. It was meant as
+// proof that "now" was real, but a running counter beside a face reads as a
+// stopwatch on the visitor rather than as an open line — the opposite of
+// relaxed and available. The pulsing LIVE chip carries the same claim
+// without implying anyone is being timed.
 
 export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
   const persona = AVAILABLE_PERSONAS[0];
   const [busy, setBusy] = useState(false);
   const reducedMotion = usePrefersReducedMotion();
-  const localTime = useLiveClock("America/New_York");
   const loopRef = useRef<HTMLVideoElement>(null);
   const showLoop = Boolean(persona.video) && !reducedMotion;
 
@@ -164,33 +149,40 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
           {/* Broadcast lower-third. Borrowed deliberately from live TV, which
               is the one visual language everybody already reads as "this is
               happening right now, not a recording." */}
+          {/* One word, solid ground, high contrast. The old version stacked
+              a clock and a place name into a translucent pill sitting on a
+              bright photo — three pieces of information competing at 10px,
+              none of which read. Where she is belongs with who she is, so it
+              moved down to the name plate. */}
           <div className="lp__onair">
             <span className="lp__dot" aria-hidden="true" />
-            <span className="lp__onair-label">Live</span>
-            <span className="lp__onair-time">{localTime}</span>
-            <span className="lp__onair-place">· {persona.location.split(",")[0]}</span>
+            Live
           </div>
 
           <figcaption className="lp__plate">
             <span className="lp__plate-name">{persona.name}</span>
             <span className="lp__plate-role">{persona.position}</span>
+            <span className="lp__plate-place">
+              <MeetIcon name="location" size={13} />
+              {persona.location.replace("United States", "USA")}
+            </span>
           </figcaption>
         </figure>
 
         <div className="lp__copy">
-          {/* The eyebrow states the one fact that makes this page worth
-              acting on: she is available this second, not on a calendar. */}
-          <div className="lp__eyebrow">
-            <span className="lp__dot" aria-hidden="true" />
-            Live now — no scheduling
-          </div>
+          {/* Says what this is, once. It used to repeat the LIVE chip on the
+              card, which spent two elements on one fact. */}
+          <div className="lp__eyebrow">SwishX · Live product demo</div>
+          {/* The build lands on the second line: the whole proposition is that
+              nothing has to be arranged first. */}
           <h1 className="lp__title">
-            A demo you can<br />
-            <em>interrupt.</em>
+            <span className="lp__title-soft">The demo starts</span>
+            <br />
+            when you do.
           </h1>
           <p className="lp__sub">
-            {persona.name} runs SwishX live on this screen — brand dossier to MLR-ready
-            asset. Talk over her whenever.
+            {persona.name} runs SwishX live on this screen. Ask her anything, cut in
+            whenever.
           </p>
 
           {/* The join row is the signature: it starts inside her frame and
@@ -216,8 +208,8 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
 
       <footer className="lp__meta">
         <span>10 minutes</span>
+        <span>Live voice</span>
         <span>No slides</span>
-        <span>No sales engineer</span>
       </footer>
     </div>
   );
