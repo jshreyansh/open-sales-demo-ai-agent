@@ -1219,6 +1219,25 @@ class AgentRuntimeProcessor(FrameProcessor):
         the prospect is still mid-sentence, is exactly the premature cut-in
         this whole redesign is about. _watch_pending_fragment_stall drains it
         once the room is actually quiet."""
+        # Held voice input from the IDLE path lives in a DIFFERENT buffer
+        # (_pending_fragment_text) than mid-turn barge-ins
+        # (_pending_interruption_text). This used to check only the latter,
+        # so during a walkthrough anything said in the gap between beats was
+        # invisible here: the next scripted beat fired, _bot_speaking went
+        # true, and the settle-window drain in _watch_pending_fragment_stall
+        # could never run — the quiet moment it waits for never arrived
+        # because the tour kept talking. The prospect's words sat in the
+        # buffer for the rest of the tour.
+        #
+        # This is exactly the "it answers on chat but not on voice" report:
+        # typed messages call _handle_real_turn directly and skip the window
+        # entirely, so chat looked fine while voice went unheard.
+        if self._pending_fragment_text:
+            logger.info(
+                f"[{self._visitor_id}] holding tour — voice input pending: "
+                f"{self._pending_fragment_text!r}"
+            )
+            return
         pending = self._pending_interruption_text
         if pending is not None:
             # Still mid-sentence — leave it stashed and let it keep
@@ -1706,6 +1725,13 @@ class AgentRuntimeProcessor(FrameProcessor):
         every single beat, while still actually pausing for a real question
         instead of talking over it."""
         if session.walkthrough_step is None or session.walkthrough_awaiting_answer:
+            return
+        # Never schedule a beat while the prospect has unanswered words
+        # waiting. Firing here restarts the bot speaking, which blocks the
+        # settle-window drain and strands their input (see
+        # _advance_after_turn). Belt to that braces: this covers the
+        # watchdog's own reschedule path too, not just end-of-turn.
+        if self._pending_fragment_text or self._pending_interruption_text:
             return
         # Only one continuation is ever in flight/pending at a time — a
         # fresh schedule call (from the auto-continue turn that's about to
