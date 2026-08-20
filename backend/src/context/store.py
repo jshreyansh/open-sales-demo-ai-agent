@@ -133,6 +133,13 @@ class SessionState:
     # Only the prospect clears this: a real go-ahead ("continue", "carry on"),
     # or starting/ending a walkthrough outright. No timer touches it.
     walkthrough_user_stopped: bool = False
+    # Transient, single-turn: the prospect's own words on THIS turn matched
+    # an unambiguous request for a guided tour (see runtime.py's
+    # _explicit_walkthrough_request). "full", "magicreel", "magicavatar", or
+    # None. Set by _begin_turn, consumed and cleared by _finalize_turn as a
+    # backstop for the model failing to set start_walkthrough itself. Never
+    # persisted — it describes one turn, not the session.
+    pending_walkthrough_request: Optional[str] = None
     # None means the active walkthrough (if any) runs the full 10-step
     # platform tour, ending naturally at step 10 — today's original
     # behavior, unchanged. A concrete step number means this is a

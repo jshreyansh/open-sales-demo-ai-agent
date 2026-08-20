@@ -1,6 +1,7 @@
 import glob
 import json
 import os
+import re
 import time
 from datetime import datetime
 from typing import AsyncIterator, Optional, TypedDict
@@ -992,6 +993,30 @@ def _walkthrough_note(session: SessionState) -> str:
             f'"{next_step.title}." When you advance to it, its action is: {next_action_line}. Its guidance: '
             f'{next_step.guidance}'
         )
+    elif session.walkthrough_scope_end is not None and _sub_actions_remaining(session, step):
+        # Sub-actions still pending, so this step is demonstrably NOT
+        # delivered and the wrap-up line below must not be shown yet.
+        #
+        # Session 79b6817e: a scoped MagicReel run ended after 4 of step 6's
+        # 13 sub-actions — Source and the opening of Brief — never reaching
+        # voice & language, brand & product, script, scenes or generate. The
+        # prospect noticed immediately ("You didn't even go to voice and
+        # language and brand and product tabs") and the tour was already
+        # dead by then.
+        #
+        # The cause was this branch: for a scoped run, at_scope_end is true
+        # from the very FIRST beat, so "once this step is fully delivered,
+        # wrap up and set end_walkthrough" sat in the prompt the whole time
+        # while 9 actions were still outstanding. The model took it at face
+        # value. Naming what's actually left turns a standing invitation to
+        # finish into a concrete instruction to keep going.
+        remaining = _sub_actions_remaining(session, step)
+        next_line = (
+            "This is a module-scoped walkthrough (just this one format, not the whole platform), "
+            f"and it is NOT finished: {len(remaining)} of this step's actions still haven't been "
+            f"delivered — {', '.join(remaining)}. Keep working through them in that order. Do NOT "
+            "set \"end_walkthrough\" while any remain, however complete the narration feels."
+        )
     elif session.walkthrough_scope_end is not None:
         next_line = (
             "This is a module-scoped walkthrough (just this one format, not the whole platform) — "
@@ -1377,6 +1402,17 @@ def _begin_turn(session: SessionState, message: str) -> None:
     if session.visitor_id:
         gate_log.append_transcript_turn(session.visitor_id, "user", message)
 
+    # Backstop for walkthrough activation being model-elected (see
+    # _explicit_walkthrough_request). Recorded here, applied in
+    # _finalize_turn only if the model didn't start one itself, so the
+    # model's richer context-aware path always gets first refusal.
+    session.pending_walkthrough_request = _explicit_walkthrough_request(message)
+    if session.pending_walkthrough_request and session.visitor_id:
+        logger.info(
+            f"[{session.visitor_id}] explicit "
+            f"{session.pending_walkthrough_request} walkthrough request heard: {message[:60]!r}"
+        )
+
     # Deterministic escape from a user-requested stop.
     #
     # Done HERE rather than in _finalize_turn on purpose: this function runs
@@ -1399,7 +1435,181 @@ def _begin_turn(session: SessionState, message: str) -> None:
             )
 
 
-def _finalize_turn(session: SessionState, result: AgentResult, persist: bool = True) -> AgentResult:
+# Narration that PROMISES a guided, multi-step sequence. Deliberately
+# high-precision: each pattern needs an explicit first-person offer to lead
+# the prospect through something, because the cost of a false positive here
+# is hijacking a call into a tour nobody asked for.
+_WALKTHROUGH_PROMISE = re.compile(
+    r"\b(?:"
+    r"(?:let me|let's|lets|i'll|i will|i can|i'd love to|why don't i)\s+"
+    r"(?:just\s+|quickly\s+|briefly\s+)?"
+    r"(?:walk|take|run|guide)\s+(?:you\s+)?(?:through|around)"
+    r"|walk\s+you\s+through"
+    r"|take\s+you\s+through"
+    r"|show\s+you\s+around"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Wrap-up language. "That wraps up the walkthrough — I walked you through
+# the whole platform" contains a promise pattern but is the exact opposite
+# of a promise, and auto-starting a fresh tour on it would be maddening.
+_WALKTHROUGH_RETROSPECT = re.compile(
+    r"\b(?:that (?:wraps|covers|was|completes)|we'?ve (?:covered|been through|gone through)"
+    r"|i'?ve (?:covered|shown|walked)|that'?s (?:the whole|everything|it for)"
+    r"|already (?:covered|walked|shown))\b",
+    re.IGNORECASE,
+)
+
+_MODULE_MENTIONS = (
+    ("magicreel", re.compile(r"\bmagic\s?reels?\b", re.IGNORECASE)),
+    ("magicavatar", re.compile(r"\bmagic\s?avatars?\b", re.IGNORECASE)),
+)
+
+
+# An unambiguous request from the PROSPECT for a guided tour.
+#
+# Deliberately narrow. A bare "show me X" is NOT here and must not be: "show
+# me the brand kit" is a navigation request, and a falsely started tour is
+# worse than a missed one — it hijacks the call and they have to argue their
+# way back out of it. Every pattern below needs either explicit tour
+# vocabulary ("walkthrough", "tour") or an explicit lead-me-through verb.
+# Anything vaguer is left to the model, with _promised_walkthrough as the
+# net underneath.
+_TOUR_REQUEST = re.compile(
+    r"\b(?:"
+    r"walk\s+(?:me|us)\s+(?:through|around)"
+    r"|take\s+(?:me|us)\s+(?:through|around)"
+    r"|(?:give|show)\s+(?:me|us)\s+(?:a|the|your)?\s*(?:full\s+|whole\s+|quick\s+)?"
+    r"(?:walkthrough|walk\s?through|tour|demo\s+of)"
+    r"|show\s+(?:me|us)\s+around"
+    r"|(?:start|begin)\s+the\s+(?:walkthrough|tour|demo)"
+    r"|how\s+does\s+(?:this|the)\s+\w+\s+(?:module\s+)?work"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+# Requests that are only unambiguous when they NAME a format. "show me the
+# flow of X" / "how do I make an X" is a tour request when X is MagicReel or
+# MagicAvatar, and merely a question when X is anything else — so these
+# resolve to a module or to nothing, never to a full platform tour. Starting
+# the whole 10-step tour because someone asked about one video format is the
+# hijack this whole detector is written to avoid.
+_MODULE_ONLY_REQUEST = re.compile(
+    r"\b(?:"
+    r"(?:show|walk)\s+(?:me|us)\s+(?:the\s+)?flow\s+(?:of|for)"
+    r"|(?:show|tell)\s+(?:me|us)\s+how\s+(?:to|i|you)\s+(?:make|build|create|do)"
+    r"|how\s+(?:do\s+i|to)\s+(?:make|build|create)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _explicit_walkthrough_request(text: str) -> Optional[str]:
+    """Returns "magicreel"/"magicavatar"/"full" when the prospect plainly
+    asked to be led through something, else None.
+
+    Backstop only. The model's own start_walkthrough/start_module_walkthrough
+    remains the primary path (it reads context this can't — a "yes please"
+    answering her own offer, for instance). This exists so the clearest,
+    most common phrasings can never silently fail to start anything, which
+    is what happened on session ed101f14.
+    """
+    if not text:
+        return None
+    named_module = next((n for n, pat in _MODULE_MENTIONS if pat.search(text)), None)
+    if _TOUR_REQUEST.search(text):
+        return named_module or "full"
+    if named_module and _MODULE_ONLY_REQUEST.search(text):
+        return named_module
+    return None
+
+
+# Narration that commits to CARRYING ON — the tour resuming, not starting.
+# Distinct from _WALKTHROUGH_PROMISE, which is about beginning one.
+_CONTINUE_PROMISE = re.compile(
+    r"\b(?:"
+    r"(?:i'?ll|let me|i'?m going to|i'?m gonna|i will)\s+"
+    r"(?:just\s+)?(?:keep|carry on|continue|resume|pick(?:ing)?\s+up|move|moving|go|going)"
+    r"|keep\s+(?:moving|going)\s+(?:through|with|on)"
+    r"|pick(?:ing)?\s+up\s+(?:where|from)"
+    r"|back\s+to\s+the\s+(?:tour|walkthrough|demo)"
+    r"|continu(?:e|ing)\s+(?:the\s+)?(?:tour|walkthrough|demo|from)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Things that look like a continuation promise but are the opposite.
+_CONTINUE_NEGATION = re.compile(
+    r"\b(?:i'?ll\s+(?:stop|wait|hold|leave|pause)"
+    r"|let\s+me\s+know\s+when"
+    r"|whenever\s+you'?re\s+ready"
+    r"|i'?ll\s+(?:keep|stay)\s+(?:quiet|it\s+here))\b",
+    re.IGNORECASE,
+)
+
+
+def _sub_actions_remaining(session: SessionState, step) -> list:
+    """Sub-actions of `step` that haven't fired yet this run.
+
+    Steps 6 and 7 hold one walkthrough_step value while their internal
+    wizard walks a scripted list (STEP_SUB_ACTIONS); walkthrough_fired_actions
+    is the ground truth for which of those have actually happened. Every
+    other step has no sub-list, so nothing is ever outstanding for it.
+    """
+    if step is None or step.index not in STEP_SUB_ACTIONS:
+        return []
+    return [a for a in STEP_SUB_ACTIONS[step.index] if a not in session.walkthrough_fired_actions]
+
+
+def _promised_to_continue(text: str) -> bool:
+    """True when the reply commits to carrying the walkthrough on.
+
+    Feeds the stop-latch alignment check in _finalize_turn. See there for
+    why this is safe to act on.
+    """
+    if not text or _CONTINUE_NEGATION.search(text):
+        return False
+    return bool(_CONTINUE_PROMISE.search(text))
+
+
+def _promised_walkthrough(text: str) -> Optional[str]:
+    """Returns "magicreel"/"magicavatar"/"full" if `text` promises to lead
+    the prospect through a guided sequence, else None.
+
+    This is the detector behind the contradiction guard in _finalize_turn.
+    It exists because the walkthrough's own activation was model-elected,
+    and a real session (ed101f14) proved what that costs: the model said
+    "Let me open MagicReel and walk you through it — quick, step by step"
+    and then "So the first step is Source...", while walkthrough_step stayed
+    None for all 14 turns. She narrated a tour in prose; the state machine
+    never ran. No script, no auto-continue, so every single beat needed the
+    prospect to push it forward, and every turn ended by asking permission
+    to go on — because as far as the system knew, there was nothing to
+    continue.
+
+    The disagreement between what she SAID and what the session BELIEVED is
+    mechanically detectable, which is the whole point: it catches missed
+    activations regardless of how the request was phrased, including
+    phrasings no keyword list over the prospect's words would ever cover.
+    """
+    if not text or _WALKTHROUGH_RETROSPECT.search(text):
+        return None
+    if not _WALKTHROUGH_PROMISE.search(text):
+        return None
+    for name, pattern in _MODULE_MENTIONS:
+        if pattern.search(text):
+            return name
+    return "full"
+
+
+def _finalize_turn(
+    session: SessionState,
+    result: AgentResult,
+    persist: bool = True,
+    auto_continue: bool = False,
+) -> AgentResult:
     """Shared end-of-turn bookkeeping — persisting anything the model just
     captured (prospect_name, MEDDIC fields, qualification fields) onto the
     session, updating current_page if an action fired, and logging the
@@ -1496,6 +1706,87 @@ def _finalize_turn(session: SessionState, result: AgentResult, persist: bool = T
         end_walkthrough = False
         new_step = None
 
+    # DEFAULT-ADVANCE on auto-continue turns.
+    #
+    # Step advancement had the same shape of bug the contradiction guard
+    # above exists for: _walkthrough_note computes the next step and writes
+    # it into the prompt, then waits for the model to echo it back in
+    # "walkthrough_step". Forget the field and the tour silently re-delivers
+    # the step it just did — harder to notice than a tour that never starts,
+    # because it reads as being thorough.
+    #
+    # An auto-continue turn exists for one reason: nobody said anything, and
+    # the directive was literally "narrate and act on the NEXT step now."
+    # There is no other thing this turn could be. So silence from the model
+    # means advance, and forgetting the field degrades to the correct
+    # behaviour instead of to a freeze.
+    #
+    # Scoped to auto-continue on purpose. On a prospect-initiated turn,
+    # staying put is usually right — they asked a question mid-tour and she
+    # answered it, still on the same step — so defaulting to advance there
+    # would silently SKIP steps. That failure is worse than the one being
+    # fixed, and invisible.
+    #
+    # Steps 6 and 7 are excluded: they hold one walkthrough_step value for
+    # 10+ turns while their internal wizard walks its own sub-actions (see
+    # STEP_SUB_ACTIONS / walkthrough_fired_actions). Advancing them per turn
+    # would blow straight through the wizard.
+    if (
+        auto_continue
+        and new_step is None
+        and prev_walkthrough_step is not None
+        and prev_walkthrough_step not in (6, 7)
+        and not end_walkthrough
+        and not start_walkthrough
+        and not start_module_walkthrough
+        and not session.walkthrough_awaiting_answer
+        and not session.walkthrough_user_stopped
+    ):
+        if WALKTHROUGH_STEPS_BY_INDEX.get(prev_walkthrough_step + 1) is None:
+            # Ran off the end of the script — that's the tour finishing,
+            # same as the model setting end_walkthrough itself.
+            end_walkthrough = True
+            logger.info(
+                f"[{session.visitor_id}] auto-continue past final step "
+                f"{prev_walkthrough_step} — ending the walkthrough"
+            )
+        else:
+            new_step = prev_walkthrough_step + 1
+            logger.info(
+                f"[{session.visitor_id}] auto-continue turn didn't set walkthrough_step — "
+                f"advancing {prev_walkthrough_step} -> {new_step} by default"
+            )
+
+    # PREMATURE-END GUARD — an auto-continue turn may not end a step that
+    # still has unfired sub-actions.
+    #
+    # Scoped to auto-continue deliberately, on the same reasoning as
+    # default-advance above: an auto-continue turn happens when NOBODY said
+    # anything, so there is no prospect request to finish, and ending early
+    # can only be the model misjudging its own completeness. On a real
+    # prospect turn the end stands — "that's enough, stop the tour" has to
+    # work instantly, and trapping someone inside a walkthrough they asked
+    # to leave would be far worse than the bug this prevents.
+    #
+    # Session 79b6817e is the case: an auto-continue beat set
+    # end_walkthrough after 4 of step 6's 13 sub-actions, killing a scoped
+    # MagicReel run before voice & language, brand & product, script,
+    # scenes or generate were ever shown. Everything after that read as the
+    # agent going mute for no reason — including her own confabulated
+    # explanation ("no actual reason, I just paused to check you were
+    # following"), because nothing told her the tour had ended.
+    if end_walkthrough and auto_continue and prev_walkthrough_step is not None:
+        step_obj = WALKTHROUGH_STEPS_BY_INDEX.get(prev_walkthrough_step)
+        remaining = _sub_actions_remaining(session, step_obj)
+        if remaining:
+            logger.warning(
+                f"[{session.visitor_id}] auto-continue tried to END the walkthrough at step "
+                f"{prev_walkthrough_step} with {len(remaining)} sub-actions still undelivered "
+                f"({', '.join(remaining[:4])}{'...' if len(remaining) > 4 else ''}) — refusing, "
+                f"the tour continues"
+            )
+            end_walkthrough = False
+
     if end_walkthrough:
         session.walkthrough_step = None
         session.walkthrough_scope_end = None
@@ -1552,6 +1843,113 @@ def _finalize_turn(session: SessionState, result: AgentResult, persist: bool = T
             logger.warning(
                 f"[{session.visitor_id}] ignoring walkthrough_step={new_step!r} — no active scripted "
                 "walkthrough and start_walkthrough wasn't set this turn, likely ad hoc wizard narration"
+            )
+
+    # Apply the deterministic request backstop (recorded by _begin_turn)
+    # only if nothing else already started a walkthrough this turn. Cleared
+    # unconditionally — it describes this one turn.
+    requested = session.pending_walkthrough_request
+    session.pending_walkthrough_request = None
+    if requested and session.walkthrough_step is None and not end_walkthrough:
+        if session.walkthrough_user_stopped:
+            # They stopped the tour earlier and have now asked for one out
+            # loud. That's a deliberate reversal by the only party allowed
+            # to make it, so it lifts the stop — the opposite of the
+            # contradiction guard below, where SHE drifts back into tour
+            # language on her own and must not be allowed to override them.
+            session.walkthrough_user_stopped = False
+            logger.info(
+                f"[{session.visitor_id}] explicit walkthrough request lifts the earlier stop"
+            )
+        if requested == "full":
+            session.walkthrough_step = 1
+            session.walkthrough_scope_end = None
+        else:
+            entry = {"magicreel": 6, "magicavatar": 7}[requested]
+            session.walkthrough_step = entry
+            session.walkthrough_scope_end = entry
+        session.walkthrough_awaiting_answer = False
+        logger.warning(
+            f"[{session.visitor_id}] prospect explicitly asked for a {requested} walkthrough but "
+            f"the model never started one — starting at step {session.walkthrough_step}"
+        )
+
+    # STOP-LATCH ALIGNMENT — the reply promised to carry on, but the tour
+    # is still latched off by an earlier stop.
+    #
+    # walkthrough_user_stopped is deliberately absolute: no timer, no
+    # ceiling, no watchdog lifts it, because a real person asked for quiet
+    # (see SessionState.walkthrough_user_stopped and
+    # _watch_auto_continue_stall, which skips outright while it's set).
+    # That is right, and it stays. What was missing is that SHE can agree to
+    # resume without the latch hearing about it.
+    #
+    # Session 79b6817e: the prospect said "Okay. Okay. Stop. I understood."
+    # (latch on, correctly). A few turns later they said "I want you to
+    # continuously do it, without telling a word" and she answered "Got it —
+    # I'll keep moving through the steps without narrating each one." The
+    # latch was still on. Nothing scheduled a beat, the stall watchdog
+    # skipped on user_stopped, and the call sat in dead air for 31 seconds
+    # until the prospect asked "What's up?".
+    #
+    # Safe to lift here, and specifically here, because while the latch is
+    # down NOTHING speaks on its own initiative — the scheduler returns
+    # early on walkthrough_user_stopped and the watchdog continues past it,
+    # so no auto-continue turn can exist. Every reply produced in this state
+    # is therefore a direct response to something the prospect just said. A
+    # promise to carry on, made in that position, is by construction her
+    # agreeing to a request they just made. That is the opposite of the
+    # guard below, where she can drift into tour language unprompted and
+    # must NOT be allowed to override them.
+    if session.walkthrough_user_stopped and _promised_to_continue(result.get("reply") or ""):
+        session.walkthrough_user_stopped = False
+        logger.warning(
+            f"[{session.visitor_id}] reply promised to continue while the tour was still "
+            f"stopped — lifting the stop so the promise is actually kept"
+        )
+
+    # CONTRADICTION GUARD — the reply promised a guided tour but no
+    # walkthrough is active.
+    #
+    # Activation used to be purely model-elected, and session ed101f14
+    # showed exactly how that fails: she said "Let me open MagicReel and
+    # walk you through it — quick, step by step", then narrated step one,
+    # while walkthrough_step stayed None for all 14 turns. The state machine
+    # never ran, so there was no script and no auto-continue, and every beat
+    # needed the prospect to push it along. To them it read as an assistant
+    # asking permission after every sentence.
+    #
+    # Rather than trying to catch every phrasing a prospect might use to
+    # ASK for a tour (an unwinnable list — see _explicit_walkthrough_request
+    # for the deliberately narrow version of that), this catches the
+    # disagreement on the way out: what she just committed to out loud
+    # versus what the session believes. Any missed activation lands here no
+    # matter how it was requested.
+    #
+    # Auto-start rather than regenerate the turn. What she said is fine —
+    # it's the state that's wrong — and a regeneration would cost a whole
+    # turn of latency on a call already fighting for every 100ms.
+    if session.walkthrough_step is None and not end_walkthrough:
+        promised = _promised_walkthrough(result.get("reply") or "")
+        if promised and session.walkthrough_user_stopped:
+            # A human said stop. Her drifting back into tour language does
+            # not undo that — only they can (see _is_explicit_resume).
+            logger.info(
+                f"[{session.visitor_id}] reply promised a walkthrough but the prospect "
+                f"stopped it earlier — not auto-starting"
+            )
+        elif promised:
+            if promised == "full":
+                session.walkthrough_step = 1
+                session.walkthrough_scope_end = None
+            else:
+                entry = {"magicreel": 6, "magicavatar": 7}[promised]
+                session.walkthrough_step = entry
+                session.walkthrough_scope_end = entry
+            session.walkthrough_awaiting_answer = False
+            logger.warning(
+                f"[{session.visitor_id}] CONTRADICTION: reply promised a {promised} walkthrough "
+                f"but none was active — auto-starting at step {session.walkthrough_step}"
             )
 
     # Ground truth for "has start-generation already fired for the CURRENT
@@ -2204,7 +2602,7 @@ async def run_walkthrough_continuation(session: SessionState, persist: bool = Tr
                 else:
                     yield event
             if result is not None:
-                final = _finalize_turn(session, result, persist=persist)
+                final = _finalize_turn(session, result, persist=persist, auto_continue=True)
                 if reply_fully_streamed:
                     yield ("done_streamed", final)
                 else:
@@ -2217,7 +2615,7 @@ async def run_walkthrough_continuation(session: SessionState, persist: bool = Tr
         try:
             result = _select_with_claude("", session, user_content=_WALKTHROUGH_CONTINUE_DIRECTIVE)
             result = await _maybe_backfill_reply(result, session)
-            yield ("done_fallback", _finalize_turn(session, result, persist=persist))
+            yield ("done_fallback", _finalize_turn(session, result, persist=persist, auto_continue=True))
             return
         except Exception:
             logger.exception("Walkthrough auto-continue LLM call failed entirely — skipping this continuation cycle")

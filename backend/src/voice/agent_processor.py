@@ -117,7 +117,14 @@ PENDING_FRAGMENT_STALL_GRACE_SECS = 4.0
 # that session it made the prospect repeat himself, which then tripped the
 # "still catching up" recovery. Deliberately shorter than the stall grace so
 # it lands DURING the hold rather than replacing it.
-FRAGMENT_BACKCHANNEL_AFTER_SECS = 1.5
+# Raised 1.5 -> 2.6 as part of cutting the filler rate.
+#
+# At 1.5s this fired on ordinary mid-thought pauses, on top of the
+# per-turn filler, which is how a real call ended up 32% filler. It only
+# earns its place on a genuinely long hold — where silence would read as
+# "she isn't listening" — not on every breath. Sits above the base
+# consolidation window so a normal fragment hold passes in silence.
+FRAGMENT_BACKCHANNEL_AFTER_SECS = 2.6
 
 # Spoken once per held fragment while waiting — the conversational equivalent
 # of a nod. Short on purpose: this must not read as the agent taking the
@@ -201,6 +208,24 @@ MIN_REAL_INTERRUPTION_SECS = 0.6
 CONSOLIDATION_SETTLE_BASE_SECS = 1.5
 CONSOLIDATION_SETTLE_STEP_SECS = 0.45
 CONSOLIDATION_SETTLE_MAX_SECS = 2.6
+
+# How long a gap must be before a new fragment counts as a genuine PAUSE
+# rather than a breath inside one sentence.
+#
+# The adaptive window grows because someone who paused-and-continued is
+# telling you they're mid-thought. That inference is only valid if a
+# "fragment" means a considered pause. It stopped being valid the moment
+# VAD stop_secs dropped from 1.0 to 0.3: an ordinary sentence started
+# producing four fragments, the window grew 1.5 -> 2.6s inside a single
+# utterance, and the clock restarted on every breath. Measured median went
+# 4.0s -> 7.6s — worse than before any of this.
+#
+# So the growth now keys off the actual gap between fragments, not off how
+# often VAD happens to segment. That makes the window a function of human
+# behaviour rather than of a tuning constant one layer down, which is what
+# it always should have been — a fragment arriving 200ms after the last one
+# is the same breath, however VAD chose to cut it.
+FRAGMENT_PAUSE_MIN_GAP_SECS = 0.8
 
 
 # Hard ceiling on how long a walkthrough pause may last before the tour
@@ -600,6 +625,17 @@ class AgentRuntimeProcessor(FrameProcessor):
         # Drives the adaptive settle window (see the constants above) and
         # resets to 0 every time something is actually answered.
         self._burst_fragments = 0
+        # Consecutive turns that opened with a spoken filler.
+        #
+        # Fillers cover LLM latency, but nothing counted how often they
+        # fired. A real call came back with 39 of 121 spoken chunks being
+        # "Hmm" / "Mm-hm" / "Let me think" — 32% of everything she said,
+        # and the prospect noticed unprompted. Any one is defensible; one
+        # in three is a verbal tic. Worse, TWO systems emit them
+        # independently (this, and the backchannel in
+        # _watch_pending_fragment_stall), so the total was larger than
+        # either author intended and neither could see it.
+        self._consecutive_fillers = 0
         # The tail of the reply the prospect never heard, captured when a
         # turn ends interrupted. Spoken on false-interruption recovery.
         self._unspoken_remainder: Optional[str] = None
@@ -719,7 +755,7 @@ class AgentRuntimeProcessor(FrameProcessor):
             )
             self._pending_interruption_text = combined
             self._pending_interruption_source = "voice"
-            self._burst_fragments += 1
+            self._note_fragment_gap()
             # Real words arrived — the barge-in was genuine, so cancel the
             # false-positive recovery and drop the unheard tail. Resuming an
             # explanation the prospect deliberately cut off is worse than
@@ -925,10 +961,10 @@ class AgentRuntimeProcessor(FrameProcessor):
         self._unspoken_remainder = None
         combined = f"{self._pending_fragment_text} {text}".strip() if self._pending_fragment_text else text
         if self._last_turn_incomplete and not _is_fast_track_affirmation(combined):
+            self._note_fragment_gap()
             self._pending_fragment_text = combined
             self._last_fragment_activity = time.monotonic()
             self._fragment_backchannel_sent = False
-            self._burst_fragments += 1
             logger.info(f"[{self._visitor_id}] holding incomplete fragment: {combined!r}")
             return
         if self._last_turn_incomplete:
@@ -954,10 +990,10 @@ class AgentRuntimeProcessor(FrameProcessor):
         # has actually been quiet for the adaptive settle window. Found by
         # the stress harness, which drove six fragments through the real
         # idle path and got six answers back.
+        self._note_fragment_gap()
         self._pending_fragment_text = combined
         self._last_fragment_activity = time.monotonic()
         self._fragment_backchannel_sent = False
-        self._burst_fragments += 1
         logger.info(
             f"[{self._visitor_id}] holding fragment {self._burst_fragments} "
             f"(window now {self._settle_window():.1f}s): {combined!r}"
@@ -1146,8 +1182,16 @@ class AgentRuntimeProcessor(FrameProcessor):
         self._begin_spoken_tracking()
 
         try:
-            filler = self._pick_filler(text)
-            await self._speak(filler, direction)
+            # Rationed: at most one filler, then a turn without. Two or
+            # three in a row is what turns "thinking" into a stammer. The
+            # backchannel path emits sounds too, so unrationed they stack.
+            if self._consecutive_fillers < 1:
+                self._consecutive_fillers += 1
+                filler = self._pick_filler(text)
+                await self._speak(filler, direction)
+            else:
+                self._consecutive_fillers = 0
+                logger.info(f"[{self._visitor_id}] filler skipped (rationed)")
 
             try:
                 result, already_spoken = await self._consume_turn_stream(run_turn_stream(text, session), direction)
@@ -1304,6 +1348,25 @@ class AgentRuntimeProcessor(FrameProcessor):
         await self.push_frame(LLMFullResponseStartFrame(), direction)
         await self.push_frame(TextFrame(text), direction)
         await self.push_frame(LLMFullResponseEndFrame(), direction)
+
+    def _note_fragment_gap(self) -> None:
+        """Grow the settle window only when a REAL pause preceded this
+        fragment.
+
+        A fragment landing a fraction of a second after the previous one is
+        the same breath, whatever VAD decided; treating it as evidence of
+        "they're mid-thought, wait longer" is what made an ordinary sentence
+        stretch the window to its 2.6s ceiling and pushed median latency
+        from 4.0s to 7.6s. See FRAGMENT_PAUSE_MIN_GAP_SECS.
+        """
+        gap = time.monotonic() - self._last_fragment_activity
+        if self._burst_fragments == 0 or gap >= FRAGMENT_PAUSE_MIN_GAP_SECS:
+            self._burst_fragments += 1
+        else:
+            logger.debug(
+                f"[{self._visitor_id}] fragment {gap:.2f}s after the last — same breath, "
+                f"window held at {self._settle_window():.1f}s"
+            )
 
     def _settle_window(self) -> float:
         """How long the room must stay quiet before answering, given how
@@ -1838,8 +1901,34 @@ class AgentRuntimeProcessor(FrameProcessor):
                     continue
                 if time.monotonic() - self._last_activity < AUTO_CONTINUE_STALL_GRACE_SECS:
                     continue
-                logger.warning(f"[{self._visitor_id}] auto-continue chain stalled at step {session.walkthrough_step}, self-healing")
+                # _maybe_schedule_auto_continue has its own guards and can
+                # decline — most often because a fragment is still parked in
+                # one of the pending buffers. When it declines there is
+                # nothing scheduled and nothing healed, so say which it was.
+                # The old unconditional "self-healing" line claimed success
+                # either way, and reading six of them in five seconds during
+                # a real dead-air incident told me the heal was retrying
+                # when in fact it was refusing every time. A watchdog that
+                # misreports is worse than no watchdog.
                 self._maybe_schedule_auto_continue(session, FrameDirection.DOWNSTREAM)
+                if self._pending_auto_continue is not None:
+                    logger.warning(
+                        f"[{self._visitor_id}] auto-continue chain stalled at step "
+                        f"{session.walkthrough_step} — rescheduled"
+                    )
+                else:
+                    blocker = (
+                        "pending fragment" if self._pending_fragment_text
+                        else "pending interruption" if self._pending_interruption_text
+                        else "awaiting answer" if session.walkthrough_awaiting_answer
+                        else "user stopped" if session.walkthrough_user_stopped
+                        else "unknown"
+                    )
+                    logger.warning(
+                        f"[{self._visitor_id}] auto-continue chain stalled at step "
+                        f"{session.walkthrough_step} and could NOT be rescheduled "
+                        f"(blocked by: {blocker}) — the tour is silent until this clears"
+                    )
         except asyncio.CancelledError:
             pass
 

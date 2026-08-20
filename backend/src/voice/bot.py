@@ -41,6 +41,7 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
 from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
+from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.groq.stt import GroqSTTService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
@@ -253,15 +254,6 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     # stage, audio flows through the pipeline but STT never fires — which is
     # exactly what happened before this was added.
     #
-    # stop_secs defaults to 0.2 — short enough that a normal mid-sentence
-    # pause reads as "stopped speaking," chopping one utterance into several
-    # segments each sent to the agent as an independent message. 1.0 gives
-    # more room than the original 0.8 for a natural breath (or a second
-    # voice chiming in) to land inside the same segment instead of becoming
-    # its own separate transcript — see AgentRuntimeProcessor's turn-lock,
-    # which is the other half of handling overlapping speech; this just
-    # reduces how often it needs to kick in.
-    #
     # start_secs defaults to 0.2 — how long a real barge-in has to wait
     # before VAD will even declare "user started speaking" at all. Measured
     # on a real interrupted call: once VAD fires, broadcast_interruption
@@ -272,7 +264,43 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     # the debounce against false-triggering on a breath/cough/mic bleed —
     # the exact false-VAD problem this pipeline already fought once. Re-test
     # for false positives before trimming further.
-    vad = VADProcessor(vad_analyzer=SileroVADAnalyzer(params=VADParams(start_secs=0.12, stop_secs=1.0)))
+    # stop_secs 1.0 -> 0.3.
+    #
+    # This was 1.0 for a good reason at the time: without it, a natural
+    # breath split one sentence into several transcripts, each answered
+    # separately. That reason is gone. The consolidation window in
+    # agent_processor.py now accumulates fragments and answers once, so
+    # fragmentation is handled a layer up — and holding VAD at 1.0s on top
+    # of it means the SAME SILENCE IS COUNTED TWICE:
+    #
+    #   1.0s (VAD decides speech ended) + 1.5s (consolidation decides the
+    #   thought ended) = 2.5s of real silence before she says anything.
+    #
+    # The consolidation window is the honest "are they finished" timer —
+    # it measures human pause length. VAD's only remaining jobs are
+    # detecting barge-in (start_secs, untouched) and telling Deepgram when
+    # to Finalize. Both want VAD to notice quickly, not slowly.
+    #
+    # 0.3 rather than 0.0: still enough to debounce a clipped word, and it
+    # keeps the Finalize signal from firing mid-sentence on every pause.
+    #
+    # Dropping it did NOT go cleanly the first time, and the reason is worth
+    # keeping. Lowering stop_secs silently changed what the word "fragment"
+    # meant one layer up: the consolidation window grew itself on each
+    # fragment on the theory that a fragment implied a deliberate pause, and
+    # at 0.3 a fragment became a breath instead. One ordinary sentence then
+    # produced four of them, drove the window to its 2.6s ceiling, and
+    # restarted the clock on every breath — measured median went 4.0s to
+    # 7.6s, worse than the 1.0 it replaced.
+    #
+    # The fix was not to put stop_secs back. It was to make that window key
+    # off the measured gap between fragments (FRAGMENT_PAUSE_MIN_GAP_SECS in
+    # agent_processor.py) so it responds to how the human actually paused
+    # rather than to how VAD happened to segment. Both layers are now free
+    # to be tuned independently, which is what the split was supposed to buy
+    # in the first place — so if you retune this number, that invariant is
+    # the one to re-check.
+    vad = VADProcessor(vad_analyzer=SileroVADAnalyzer(params=VADParams(start_secs=0.12, stop_secs=0.3)))
     # `prompt` is Whisper's standard vocabulary-biasing hint — it doesn't
     # force these words, just nudges ambiguous audio toward them. Added
     # after a real call transcribed "give me a walkthrough" as "give me a
@@ -280,10 +308,83 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     # plausible word in this domain. Kept short and product-specific rather
     # than a long list, since Whisper's prompt has real diminishing returns
     # (and a hard length cap) past a short, high-value set.
-    stt = GroqSTTService(
-        api_key=os.getenv("GROQ_API_KEY"),
-        prompt="SwishX, walkthrough, MagicReel, MagicAvatar, Content Studio, MLR, dossier",
-    )
+    # Words the demo depends on and that generic models reliably mangle.
+    # Real transcripts from Groq: "magic real lot" (MagicReel), "ContentIQ,
+    # Ss.", "What do you do Shifiona?" — a prospect hearing the agent
+    # confidently misname its own product is a credibility problem, not a
+    # cosmetic one.
+    STT_KEYTERMS = [
+        "SwishX", "MagicReel", "MagicAvatar", "MagicChart", "Content Studio",
+        "MLR", "dossier", "HCP", "Fiona", "Tecentriq", "walkthrough",
+    ]
+
+    # Deepgram by default, Groq as the escape hatch.
+    #
+    # These are architecturally different, not interchangeable: Groq's is a
+    # SegmentedSTTService (buffers audio, transcribes once VAD declares the
+    # segment over) while Deepgram's is a live streaming service that does
+    # its own endpointing. Everything in AgentRuntimeProcessor keys off WHEN
+    # a finalized transcript arrives, so the swap is a real change to turn
+    # timing, not a drop-in.
+    #
+    # The division of labour that makes it safe: Deepgram decides WHAT WORDS
+    # were said; this pipeline keeps deciding WHEN TO RESPOND. Deepgram is
+    # configured to finalize eagerly (short endpointing) and the
+    # consolidation window in agent_processor.py accumulates whatever
+    # fragments result and answers once. More, earlier fragments are exactly
+    # what that window was built for, so Deepgram's endpointing never
+    # competes with Smart Turn.
+    #
+    # interim_results stays off: only finalized TranscriptionFrames drive a
+    # turn here, and emitting interims would add frames the pipeline
+    # deliberately ignores.
+    #
+    # STT_PROVIDER=groq reverts instantly with no code change — this is a
+    # paid dependency on a live demo, so a billing lapse or an outage should
+    # be one env var away from working, not a redeploy.
+    _stt_provider = (os.getenv("STT_PROVIDER") or "deepgram").strip().lower()
+    _deepgram_key = os.getenv("DEEPGRAM_API_KEY")
+    if _stt_provider == "deepgram" and _deepgram_key:
+        stt = DeepgramSTTService(
+            api_key=_deepgram_key,
+            settings=DeepgramSTTService.Settings(
+                model="nova-3",
+                language="en",
+                smart_format=True,
+                punctuate=True,
+                # ON, deliberately. This was False in the first pass, which
+                # was backwards: utterance_end_ms REQUIRES interim results
+                # (Deepgram's docs are explicit), and interim decoding is
+                # what lets Deepgram commit a final the instant speech ends
+                # rather than starting work then. The pipeline still only
+                # ACTS on finalized TranscriptionFrames — InterimTranscription
+                # frames are ignored downstream — so this costs nothing here
+                # and unlocks the two signals below.
+                interim_results=True,
+                # nova-3 keyterm prompting — biases decoding toward these
+                # exact strings.
+                keyterm=STT_KEYTERMS,
+                # speech_final fires on a detected pause (tens-to-hundreds of
+                # ms). Cheap and fast.
+                endpointing=300,
+                # UtteranceEnd is the safety net speech_final doesn't give
+                # you: it works off word TIMINGS rather than volume, so it
+                # still fires in a noisy room where a silence-based endpoint
+                # never triggers. Deepgram documents exactly this failure
+                # mode, and a noisy room is the normal case for a live demo.
+                utterance_end_ms=1000,
+            ),
+        )
+        logger.info(f"STT: deepgram nova-3 ({len(STT_KEYTERMS)} keyterms)")
+    else:
+        stt = GroqSTTService(
+            api_key=os.getenv("GROQ_API_KEY"),
+            prompt=", ".join(STT_KEYTERMS),
+        )
+        logger.info(
+            "STT: groq whisper"
+            + ("" if _stt_provider == "groq" else " (deepgram key missing — fell back)")
+        )
     tts = CartesiaTTSService(
         api_key=os.getenv("CARTESIA_API_KEY"),
         settings=CartesiaTTSService.Settings(
