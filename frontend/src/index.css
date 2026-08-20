@@ -7007,15 +7007,8 @@ body {
   padding: 26px clamp(20px, 5vw, 64px) 0;
 }
 
-.lp__brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  /* SwishXMark paints through var(--accent); pinning it here to the brand
-     file's own #FD4816 keeps mark and wordmark identical, and scoping it to
-     the lockup means the CTA below still uses the app's accent. */
-  --accent: #fd4816;
-}
+/* The lockup carries its own colour and spacing (see SwishXLockup) — nothing
+   for the page to say about it, which is the point. */
 
 .lp__nav-links {
   display: flex;

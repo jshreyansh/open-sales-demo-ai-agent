@@ -17,11 +17,16 @@
 // not eyeballed from the source coordinates — the first attempt guessed and
 // sliced the S in half), so the component's box is the type itself with no
 // leading gap where the mark used to sit.
+// `height` is the LOCKUP's height, not the wordmark's — the wordmark occupies
+// 210 of the lockup's 310 units, and deriving it here keeps callers from
+// having to know that ratio (getting it wrong by a point is exactly how the
+// first version drifted).
 export default function SwishXWordmark({ height = 20 }: { height?: number }) {
+  const typeHeight = (210 / 310) * height;
   return (
     <svg
       viewBox="342 45 1019 220"
-      height={height}
+      height={typeHeight}
       role="img"
       aria-label="SwishX"
       fill="#FD4816"

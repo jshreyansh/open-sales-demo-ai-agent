@@ -3,8 +3,7 @@ import { PERSONAS } from "../lib/personas";
 import { getVisitorId, getVisitorProfile } from "../lib/session";
 import type { VisitorProfile } from "../lib/session";
 import MeetIcon from "./MeetIcons";
-import SwishXMark from "./docs/SwishXMark";
-import SwishXWordmark from "./SwishXWordmark";
+import SwishXLockup from "./SwishXLockup";
 import VisitorGateForm from "./VisitorGateForm";
 
 interface PreJoinScreenProps {
@@ -115,10 +114,7 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
       <div className="lp__glow" aria-hidden="true" />
 
       <header className="lp__nav">
-        <div className="lp__brand">
-          <SwishXMark size={26} />
-          <SwishXWordmark height={17} />
-        </div>
+        <SwishXLockup height={28} />
         {/* The two other ways into the product. Demoted to nav on purpose:
             they are real destinations, but this page has one job. */}
         <nav className="lp__nav-links">
