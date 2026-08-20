@@ -1,6 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { PipecatClientAudio, PipecatClientProvider } from "@pipecat-ai/client-react";
-import Landing from "./pages/Landing";
 import DashboardRoute from "./pages/DashboardRoute";
 import MeetRoute from "./pages/MeetRoute";
 import AdminLayout from "./pages/admin/AdminLayout";
@@ -19,9 +18,17 @@ export default function App() {
           without this, voice replies are received but never played back. */}
       <PipecatClientAudio />
       <Routes>
-        <Route path="/" element={<Landing />} />
+        {/* The live demo IS the front door. There used to be a chooser at
+            "/" whose only job was routing to one of these, which meant an
+            extra click and an extra page between arriving and joining a
+            call — the one thing this whole product exists to do. Its two
+            secondary options now sit on the pre-join screen itself, so
+            nothing was lost by dissolving it. */}
+        <Route path="/" element={<MeetRoute />} />
         <Route path="/demo/dashboard" element={<DashboardRoute />} />
-        <Route path="/demo/meet" element={<MeetRoute />} />
+        {/* Kept as a redirect, not deleted: this URL has been shared and
+            bookmarked, and is what production has been serving. */}
+        <Route path="/demo/meet" element={<Navigate to="/" replace />} />
         {/* Public, no visitor gate — reachable directly, and crawlable.
             /docs is the Knowledge Base hub; /docs/api/* is the ported API
             reference content (a future /docs/product/* section is where

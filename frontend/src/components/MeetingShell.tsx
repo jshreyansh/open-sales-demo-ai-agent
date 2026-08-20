@@ -334,6 +334,14 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
     }
     if (wasConnected.current) {
       wasConnected.current = false;
+      // Back to the pre-join screen explicitly.
+      //
+      // This used to happen by accident: onLeave() navigated /demo/meet ->
+      // /, the route changed, this component unmounted, and `joined` went
+      // with it. Since / became this very route, that navigation is a
+      // no-op and nothing remounts — so without resetting here, hanging up
+      // left the visitor staring at a dead call they couldn't leave.
+      setJoined(false);
       onLeave();
     }
   }, [voiceConnected, onLeave]);
@@ -672,7 +680,15 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
         )}
         </div>
 
-        <button className="meet__ctrl meet__ctrl--hangup" onClick={onLeave}>
+        <button
+          className="meet__ctrl meet__ctrl--hangup"
+          onClick={() => {
+            // Same reasoning as the disconnect effect above — the route no
+            // longer changes underneath us, so the reset has to be explicit.
+            setJoined(false);
+            onLeave();
+          }}
+        >
           <MeetIcon name="hangup" />
         </button>
         </div>

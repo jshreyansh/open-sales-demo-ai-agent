@@ -186,6 +186,26 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
                 Schedule for later
               </button>
             </div>
+
+            {/* The other two ways into the product. These used to live on a
+                separate chooser page at "/" whose only job was routing —
+                it put a page and a click between arriving and joining a
+                call, which is the single thing this product exists to do.
+                That page is gone; these come with it, sitting below the
+                join flow so the hierarchy still reads primary-then-side-door.
+
+                Plain <a> rather than navigate(): /docs and /demo/dashboard
+                are separate destinations a visitor may well want to open in
+                a new tab, and an anchor gets middle-click, cmd-click and
+                "copy link" for free. */}
+            <div className="prejoin__alt">
+              <a className="prejoin__alt-btn" href="/demo/dashboard">
+                Try &amp; Use Demo Platform
+              </a>
+              <a className="prejoin__alt-btn" href="/docs">
+                Platform Documentation
+              </a>
+            </div>
           </div>
         </div>
       </div>
