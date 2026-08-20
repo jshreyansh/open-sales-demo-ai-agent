@@ -114,7 +114,7 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
       <div className="lp__glow" aria-hidden="true" />
 
       <header className="lp__nav">
-        <SwishXLockup height={28} />
+        <SwishXLockup height={22} />
         {/* The two other ways into the product. Demoted to nav on purpose:
             they are real destinations, but this page has one job. */}
         <nav className="lp__nav-links">
