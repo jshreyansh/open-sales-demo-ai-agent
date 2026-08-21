@@ -92,6 +92,15 @@ class TurnTelemetry:
     # interruption, which is normal conversation. Calling this `false_cutoff`
     # would assert something we cannot know without ground truth.
     early_commit_followup: bool = False
+    # Session-cumulative, not per-turn. VAD starts that never produced a
+    # transcript are the answer to "why does it think I'm talking when I'm
+    # not" — and, because _user_speaking gates the release, to "why won't it
+    # answer until I mute".
+    vad_starts: int = 0
+    vad_starts_without_speech: int = 0
+    fragmentation_events: int = 0
+    # What the adaptive window actually resolved to for this turn.
+    commit_window_ms: Optional[int] = None
 
     _emitted: bool = field(default=False, repr=False)
 

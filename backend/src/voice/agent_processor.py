@@ -273,6 +273,34 @@ FALSE_INTERRUPTION_GRACE_AFTER_SILENCE_SECS = 2.5
 MIN_REAL_INTERRUPTION_SECS = 0.6
 
 
+# A passive acknowledgement: they are listening and not asking for anything.
+# Crucially this is NEITHER permission to continue NOR a bid for the floor, so
+# it must leave the beat budget exactly where it is.
+#
+# Session 5e1732cb-with-fix showed why: the budget grew 2 -> 4 twice, and both
+# times the very next "Okay." knocked it straight back to 2, so the cap fired
+# at 2/2 six times anyway. Treating a nod as "the prospect took control" is
+# what made the growth useless.
+_ACKNOWLEDGEMENTS = re.compile(
+    r"^(?:\W*(?:okay|ok|yeah|yep|yup|yes|sure|right|got\s*it|mm+\W*hm+|"
+    r"uh\W*huh|fine|cool|nice|great|good|thanks|thank\s*you|no|nope|nah|"
+    r"alright|understood|makes\s*sense)\W*)+$",
+    re.I,
+)
+
+
+def _is_acknowledgement(text: str) -> bool:
+    """True for "Okay.", "Got it.", "Yeah sure." and nothing more.
+
+    Deliberately anchored end-to-end: the whole utterance must be nothing but
+    acknowledgement tokens. "Okay, but show me MLR" is a redirect and has to
+    fall through to the reset branch."""
+    t = (text or "").strip()
+    if not t or "?" in t:
+        return False
+    return bool(_ACKNOWLEDGEMENTS.match(t))
+
+
 # How long the room must stay genuinely quiet before anything the prospect
 # said gets answered.
 #
@@ -312,6 +340,62 @@ MIN_REAL_INTERRUPTION_SECS = 0.6
 CONSOLIDATION_SETTLE_BASE_SECS = 1.5
 CONSOLIDATION_SETTLE_STEP_SECS = 0.45
 CONSOLIDATION_SETTLE_MAX_SECS = 2.6
+
+
+# ---------------------------------------------------------------------------
+# PHASE 2: adaptive commit window. Built, wired, and OFF.
+# ---------------------------------------------------------------------------
+#
+# Turn commit is the single biggest latency we own: measured p50 1,680ms and
+# p95 8,632ms across three production calls, against an industry target of
+# 150-300ms. Smart Turn v3 answers "is this a finished thought?" in ~65ms and
+# we then start a 1.5-2.6s stopwatch anyway, which is the whole problem.
+#
+# But session 5e1732cb showed why a flat 600ms would be WORSE, not better, for
+# some speakers. One thought arrived as four transcripts:
+#
+#   05:35:26  heard   "Actually, we are just starting to take some agency"
+#   05:35:29  BARGE   2.26s   <- she had started answering; he kept talking
+#   05:35:32  heard   "market."
+#   05:35:33  BARGE   1.06s   <- again
+#   05:35:40  heard   "And that's been exploding a lot. So we have to"
+#
+# Committing sooner would have cut him off sooner. To him it sounded like a bad
+# connection; Cartesia was steady at 80ms p50 the whole time.
+#
+# So the window is per-session and moves BOTH ways:
+#
+#   600ms means "I am confident this turn is finished"
+#   NOT     "any silence past 600ms means they stopped"
+#
+# Clean speaker -> stay fast. Speaker who has demonstrated mid-thought pauses
+# -> widen, back toward the old conservative behaviour and past it if needed.
+# Smart Turn stays authoritative: this only accelerates a COMPLETE verdict, it
+# never substitutes a timer for one.
+FAST_COMMIT_SECS = 0.6
+
+# Master switch. OFF until the A/B runs. With this False, _commit_window()
+# returns exactly _settle_window() and behaviour is bit-for-bit unchanged --
+# which is what makes it safe to deploy the machinery before the decision.
+FAST_COMMIT_ENABLED = False
+
+# Each observed fragmentation event adds this much protection, so a speaker who
+# keeps continuing through the agent gets progressively more room.
+FRAGMENTATION_PROTECTION_STEP_SECS = 0.5
+
+# Ceiling on that protection. Above the old CONSOLIDATION_SETTLE_MAX_SECS on
+# purpose: for a genuinely fragmented speaker the old 2.6s was itself too
+# short, which is what produced the 8.6s p95 via the stall backstop.
+FRAGMENTATION_PROTECTION_MAX_SECS = 2.4
+
+# How long after the agent starts speaking a user utterance still counts as
+# "they had not finished" rather than a fresh interruption. Above this it is an
+# ordinary barge-in and says nothing about our commit timing.
+EARLY_FOLLOWUP_WINDOW_SECS = 2.0
+
+# Fragmentation decays. Someone who rambled early then settled down should get
+# the fast path back rather than being punished for the rest of the call.
+FRAGMENTATION_DECAY_TURNS = 6
 
 # How long a gap must be before a new fragment counts as a genuine PAUSE
 # rather than a breath inside one sentence.
@@ -620,6 +704,21 @@ class AgentRuntimeProcessor(FrameProcessor):
     # How many beats this tour may run before asking again. Doubles on each
     # bare "keep going" — see AUTO_BEAT_BUDGET_CAP.
     _auto_beat_budget: int = MAX_CONSECUTIVE_AUTO_BEATS
+    # Session fragmentation profile — the evidence the commit window reads.
+    # Counts events where this speaker demonstrably had NOT finished when we
+    # decided they had. Session-scoped only: nothing is learned across calls.
+    _fragmentation_events: int = 0
+    _turns_since_fragmentation: int = 0
+    # VAD noise accounting. Every VAD start is the agent deciding someone is
+    # talking; the ones that never produce a transcript were something else —
+    # a fan, a keyboard, a door, mic bleed. That matters beyond cosmetics: while
+    # _user_speaking is True the release gates at _watch_pending_fragment_stall
+    # refuse to answer, so ambient noise can hold the agent silent. Reported
+    # per call so "it thinks I'm talking when I'm not" becomes a number.
+    _vad_starts: int = 0
+    _vad_starts_without_speech: int = 0
+    _vad_start_at: Optional[float] = None
+    _saw_speech_this_vad: bool = False
     # The turn currently being measured. See turn_telemetry.py — this exists
     # because "how long before she made a sound" was unanswerable from logs.
     _telemetry: Optional[TurnTelemetry] = None
@@ -1065,6 +1164,9 @@ class AgentRuntimeProcessor(FrameProcessor):
             # here, because barge-in detection genuinely does want the
             # earliest possible signal.
             self._user_speaking = True
+            self._vad_starts += 1
+            self._vad_start_at = time.monotonic()
+            self._saw_speech_this_vad = False
             # Real speech starting is the single clearest "abort whatever's
             # scheduled" signal there is — cancel a pending auto-continue
             # here regardless of whether the bot is currently mid-sentence
@@ -1098,6 +1200,16 @@ class AgentRuntimeProcessor(FrameProcessor):
             # than from when they started, which is what let it race ahead
             # of a still-in-progress sentence earlier tonight.
             self._user_speaking = False
+            # The VAD window just closed. If no transcript ever landed inside it,
+            # whatever triggered it wasn't speech — and it still blocked the
+            # release gates for as long as it lasted.
+            if not self._saw_speech_this_vad and self._vad_start_at is not None:
+                self._vad_starts_without_speech += 1
+                held = time.monotonic() - self._vad_start_at
+                logger.debug(
+                    f"[{self._visitor_id}] VAD fired with no speech ({held:.2f}s) — "
+                    f"{self._vad_starts_without_speech}/{self._vad_starts} this call"
+                )
             # Same reasoning as VADUserStartedSpeakingFrame above: a VAD stop
             # only means a sound ended, not that a person spoke.
             # Every time they stop, the consolidation window restarts. A new
@@ -1116,11 +1228,16 @@ class AgentRuntimeProcessor(FrameProcessor):
             # before we accepted the turn", which is only knowable at commit.
             # _last_user_speech_ended_at above already tracks it; the record
             # copies it in _handle_real_turn.
-            if self._telemetry is not None and self._bot_speaking:
+            if self._bot_speaking:
                 # They started again while a reply was already under way. May
                 # be a genuine interruption rather than us cutting them off —
                 # named for the observation, not the conclusion.
-                self._telemetry.early_commit_followup = True
+                if self._telemetry is not None:
+                    self._telemetry.early_commit_followup = True
+                # ...but for the commit window the intent doesn't matter. What
+                # matters is that this speaker continues through the agent, and
+                # that they need more room before we decide they're done.
+                self._note_fragmentation_event("spoke over the reply")
             # Decide, right here, whether what just ended was a real
             # barge-in or a noise blip — this is the only moment both the
             # start and end of the segment are known, and it happens well
@@ -1175,6 +1292,8 @@ class AgentRuntimeProcessor(FrameProcessor):
             return
 
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
+            # Proof that the VAD window we're in carried actual words.
+            self._saw_speech_this_vad = True
             await self._maybe_handle_transcript(frame.text, direction)
             return
 
@@ -1320,7 +1439,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                         and (
                             (
                                 time.monotonic() - self._last_user_speech_ended_at
-                                >= self._settle_window()
+                                >= self._commit_window()
                                 and not self._last_turn_incomplete
                                 and not self._pending_fragment_text
                             )
@@ -1404,7 +1523,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                         not self._last_turn_incomplete
                         and not self._pending_interruption_text
                         and time.monotonic() - self._last_user_speech_ended_at
-                        >= self._settle_window()
+                        >= self._commit_window()
                     ):
                         pending = self._pending_fragment_text
                         self._pending_fragment_text = ""
@@ -1507,6 +1626,12 @@ class AgentRuntimeProcessor(FrameProcessor):
         # and the beat budget resets. This is what lets "keep going" buy
         # another full run of beats rather than one at a time.
         self._consecutive_auto_beats = 0
+        if self._burst_fragments > 1:
+            # This turn arrived in pieces, which is the definition of a
+            # mid-thought pause — recorded before _burst_fragments resets.
+            self._note_fragmentation_event(f"{self._burst_fragments} fragments")
+        else:
+            self._turns_since_fragmentation += 1
         # A bare "keep going" earns a longer run before we ask again; anything
         # substantive resets to the cautious default, because that is evidence
         # they want the floor. Session 5e1732cb asked six times in five minutes
@@ -1519,6 +1644,12 @@ class AgentRuntimeProcessor(FrameProcessor):
                     f"{self._auto_beat_budget} -> {grown}"
                 )
             self._auto_beat_budget = grown
+        elif _is_acknowledgement(text):
+            # HOLD. A nod is neither permission nor a bid for the floor, and
+            # resetting on it is what made the growth above useless: the budget
+            # reached 4 twice in one call and a bare "Okay." put it back to 2
+            # both times, so the cap still fired at 2/2 six times.
+            pass
         else:
             self._auto_beat_budget = MAX_CONSECUTIVE_AUTO_BEATS
         # Committed: this is the moment we accepted their words as a turn.
@@ -1783,6 +1914,10 @@ class AgentRuntimeProcessor(FrameProcessor):
         tel.interrupted = self._interrupted_this_turn
         tel.fragments = self._burst_fragments
         tel.consecutive_auto_beats = self._consecutive_auto_beats
+        tel.vad_starts = self._vad_starts
+        tel.vad_starts_without_speech = self._vad_starts_without_speech
+        tel.fragmentation_events = self._fragmentation_events
+        tel.commit_window_ms = round(self._commit_window() * 1000)
         tel.mark("t_reply_complete")
         tel.emit()
         self._telemetry = None
@@ -1805,6 +1940,60 @@ class AgentRuntimeProcessor(FrameProcessor):
         if self._turn_floor_started_at is None:
             return 0.0
         return time.monotonic() - self._turn_floor_started_at
+
+    def _note_fragmentation_event(self, why: str) -> None:
+        """Records that this speaker was still mid-thought when we committed.
+
+        Deliberately not called "false cutoff": the prospect may simply have
+        chosen to interrupt, and we have no ground truth to tell the two apart.
+        What matters for the window is only that continuing-through-the-agent
+        happened, whatever the intent."""
+        self._fragmentation_events += 1
+        self._turns_since_fragmentation = 0
+        logger.info(
+            f"[{self._visitor_id}] fragmentation signal ({why}) — "
+            f"{self._fragmentation_events} this session, "
+            f"protection now {self._fragmentation_protection():.1f}s"
+        )
+
+    def _fragmentation_protection(self) -> float:
+        """Extra quiet this speaker has earned, in seconds.
+
+        Decays: someone who rambled early and then settled gets the fast path
+        back rather than being punished for the whole call."""
+        decayed = self._turns_since_fragmentation // FRAGMENTATION_DECAY_TURNS
+        active = max(0, self._fragmentation_events - decayed)
+        return min(
+            active * FRAGMENTATION_PROTECTION_STEP_SECS,
+            FRAGMENTATION_PROTECTION_MAX_SECS,
+        )
+
+    def _commit_window(self) -> float:
+        """How long the room must be quiet before a COMPLETE turn is answered.
+
+        This is the one place Phase 2 changes behaviour, and while
+        FAST_COMMIT_ENABLED is False it returns _settle_window() exactly — so
+        the machinery ships and measures itself before the decision is taken.
+
+        When enabled:
+          clean speaker, unfragmented turn  -> FAST_COMMIT_SECS (~600ms)
+          fragmented turn or fragmented speaker -> the conservative window,
+              plus earned protection, which can exceed the old 2.6s ceiling
+              because for a genuinely fragmented speaker 2.6s was itself too
+              short (that is what produced the 8.6s p95 via the stall backstop)
+
+        Smart Turn stays authoritative upstream: this only ever accelerates a
+        verdict that already said COMPLETE.
+        """
+        conservative = self._settle_window()
+        if not FAST_COMMIT_ENABLED:
+            return conservative
+        protection = self._fragmentation_protection()
+        # Any fragmentation in THIS turn disqualifies the fast path outright,
+        # regardless of session history — the evidence is right in front of us.
+        if self._burst_fragments > 1 or protection > 0:
+            return max(conservative, FAST_COMMIT_SECS + protection)
+        return FAST_COMMIT_SECS
 
     def _settle_window(self) -> float:
         """How long the room must stay quiet before answering, given how
