@@ -307,18 +307,24 @@ def _tool_schema() -> dict:
                 "start_walkthrough": {
                     "type": "boolean",
                     "description": (
-                        "Set true on ANY turn the prospect expresses wanting the platform tour — no "
-                        "fixed phrasing required, just the intent. Real examples that all mean yes, "
-                        "start it: 'sure, walk me through it', 'give me a walkthrough', 'give me a "
-                        "whole walkthrough', 'yeah show me around', 'let's do the walkthrough', 'yes "
-                        "please', 'walk me through everything', 'take me on the tour', or even a garbled/"
-                        "unclear transcript where you can only infer they probably meant the tour — if "
-                        "your own reply is going to say anything like 'let's do it' or 'sounds like you "
-                        "mean a tour', set this too, don't let the field lag behind what you're already "
-                        "about to say. This is a dedicated field specifically so this decision never gets "
+                        "Set true when the PROSPECT has clearly expressed wanting the platform tour — "
+                        "no fixed phrasing required, but their intent has to actually be clear. Real "
+                        "examples that all mean yes, start it: 'sure, walk me through it', 'give me a "
+                        "walkthrough', 'give me a whole walkthrough', 'yeah show me around', 'let's do "
+                        "the walkthrough', 'yes please', 'walk me through everything', 'take me on the "
+                        "tour'. This is a dedicated field specifically so this decision never gets "
                         "missed — decide it BEFORE writing \"reply\" below, not after, and set it "
-                        "independently of whatever else you're doing this turn. Omit only when they are "
-                        "NOT asking for the tour."
+                        "independently of whatever else you're doing this turn.\n"
+                        "If it's genuinely UNCLEAR whether they want a tour — a vague acknowledgment "
+                        "('yeah', 'okay', 'sure, that'), or a reply to something else entirely — do NOT "
+                        "set this field and do not guess. Ask one short clarifying question instead "
+                        "('Want the full platform walkthrough, or a specific part?') and let their next "
+                        "answer decide it.\n"
+                        "Critically: your OWN wording in \"reply\" is never evidence for this field. "
+                        "Mentioning that someone (a human rep, a colleague, anyone other than you) "
+                        "will walk the prospect through something LATER — a booking handoff, a "
+                        "farewell — is not a tour starting now, and must not set this field. This field "
+                        "answers what the PROSPECT wants, never what your own sentence happens to say."
                     ),
                 },
                 "start_module_walkthrough": {
@@ -1816,6 +1822,10 @@ def _finalize_turn(
     resume_walkthrough = result.pop("resume_walkthrough", None)
     new_step = result.pop("walkthrough_step", None)
     prev_walkthrough_step = session.walkthrough_step
+    # Which of the legitimate mechanisms actually caused today's transition,
+    # if any — see the unconditional log line at the bottom of this function.
+    # Answers "why did/didn't this start" without anyone re-reading prose.
+    activation_source: Optional[str] = None
     # Read early (non-destructively — "action" itself is popped nowhere,
     # just read again later) so the guard right below can use it.
     action_method = (result.get("action") or {}).get("method")
@@ -1940,6 +1950,7 @@ def _finalize_turn(
         # platform" request is a real, deliberate restart).
         session.walkthrough_step = 1
         session.walkthrough_scope_end = None
+        activation_source = "model_field:start_walkthrough"
     elif start_module_walkthrough:
         # "magicreel"/"magicavatar" map onto their existing deep-dive
         # step indices in walkthrough.py (6, 7) — this is the SAME
@@ -1951,6 +1962,7 @@ def _finalize_turn(
         if module_entry_step is not None:
             session.walkthrough_step = module_entry_step
             session.walkthrough_scope_end = module_entry_step
+            activation_source = "model_field:start_module_walkthrough"
     elif new_step is not None:
         if prev_walkthrough_step is not None:
             if session.walkthrough_scope_end is not None and new_step > session.walkthrough_scope_end:
@@ -2012,6 +2024,7 @@ def _finalize_turn(
             session.walkthrough_step = entry
             session.walkthrough_scope_end = entry
         session.walkthrough_awaiting_answer = False
+        activation_source = "deterministic_backstop:pending_walkthrough_request"
         logger.warning(
             f"[{session.visitor_id}] prospect explicitly asked for a {requested} walkthrough but "
             f"the model never started one — starting at step {session.walkthrough_step}"
@@ -2084,48 +2097,55 @@ def _finalize_turn(
             f"stopped — lifting the stop so the promise is actually kept"
         )
 
-    # CONTRADICTION GUARD — the reply promised a guided tour but no
-    # walkthrough is active.
+    # CONSISTENCY GUARD — the reply promised a guided tour but no
+    # walkthrough is active. Detects and logs the divergence; does NOT
+    # start anything. See the design note above _promised_walkthrough for
+    # why this changed.
     #
-    # Activation used to be purely model-elected, and session ed101f14
-    # showed exactly how that fails: she said "Let me open MagicReel and
-    # walk you through it — quick, step by step", then narrated step one,
-    # while walkthrough_step stayed None for all 14 turns. The state machine
-    # never ran, so there was no script and no auto-continue, and every beat
-    # needed the prospect to push it along. To them it read as an assistant
-    # asking permission after every sentence.
+    # This used to auto-start a walkthrough on this exact detection, which
+    # is what caused session be5a8774: the prospect had just agreed to a
+    # human handoff, the reply said "a human rep will walk you through a
+    # proper showcase" -- TRUE, accurate, about a human, not the AI -- and
+    # the guard read "walk you through" in isolation and silently restarted
+    # the FULL platform tour immediately after the goodbye. The prospect
+    # had to tell it to stop twice.
     #
-    # Rather than trying to catch every phrasing a prospect might use to
-    # ASK for a tour (an unwinnable list — see _explicit_walkthrough_request
-    # for the deliberately narrow version of that), this catches the
-    # disagreement on the way out: what she just committed to out loud
-    # versus what the session believes. Any missed activation lands here no
-    # matter how it was requested.
+    # The historical failure this guard exists for (session ed101f14: model
+    # narrates a tour, forgets to flip start_walkthrough, so the state
+    # machine never runs and every beat needs the prospect to push it
+    # along) is still real, but the fix for it now lives upstream, in
+    # start_walkthrough's own instruction ("decide this before writing
+    # reply, independently of anything else") -- that's the mechanism with
+    # actual context to get this right; a regex over the output afterward
+    # never had that context and can't be taught it. This block's only
+    # remaining job is to make a slip-through of that instruction visible
+    # and debuggable, not to compensate for it by mutating state:
     #
-    # Auto-start rather than regenerate the turn. What she said is fine —
-    # it's the state that's wrong — and a regeneration would cost a whole
-    # turn of latency on a call already fighting for every 100ms.
+    #   assistant words -> create state        (the old, wrong direction)
+    #   assistant words -> flag a divergence   (this, the right direction)
+    #
+    # Also why no corrective reply regeneration happens here, unlike the
+    # step-order fix's backfill: that fix intercepts BEFORE its wrong field
+    # is ever spoken (the schema orders action before reply for exactly
+    # that reason). This reply has typically already been spoken in full
+    # by the time _finalize_turn runs -- there's nothing left to un-say.
+    # The only thing worth doing after the fact is making sure this
+    # doesn't ALSO silently rewrite what actually happens next.
     if session.walkthrough_step is None and not end_walkthrough:
         promised = _promised_walkthrough(result.get("reply") or "")
         if promised and session.walkthrough_user_stopped:
             # A human said stop. Her drifting back into tour language does
-            # not undo that — only they can (see _is_explicit_resume).
+            # not undo that -- only they can (see _is_explicit_resume).
             logger.info(
                 f"[{session.visitor_id}] reply promised a walkthrough but the prospect "
                 f"stopped it earlier — not auto-starting"
             )
         elif promised:
-            if promised == "full":
-                session.walkthrough_step = 1
-                session.walkthrough_scope_end = None
-            else:
-                entry = {"magicreel": 6, "magicavatar": 7}[promised]
-                session.walkthrough_step = entry
-                session.walkthrough_scope_end = entry
-            session.walkthrough_awaiting_answer = False
+            activation_source = "contradiction_detected:not_started"
             logger.warning(
-                f"[{session.visitor_id}] CONTRADICTION: reply promised a {promised} walkthrough "
-                f"but none was active — auto-starting at step {session.walkthrough_step}"
+                f"[{session.visitor_id}] CONTRADICTION (not acted on): reply promised a "
+                f"{promised} walkthrough but none was requested this turn — "
+                f"reply: {(result.get('reply') or '')[:160]!r}"
             )
 
     # Ground truth for "has start-generation already fired for the CURRENT
@@ -2240,7 +2260,7 @@ def _finalize_turn(
             f"[{session.visitor_id}] walkthrough: step {prev_walkthrough_step} -> {session.walkthrough_step} "
             f"(start_walkthrough={bool(start_walkthrough)}, walkthrough_step_field={new_step!r}, "
             f"end_walkthrough={bool(end_walkthrough)}, awaiting_answer={session.walkthrough_awaiting_answer}, "
-            f"user_stopped={session.walkthrough_user_stopped})"
+            f"user_stopped={session.walkthrough_user_stopped}, activation={activation_source!r})"
         )
 
     # Length budget: measured, not assumed.

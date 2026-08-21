@@ -311,6 +311,39 @@ def _is_acknowledgement(text: str) -> bool:
     return bool(_ACKNOWLEDGEMENTS.match(t))
 
 
+# A signal that the prospect is not done with the CURRENT step and the tour
+# must not advance past their position — "wait," "go back," "show me that
+# again." Deliberately narrow and word-based, not a broad NLU pass: this is
+# a state-transition gate (should auto-advance fire, yes/no), not a
+# conversational understanding problem, and the two need different rigor.
+# The model itself stays fully free to understand and respond to whatever
+# the prospect actually says; this only ever decides one boolean.
+#
+# Session be5a8774: the tour advanced from MagicReel into MagicAvatar while
+# the prospect was still asking about MagicReel's own final render screen,
+# and needed three corrective turns before the agent caught up. The RESET
+# path already narrows the beat budget on a substantive reply (see
+# _is_permission_to_continue's caller), but that alone doesn't stop the
+# very next scheduled beat from firing — this does, directly.
+_HOLD_SIGNAL = re.compile(
+    r"\b(?:wait|hold\s*on|hold\s*up|go\s*back|show\s*(?:me|us)?\s*(?:that|this|it)"
+    r"\s*again|one\s*sec(?:ond)?|slow\s*down|not\s*yet|still\s*(?:looking|reading|"
+    r"thinking|processing)|i\s*(?:want|need)\s*to\s*(?:understand|see|look\s*at)\s*"
+    r"this|didn'?t\s*(?:show|see)\s*(?:me|us)?)\b",
+    re.I,
+)
+
+
+def _is_hold_signal(text: str) -> bool:
+    """True when the prospect is asking to stay on the current step rather
+    than move forward. Checked before scheduling the NEXT auto-continue
+    beat — see _maybe_schedule_auto_continue. A question mark doesn't
+    disqualify this one (unlike the continue/ack classifiers): "wait, can
+    you show me that again?" is still a hold, not a redirect worth
+    resetting the whole budget over."""
+    return bool(_HOLD_SIGNAL.search((text or "").strip()))
+
+
 # A bare affirmative. On its own this means nothing in particular — but
 # directly after "want me to keep going?" it is unambiguous permission.
 _BARE_AFFIRMATIVE = re.compile(
@@ -1824,7 +1857,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                 # which sets _hand_ack_sent so this doesn't double-fire.
                 await self._speak_hand_raise_handoff(direction)
 
-            await self._advance_after_turn(session, direction)
+            await self._advance_after_turn(session, direction, last_user_text=text)
         finally:
             self._turn_in_progress = False
             # In the finally so a turn that ends by raising, or by being
@@ -2540,7 +2573,9 @@ class AgentRuntimeProcessor(FrameProcessor):
         commit_prefetched_turn(session, clone, result)
         return result
 
-    def _maybe_schedule_auto_continue(self, session, direction: FrameDirection) -> None:
+    def _maybe_schedule_auto_continue(
+        self, session, direction: FrameDirection, last_user_text: str = ""
+    ) -> None:
         """Called at the end of every real AND auto-continued turn.
         Schedules the next walkthrough beat to speak on its own after a
         short pause, unless the tour just ended or the model is waiting on
@@ -2559,6 +2594,21 @@ class AgentRuntimeProcessor(FrameProcessor):
         # Hard stop: nothing schedules a beat while the prospect has asked
         # for quiet.
         if session.walkthrough_user_stopped:
+            return
+        # Don't advance past where the prospect actually is. Only checked
+        # against a REAL turn's own words (last_user_text is empty for an
+        # auto-continue beat's own self-scheduling, which has no fresh
+        # words to check) — see _is_hold_signal. Session be5a8774: the tour
+        # moved from MagicReel into MagicAvatar while the prospect was still
+        # asking about MagicReel's render screen, and needed three
+        # corrective turns before the agent caught up. This stops the very
+        # next beat outright rather than only narrowing the budget the way
+        # a merely substantive (non-hold) reply already does.
+        if last_user_text and _is_hold_signal(last_user_text):
+            logger.info(
+                f"[{self._visitor_id}] hold signal ({last_user_text[:60]!r}) — "
+                f"not scheduling the next beat, staying on step {session.walkthrough_step}"
+            )
             return
         # Never schedule a beat while the prospect has unanswered words
         # waiting. Firing here restarts the bot speaking, which blocks the
