@@ -40,6 +40,7 @@ from ..agent.runtime import (
 )
 from ..context.store import OPENING_GREETING, get_session
 from ..data import gate_log
+from .call_recorder import CallRecorder, recording_enabled
 from .turn_telemetry import TurnTelemetry
 
 # Short "breathing room" between one walkthrough beat finishing and the next
@@ -566,6 +567,9 @@ class AgentRuntimeProcessor(FrameProcessor):
     # The turn currently being measured. See turn_telemetry.py — this exists
     # because "how long before she made a sound" was unanswerable from logs.
     _telemetry: Optional[TurnTelemetry] = None
+    # None unless RECORD_CALLS=true. Class-level default so the audio path can
+    # never AttributeError on a test object built via __new__.
+    _recorder: Optional[CallRecorder] = None
     _turn_counter: int = 0
     # Declared at class level for the same reason: the pause gates are read
     # from the scheduler and the stall watchdog, both of which run on paths
@@ -591,6 +595,15 @@ class AgentRuntimeProcessor(FrameProcessor):
         # to "Hmm..." and "I'm just" before the prospect ever finished their
         # actual question.
         self._smart_turn = LocalSmartTurnAnalyzerV3()
+        # Deliberately loud. A recording that starts silently is the failure
+        # mode that matters here — anyone reading the log for any reason should
+        # be able to see that this call is being captured.
+        if recording_enabled():
+            self._recorder = CallRecorder(visitor_id)
+            logger.warning(
+                f"[{visitor_id}] RECORD_CALLS=true — capturing this call's audio "
+                f"for turn-detection research. Participants must already know."
+            )
         # Set from analyze_end_of_turn()'s verdict at the most recent VAD
         # stop — read by _maybe_handle_transcript when the matching
         # transcript for that same segment arrives a moment later. Defaults
@@ -1084,6 +1097,13 @@ class AgentRuntimeProcessor(FrameProcessor):
             # ~3s of raw silence passes even without an explicit VAD-stop
             # trigger); checked here for that rare case too, mirroring
             # pipecat's own reference turn-strategy.
+            # Research capture, off unless RECORD_CALLS=true (see
+            # call_recorder.py). Taps the SAME bytes Smart Turn is judging, so
+            # a replay is exactly what the model heard — the whole point, since
+            # the harness's synthetic verdicts are what misled us. Append only;
+            # anything costlier here would perturb the timings being measured.
+            if self._recorder is not None:
+                self._recorder.append(frame.audio)
             state = self._smart_turn.append_audio(frame.audio, self._user_speaking)
             if state == EndOfTurnState.COMPLETE:
                 await self._analyze_smart_turn()
@@ -2978,6 +2998,11 @@ class AgentRuntimeProcessor(FrameProcessor):
             self._pause_poll_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._pause_poll_task
+        if self._recorder is not None:
+            # save() swallows its own failures — a research capture must never
+            # be able to break the hang-up path.
+            self._recorder.save()
+            self._recorder = None
         # Same reasoning as the hand-raise poll task above — a walkthrough
         # left mid-tour when the call ends shouldn't leave a dangling task
         # trying to speak into a torn-down pipeline.
