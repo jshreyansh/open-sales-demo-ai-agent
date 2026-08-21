@@ -227,7 +227,7 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
         action={"page": "dashboard", "component": "insights", "method": "highlight"},
         guidance=(
             "This is the only dashboard stop in the tour — cover both the insight cards and the "
-            "active campaigns list here as the closing 'this is home base' moment. Wrap up the "
+            "brand dossiers list here as the closing 'this is home base' moment. Wrap up the "
             "tour, ask if they have any other questions, and if question 5 (connecting with a "
             "rep for next steps) still hasn't come up, this is a natural moment to ask it. Set "
             "\"end_walkthrough\" once you've wrapped up."

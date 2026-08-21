@@ -301,8 +301,14 @@ review. It covers 30 content formats across 5 Magic Engines (Video, Aid, Mail, C
 from short videos and AI digital-twin presenter avatars, to HCP detailing aids and approved emails, to \
 banners/infographics and long-form documents like payer dossiers — all generated from a single Brand Kit \
 so every asset stays on-brand automatically. It also has campaign analytics (WhatsApp/SMS/Email \
-performance, HCP reach, engagement funnels) and an "Agentic IQ" layer tracking how many manhours \
-autonomous agents have saved the team."""
+performance, HCP reach, engagement funnels) and tracks the manhours the platform saves the team."""
+# The "Agentic IQ" layer used to be named in the sentence above. Dropped: the
+# only place it was ever visible was a dashboard card counting active agents
+# and actions executed, and that card is gone (see data/dashboard.py) because
+# there is no agents surface anywhere in the nav for it to point at. The
+# manhours-saved claim survives — the Dashboard's "Time Saved" card still
+# shows it. Campaign analytics stays too: the Analytics page is still real and
+# agent-navigable, it just has no sidebar entry (see registry/pages.ts).
 
 
 # Describes what the agent can point at and do, in terms the LLM (or the
@@ -321,14 +327,22 @@ UI_REGISTRY: List[RegistryPage] = [
             RegistryComponent(
                 id="insights",
                 label="Insights panel",
-                description="The four insight cards: Campaign Insights, HCP Insights, Field Rep Insights, Agentic IQ.",
+                description=(
+                    "The four insight cards: Content Output (assets generated, formats used of 30, avg "
+                    "first-draft time), MLR Review (pending approvals, first-pass approval rate, avg time "
+                    "in review), Brand & Templates (dossiers live, templates, library assets), and Time "
+                    "Saved (manhours saved, brief-to-approved turnaround, library reuse)."
+                ),
                 actions=[RegistryAction(id="highlight", description="Draw attention to the insights panel")],
             ),
             RegistryComponent(
-                id="active-campaigns",
-                label="Active Campaigns",
-                description="List of running campaigns with progress and status (Paused / Optimizing).",
-                actions=[RegistryAction(id="highlight", description="Draw attention to the active campaigns list")],
+                id="brand-dossiers",
+                label="Brand Dossiers",
+                description=(
+                    "List of brand dossiers with build progress and status (Live / In Build) — the "
+                    "source-of-truth pack each brand's content is generated from."
+                ),
+                actions=[RegistryAction(id="highlight", description="Draw attention to the brand dossiers list")],
             ),
             _scroll_component(),
         ],

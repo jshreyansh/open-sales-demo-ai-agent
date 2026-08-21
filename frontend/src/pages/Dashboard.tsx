@@ -6,6 +6,16 @@ import type { DashboardData } from "../lib/types";
 
 const RANGES = ["7D", "30D", "90D", "Custom"];
 
+// Inline colours rather than new `.status-pill--*` modifiers: index.css only
+// ships the two the campaign list needed (paused/optimizing), and the
+// stylesheet is off-limits this session. Approvals.tsx already tones
+// `.approvals-state-badge` inline for exactly this reason, so the pattern is
+// established — the class still supplies the pill shape and the leading dot.
+const DOSSIER_TONE: Record<string, { background: string; color: string }> = {
+  Live: { background: "rgba(22, 163, 74, 0.1)", color: "#16a34a" },
+  "In Build": { background: "rgba(217, 119, 6, 0.1)", color: "#d97706" },
+};
+
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [range, setRange] = useState("30D");
@@ -75,34 +85,30 @@ export default function Dashboard() {
         ))}
       </div>
 
-      <div className="section card" data-hl="active-campaigns:highlight" data-hl-cue="spotlight">
+      <div className="section card" data-hl="brand-dossiers:highlight" data-hl-cue="spotlight">
         <div className="section__header">
           <div>
-            <h2 className="section__title">Active Campaigns</h2>
-            <p className="section__subtitle">Status & engagement of running programs</p>
+            <h2 className="section__title">Brand Dossiers</h2>
+            <p className="section__subtitle">Source-of-truth packs every generation is built from</p>
           </div>
           <a className="section__link" href="#">
             View all →
           </a>
         </div>
-        {data.activeCampaigns.map((c) => (
-          <div key={c.name} className="campaign-row">
+        {data.brandDossiers.map((d) => (
+          <div key={d.name} className="campaign-row">
             <div>
-              <p className="campaign-row__name">{c.name}</p>
-              <p className="campaign-row__segment">{c.segment}</p>
+              <p className="campaign-row__name">{d.name}</p>
+              <p className="campaign-row__segment">{d.meta}</p>
             </div>
             <div className="campaign-row__right">
               <div className="progress-bar">
-                <div
-                  className="progress-bar__fill"
-                  style={{
-                    width: `${c.percent}%`,
-                    background: c.status === "Paused" ? "#dc2626" : "#d97706",
-                  }}
-                />
+                <div className="progress-bar__fill" style={{ width: `${d.percent}%`, background: DOSSIER_TONE[d.status].color }} />
               </div>
-              <span>{c.percent}%</span>
-              <span className={`status-pill status-pill--${c.status.toLowerCase()}`}>{c.status}</span>
+              <span>{d.percent}%</span>
+              <span className="status-pill" style={DOSSIER_TONE[d.status]}>
+                {d.status}
+              </span>
             </div>
           </div>
         ))}
@@ -111,25 +117,25 @@ export default function Dashboard() {
       <div className="section card">
         <div className="section__header">
           <div>
-            <h2 className="section__title">Campaign Performance</h2>
-            <p className="section__subtitle">Sent · delivered · opened · clicked by channel</p>
+            <h2 className="section__title">Review Throughput by Stage</h2>
+            <p className="section__subtitle">Where content moves — and where it gets sent back</p>
           </div>
         </div>
-        {data.campaignPerformance.map((c) => (
-          <div key={c.channel} className="channel-row">
+        {data.reviewStages.map((s) => (
+          <div key={s.stage} className="channel-row">
             <div className="channel-row__head">
-              <span className="channel-row__name">{c.channel}</span>
-              <span className="channel-row__sent">{c.sent.toLocaleString()} sent</span>
+              <span className="channel-row__name">{s.stage}</span>
+              <span className="channel-row__sent">{s.submissions.toLocaleString()} submissions</span>
             </div>
             <div className="channel-row__stats">
               <span className="channel-row__stat">
-                Delivered <b>{c.delivered}%</b>
+                First-pass <b>{s.firstPass}%</b>
               </span>
               <span className="channel-row__stat">
-                Opened <b>{c.opened}%</b>
+                Avg in stage <b>{s.avgDays}d</b>
               </span>
               <span className="channel-row__stat">
-                Clicked <b>{c.clicked}%</b>
+                Sent back <b>{s.sentBack}%</b>
               </span>
             </div>
           </div>
@@ -139,14 +145,17 @@ export default function Dashboard() {
       <div className="section card">
         <div className="section__header">
           <div>
-            <h2 className="section__title">Top Content by Views</h2>
-            <p className="section__subtitle">Most-watched assets in this range</p>
+            <h2 className="section__title">Top Library Assets</h2>
+            <p className="section__subtitle">Most-reused assets in this range</p>
           </div>
         </div>
-        {data.topContent.map((c) => (
-          <div key={c.title} className="content-row">
-            <span>{c.title}</span>
-            <span className="content-row__views">{c.views.toLocaleString()}</span>
+        {data.topAssets.map((a) => (
+          <div key={a.title} className="content-row">
+            <span>{a.title}</span>
+            {/* Class name is a leftover from the view-count era; it only sets
+                the muted colour, so it's reused rather than renamed — the
+                stylesheet is being edited elsewhere this session. */}
+            <span className="content-row__views">{a.uses.toLocaleString()} reuses</span>
           </div>
         ))}
       </div>

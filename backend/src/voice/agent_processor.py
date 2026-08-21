@@ -382,8 +382,26 @@ IDLE_CHECKIN_MESSAGES = {
 # confirmed live (real call transcript) as consistently the wrong register:
 # reads as a person stalling, not a curious listener. Every filler in this
 # file is now Hmm-based, in a curious/thinking tone, never "um"/"uh"/"oh".
-THINKING_FILLERS = ["Hmm —", "Hmm, let's see —", "Hmm, good question —", "Let me think —"]
-FLOOR_FILLERS = ["Hmm —", "Hmm, right —", "Hmm, I see —", "Hmm, okay —"]
+# Every entry in both pools used to start with "Hmm", so four "options" still
+# came out as one word said over and over — which is what "filler words need
+# variety" was actually about. These vary on the first syllable, which is the
+# part anyone notices.
+THINKING_FILLERS = [
+    "Good question —",
+    "Let me think —",
+    "So —",
+    "Right, so —",
+    "Okay —",
+    "Hmm —",
+]
+FLOOR_FILLERS = [
+    "Right —",
+    "Got it —",
+    "Sure —",
+    "Okay —",
+    "I see —",
+    "Mm —",
+]
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
@@ -695,7 +713,8 @@ class AgentRuntimeProcessor(FrameProcessor):
         # independently (this, and the backchannel in
         # _watch_pending_fragment_stall), so the total was larger than
         # either author intended and neither could see it.
-        self._consecutive_fillers = 0
+        # The last two bridges spoken, so _pick_filler can avoid both.
+        self._recent_fillers: list[str] = []
         # The tail of the reply the prospect never heard, captured when a
         # turn ends interrupted. Spoken on false-interruption recovery.
         self._unspoken_remainder: Optional[str] = None
@@ -748,10 +767,22 @@ class AgentRuntimeProcessor(FrameProcessor):
         return choice
 
     def _pick_filler(self, heard_text: str) -> str:
+        """Picks a bridge, avoiding the last two rather than just the last.
+
+        With six per pool there is room to look back further, and two turns is
+        the distance at which a repeat stops registering as one. Falls back
+        through progressively weaker constraints so this can never fail to
+        return something.
+        """
         pool = THINKING_FILLERS if _is_question(heard_text) else FLOOR_FILLERS
-        choices = [f for f in pool if f != self._last_filler] or pool
+        choices = (
+            [f for f in pool if f not in self._recent_fillers]
+            or [f for f in pool if f != self._last_filler]
+            or pool
+        )
         filler = random.choice(choices)
         self._last_filler = filler
+        self._recent_fillers = ([filler] + self._recent_fillers)[:2]
         return filler
 
     async def queue_frame(self, frame, direction=FrameDirection.DOWNSTREAM, callback=None):
@@ -1270,13 +1301,16 @@ class AgentRuntimeProcessor(FrameProcessor):
                 # they pressed the button to stop.
                 logger.info(f"[{self._visitor_id}] dropping turn while paused: {text[:60]!r}")
                 return
-            if self._consecutive_fillers < 1:
-                self._consecutive_fillers += 1
-                filler = self._pick_filler(text)
-                await self._speak(filler, direction)
-            else:
-                self._consecutive_fillers = 0
-                logger.info(f"[{self._visitor_id}] filler skipped (rationed)")
+            # Always bridge. An earlier version rationed these — one turn on,
+            # one turn off — to stop her sounding repetitive, and measurement
+            # showed exactly what that bought: on session 4c23f875 the turns
+            # WITH a filler reached audio in 1.2-1.5s and the turns without it
+            # sat in 3.5-4.3s of complete silence, which reads as the thing
+            # having crashed. Repetition was the wrong problem to solve by
+            # subtraction; it is solved above, by pools that actually differ
+            # from each other.
+            filler = self._pick_filler(text)
+            await self._speak(filler, direction)
 
             try:
                 result, already_spoken = await self._consume_turn_stream(run_turn_stream(text, session), direction)

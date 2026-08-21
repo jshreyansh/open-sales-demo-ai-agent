@@ -138,8 +138,14 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
             <MeetIcon name="calendar" size={14} />
             Talk to the team
           </a>
-          <a href="/demo/dashboard">Explore the platform</a>
-          <a href="/docs">Docs</a>
+          <a href="/demo/dashboard">
+            <MeetIcon name="grid" size={14} />
+            Explore the platform
+          </a>
+          <a href="/docs">
+            <MeetIcon name="book" size={14} />
+            Docs
+          </a>
         </nav>
       </header>
 

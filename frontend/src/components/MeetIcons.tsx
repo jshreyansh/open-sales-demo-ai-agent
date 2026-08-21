@@ -1,6 +1,8 @@
 import {
   mdiMicrophone,
   mdiPause,
+  mdiViewGridOutline,
+  mdiBookOpenPageVariantOutline,
   mdiPlay,
   mdiMicrophoneOff,
   mdiVideo,
@@ -29,6 +31,8 @@ interface MeetIconProps {
   name:
     | "mic"
     | "pause"
+    | "grid"
+    | "book"
     | "play"
     | "mic-off"
     | "camera"
@@ -64,6 +68,11 @@ const PATHS: Record<MeetIconProps["name"], string> = {
   // already uses — this control does exactly what people expect, so it
   // should not invent a symbol for it.
   pause: mdiPause,
+  // Nav glyphs for the landing header. All three items carry one now — two
+  // bare labels beside one iconned pill read as an accident rather than a
+  // hierarchy.
+  grid: mdiViewGridOutline,
+  book: mdiBookOpenPageVariantOutline,
   play: mdiPlay,
   "mic-off": mdiMicrophoneOff,
   camera: mdiVideo,

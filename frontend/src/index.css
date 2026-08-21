@@ -7077,11 +7077,25 @@ body {
 }
 
 .lp__nav-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-size: 13.5px;
   font-weight: 500;
   color: var(--lp-muted);
   text-decoration: none;
-  transition: color 0.16s;
+  /* Same padding and radius as the pill below, so all three items share one
+     shape and only their emphasis differs. Two bare labels next to one
+     bordered pill read as an oversight. */
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  transition: color 0.16s, background 0.16s, border-color 0.16s;
+}
+
+.lp__nav-links a:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--lp-line);
 }
 
 .lp__nav-links a:hover {
@@ -7240,6 +7254,13 @@ body {
 .lp__copy {
   position: relative;
   max-width: 560px;
+  /* Shares the figure's start line so the badge and the card's top edge
+     agree. Both were previously aligned by different rules — the figure
+     off align-self:start plus a margin, the copy off the grid's centring —
+     and landed 61px apart, which reads as carelessness rather than as a
+     choice. */
+  align-self: start;
+  margin-top: clamp(0px, 6vh, 74px);
 }
 
 .lp__eyebrow {
@@ -7805,4 +7826,30 @@ body {
     animation: none;
   }
   .lp__instant { transition: none; }
+}
+
+/* ---- landing showcase badge: calmer hover, aligned top ----
+   The shared .meet__showcase-btn:hover carries translateY(-50%) because in
+   the meeting it is absolutely centred in the control row. On the landing
+   page it sits in normal flow, so that -50% became a real 50%-of-height
+   jump on every mouseover, on top of the scale. Hence the leap.
+
+   Replaced with what the meeting version actually feels like: a small lift
+   and a slightly warmer glow. Noticeable, not startling. */
+.lp__showcase:hover {
+  transform: translateY(-1px) scale(1.015);
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.5),
+    0 5px 18px rgba(255, 110, 40, 0.32);
+}
+
+.lp__showcase:active {
+  transform: translateY(0) scale(0.995);
+}
+
+/* Top-aligned with the video card, which is the only other object at this
+   height. They were a few pixels out, which is exactly the kind of gap that
+   reads as sloppy without being obviously wrong. */
+.lp__showcase {
+  margin-top: 2px;
 }

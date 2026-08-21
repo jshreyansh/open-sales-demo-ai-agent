@@ -14,31 +14,34 @@ export interface InsightCard {
   sparkline: number[];
 }
 
-export interface ActiveCampaign {
+export interface BrandDossierRow {
   name: string;
-  segment: string;
+  meta: string;
   percent: number;
-  status: "Paused" | "Optimizing";
+  status: "Live" | "In Build";
 }
 
-export interface ChannelPerformance {
-  channel: string;
-  sent: number;
-  delivered: number;
-  opened: number;
-  clicked: number;
+export interface ReviewStageRow {
+  stage: string;
+  submissions: number;
+  firstPass: number;
+  avgDays: number;
+  sentBack: number;
 }
 
-export interface TopContent {
+export interface LibraryAsset {
   title: string;
-  views: number;
+  uses: number;
 }
 
+// Mirrors backend/src/data/dashboard.py. The campaign/audience/field-rep
+// shapes that used to live here (ActiveCampaign, ChannelPerformance) went
+// out with the nav entries behind them — see that file's header.
 export interface DashboardData {
   insights: InsightCard[];
-  activeCampaigns: ActiveCampaign[];
-  campaignPerformance: ChannelPerformance[];
-  topContent: TopContent[];
+  brandDossiers: BrandDossierRow[];
+  reviewStages: ReviewStageRow[];
+  topAssets: LibraryAsset[];
 }
 
 export interface AnalyticsStat {
