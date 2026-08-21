@@ -57,32 +57,50 @@ export default function Dashboard() {
         <span className="section__subtitle">Last 30 days</span>
       </div>
 
-      <div className="insights-grid card" data-hl="insights:highlight" data-hl-cue="spotlight">
-        {data.insights.map((card) => (
-          <div key={card.id} className="insight-card" style={{ ["--accent-color" as string]: card.accent }}>
-            <div className="insight-card__head">
-              <div className="insight-card__icon">
-                <Icon name={card.icon} />
+      {/* Four cards in a 2x2 grid, each with ONE headline number.
+          Before this it was four full-width lanes stacked down the page,
+          every card giving its three metrics identical size — so twelve
+          numbers arrived at the same volume with nothing telling you which
+          mattered, and the whole thing ran past a thousand pixels tall on
+          the first screen a prospect ever sees. Giving each card a hero and
+          two supporting figures is what makes it scannable; the grid is what
+          makes it fit. */}
+      <div className="insight-grid" data-hl="insights:highlight" data-hl-cue="spotlight">
+        {data.insights.map((card) => {
+          const [hero, ...rest] = card.metrics;
+          return (
+            <div key={card.id} className="insight-tile card" style={{ ["--accent-color" as string]: card.accent }}>
+              <div className="insight-tile__head">
+                <span className="insight-tile__icon">
+                  <Icon name={card.icon} />
+                </span>
+                <span className="insight-tile__label">{card.label}</span>
               </div>
-              <div>
-                <p className="insight-card__label">{card.label}</p>
-                <p className="insight-card__desc">{card.description}</p>
+
+              <div className="insight-tile__hero">
+                <span className="insight-tile__hero-value">{hero.value}</span>
+                {hero.sub && <span className="insight-tile__hero-sub">{hero.sub}</span>}
               </div>
-            </div>
-            <div className="insight-card__metrics-row">
-              {card.metrics.map((m, i) => (
-                <div key={m.label} className="insight-card__metric">
-                  <div className="insight-card__metric-label">{m.label}</div>
-                  <div className="insight-card__metric-value">
-                    {m.value}
-                    {m.sub && <span className="insight-card__metric-sub">{m.sub}</span>}
+              <div className="insight-tile__hero-label">{hero.label}</div>
+
+              <div className="insight-tile__rest">
+                {rest.map((m) => (
+                  <div key={m.label} className="insight-tile__metric">
+                    <div className="insight-tile__metric-value">{m.value}</div>
+                    <div className="insight-tile__metric-label">{m.label}</div>
                   </div>
-                  {i === 0 && <Sparkline values={card.sparkline} color={card.accent} />}
-                </div>
-              ))}
+                ))}
+              </div>
+
+              {/* Full-width along the card's foot rather than tucked beside
+                  the first metric, where it was reading as a stray scribble
+                  instead of a trend. */}
+              <div className="insight-tile__spark">
+                <Sparkline values={card.sparkline} color={card.accent} fluid />
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="section card" data-hl="brand-dossiers:highlight" data-hl-cue="spotlight">
@@ -95,70 +113,82 @@ export default function Dashboard() {
             View all →
           </a>
         </div>
-        {data.brandDossiers.map((d) => (
-          <div key={d.name} className="campaign-row">
-            <div>
-              <p className="campaign-row__name">{d.name}</p>
-              <p className="campaign-row__segment">{d.meta}</p>
-            </div>
-            <div className="campaign-row__right">
-              <div className="progress-bar">
-                <div className="progress-bar__fill" style={{ width: `${d.percent}%`, background: DOSSIER_TONE[d.status].color }} />
+        {/* Two per row inside the card. Full-width rows put the completion
+            bar and status pill about a thousand pixels from the dossier they
+            describe, which is the same reading problem as the lists below. */}
+        <div className="dossier-grid">
+          {data.brandDossiers.map((d) => (
+            <div key={d.name} className="dossier-row">
+              <div className="dossier-row__top">
+                <p className="dossier-row__name">{d.name}</p>
+                <span className="status-pill" style={DOSSIER_TONE[d.status]}>
+                  {d.status}
+                </span>
               </div>
-              <span>{d.percent}%</span>
-              <span className="status-pill" style={DOSSIER_TONE[d.status]}>
-                {d.status}
-              </span>
+              <p className="dossier-row__meta">{d.meta}</p>
+              <div className="dossier-row__bar">
+                <div className="progress-bar">
+                  <div className="progress-bar__fill" style={{ width: `${d.percent}%`, background: DOSSIER_TONE[d.status].color }} />
+                </div>
+                <span className="dossier-row__pct">{d.percent}%</span>
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
 
-      <div className="section card">
-        <div className="section__header">
-          <div>
-            <h2 className="section__title">Review Throughput by Stage</h2>
-            <p className="section__subtitle">Where content moves — and where it gets sent back</p>
+      {/* Two lists side by side rather than stacked full-width. On a 1200px
+          lane each row's number ended up a thousand pixels from its label,
+          so reading one line meant crossing the whole screen; halving the
+          width puts label and value back in the same glance. */}
+      <div className="dash-split">
+        <div className="section card">
+          <div className="section__header">
+            <div>
+              <h2 className="section__title">Review Throughput by Stage</h2>
+              <p className="section__subtitle">Where content moves — and where it gets sent back</p>
+            </div>
           </div>
+          {data.reviewStages.map((s) => (
+            <div key={s.stage} className="stage-row">
+              <div className="stage-row__head">
+                <span className="stage-row__name">{s.stage}</span>
+                <span className="stage-row__count">{s.submissions.toLocaleString()} submissions</span>
+              </div>
+              {/* First-pass rate as a bar, not a third number in a line of
+                  numbers: it is a proportion, and a proportion is faster to
+                  compare across four stages as a length than as digits. */}
+              <div className="stage-row__bar">
+                <div className="stage-row__bar-fill" style={{ width: `${s.firstPass}%` }} />
+              </div>
+              <div className="stage-row__stats">
+                <span><b>{s.firstPass}%</b> first-pass</span>
+                <span><b>{s.avgDays}d</b> in stage</span>
+                <span><b>{s.sentBack}%</b> sent back</span>
+              </div>
+            </div>
+          ))}
         </div>
-        {data.reviewStages.map((s) => (
-          <div key={s.stage} className="channel-row">
-            <div className="channel-row__head">
-              <span className="channel-row__name">{s.stage}</span>
-              <span className="channel-row__sent">{s.submissions.toLocaleString()} submissions</span>
-            </div>
-            <div className="channel-row__stats">
-              <span className="channel-row__stat">
-                First-pass <b>{s.firstPass}%</b>
-              </span>
-              <span className="channel-row__stat">
-                Avg in stage <b>{s.avgDays}d</b>
-              </span>
-              <span className="channel-row__stat">
-                Sent back <b>{s.sentBack}%</b>
-              </span>
+
+        <div className="section card">
+          <div className="section__header">
+            <div>
+              <h2 className="section__title">Top Library Assets</h2>
+              <p className="section__subtitle">Most-reused assets in this range</p>
             </div>
           </div>
-        ))}
+          {data.topAssets.map((a, i) => (
+            <div key={a.title} className="asset-row">
+              {/* The rank is real information here — the list is ordered by
+                  reuse — so it earns a marker. */}
+              <span className="asset-row__rank">{i + 1}</span>
+              <span className="asset-row__title">{a.title}</span>
+              <span className="asset-row__uses">{a.uses.toLocaleString()}<span className="asset-row__uses-unit"> reuses</span></span>
+            </div>
+          ))}
+        </div>
       </div>
 
-      <div className="section card">
-        <div className="section__header">
-          <div>
-            <h2 className="section__title">Top Library Assets</h2>
-            <p className="section__subtitle">Most-reused assets in this range</p>
-          </div>
-        </div>
-        {data.topAssets.map((a) => (
-          <div key={a.title} className="content-row">
-            <span>{a.title}</span>
-            {/* Class name is a leftover from the view-count era; it only sets
-                the muted colour, so it's reused rather than renamed — the
-                stylesheet is being edited elsewhere this session. */}
-            <span className="content-row__views">{a.uses.toLocaleString()} reuses</span>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }

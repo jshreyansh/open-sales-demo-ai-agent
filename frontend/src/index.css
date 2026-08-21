@@ -7853,3 +7853,307 @@ body {
 .lp__showcase {
   margin-top: 2px;
 }
+
+/* ============================================================
+   DASHBOARD INSIGHTS — 2x2 tiles
+   ============================================================
+   Replaces four full-width lanes stacked down the page. Each lane gave its
+   three metrics identical size, so twelve numbers arrived at one volume with
+   nothing saying which mattered, the sparkline sat squashed beside the first
+   figure reading as a scribble rather than a trend, and the two right-hand
+   columns were mostly empty. It ran past 1000px on the first screen a
+   prospect ever sees.
+
+   One hero number per tile is what makes it scannable; the grid is what
+   makes it fit. */
+
+.insight-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.insight-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 18px 0;
+  overflow: hidden;
+  /* The accent moves from a left stripe to a hairline along the top: on a
+     tile it reads as the card's identity rather than as a bar bolted to its
+     side. */
+  border-top: 2px solid var(--accent-color);
+}
+
+.insight-tile__head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 14px;
+}
+
+.insight-tile__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  /* Same hue as the accent at low alpha, so each tile is identifiable at a
+     glance without four saturated blocks fighting each other. */
+  background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+  color: var(--accent-color);
+}
+
+.insight-tile__label {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+/* The one number that matters. Its label sits UNDER it — a big figure is
+   read before any caption, so making the caption wait is honest about the
+   order it actually gets consumed in. */
+.insight-tile__hero {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.insight-tile__hero-value {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.insight-tile__hero-sub {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #16a34a;
+}
+
+.insight-tile__hero-label {
+  margin-top: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Supporting pair, deliberately a third the size of the hero and sharing one
+   row. Value above label again, same reasoning. */
+.insight-tile__rest {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 13px;
+  border-top: 1px solid var(--border);
+}
+
+.insight-tile__metric-value {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  font-variant-numeric: tabular-nums;
+}
+
+.insight-tile__metric-label {
+  margin-top: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Full-bleed along the foot. A trend line is about shape, and it needs width
+   to have one — beside a number it was 160px wide and said nothing. */
+.insight-tile__spark {
+  margin: 14px -18px 0;
+  height: 40px;
+  opacity: 0.9;
+}
+
+.insight-tile__spark svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+@media (max-width: 1100px) {
+  .insight-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ============================================================
+   DASHBOARD TAIL — two-up lists
+   ============================================================ */
+
+.dash-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+/* Review throughput ------------------------------------------------------ */
+
+.stage-row {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.stage-row:last-child { border-bottom: none; padding-bottom: 2px; }
+
+.stage-row__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.stage-row__name { font-size: 13.5px; font-weight: 620; }
+
+.stage-row__count {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.stage-row__bar {
+  height: 5px;
+  border-radius: 3px;
+  /* --border is only 7% alpha, which disappears as a track; the bar needs a
+     visible unfilled remainder or the fill reads as a free-floating dash. */
+  background: rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+}
+
+.stage-row__bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  opacity: 0.75;
+}
+
+.stage-row__stats {
+  display: flex;
+  gap: 16px;
+  margin-top: 7px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+/* Value first, unit after: the digits are what's being compared down the
+   column, so they sit on the left edge where the eye already is. */
+.stage-row__stats b {
+  color: var(--text);
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Top library assets ---------------------------------------------------- */
+
+.asset-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.asset-row:last-child { border-bottom: none; }
+
+.asset-row__rank {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.asset-row__title {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-row__uses {
+  font-size: 13px;
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.asset-row__uses-unit {
+  font-weight: 500;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 1100px) {
+  .dash-split { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Brand dossiers, two per row --------------------------------------------- */
+
+.dossier-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 22px;
+}
+
+.dossier-row {
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The last row of the grid, not the last child — with two columns the
+   final two cells both sit on the bottom edge. */
+.dossier-row:nth-last-child(-n + 2) { border-bottom: none; padding-bottom: 0; }
+
+.dossier-row__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dossier-row__name { font-size: 13.5px; font-weight: 620; }
+
+.dossier-row__meta {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.dossier-row__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 9px;
+}
+
+.dossier-row__bar .progress-bar { flex: 1; }
+
+.dossier-row__pct {
+  font-size: 11.5px;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+  width: 34px;
+  text-align: right;
+}
+
+@media (max-width: 1100px) {
+  .dossier-grid { grid-template-columns: minmax(0, 1fr); }
+  .dossier-row:nth-last-child(-n + 2) { border-bottom: 1px solid var(--border); }
+  .dossier-row:last-child { border-bottom: none; }
+}
