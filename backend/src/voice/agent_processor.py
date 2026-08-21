@@ -1982,7 +1982,16 @@ class AgentRuntimeProcessor(FrameProcessor):
                     abandoned_before_speech = True
                     return True
                 self._speech_finished.clear()
-                await self._speak(sentence, direction)
+                # This — not _speak_reply — is the path a real streaming turn
+                # takes, so the flag has to be set here too. It wasn't, which
+                # is why time_to_reply_enqueue_ms came back as "never measured"
+                # across an entire call: the only two callers that set it are
+                # the non-streaming fallbacks, which almost never run.
+                self._speaking_reply = True
+                try:
+                    await self._speak(sentence, direction)
+                finally:
+                    self._speaking_reply = False
                 spoken_anything_yet = True
                 await self._speech_finished.wait()
                 if self._interrupted_this_turn:

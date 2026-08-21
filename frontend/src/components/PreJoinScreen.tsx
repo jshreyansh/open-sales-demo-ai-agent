@@ -222,14 +222,22 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
             when you do.
           </h1>
           {/* Written for a stranger at a booth who has never heard the name:
-              first sentence is what the company does, second is why this page
-              is unusual. No persona name and no pronoun — the persona is
-              swappable (see persona.ts) and a name means nothing to someone
-              three seconds in. */}
+              first sentence is what the company does, second is what this page
+              offers. No persona name and no pronoun — the persona is swappable
+              (see persona.ts) and a name means nothing to someone three
+              seconds in.
+
+              "Shows you around", NOT "builds it live". The rep walks you
+              through the platform and can play finished examples; it does not
+              generate a video while you watch. An earlier version claimed it
+              did, which is the one promise on this page a visitor can falsify
+              inside two minutes — and it would falsify it at a booth, in front
+              of the person who just walked up. "Any hour you turn up" carries
+              the thing that IS true and is genuinely the draw: there is always
+              someone to walk you through it. */}
           <p className="lp__sub">
-            SwishX makes on-label video, avatars and infographics for pharma
-            marketing. An AI rep builds it live on this screen while you talk
-            over it.
+            On-label video, avatars and infographics for pharma marketing. An
+            AI rep sits with you and shows you around — any hour you turn up.
           </p>
 
           {/* The join row is the signature: it starts inside the portrait's
