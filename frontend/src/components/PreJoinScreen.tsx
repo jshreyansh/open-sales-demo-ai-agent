@@ -221,14 +221,20 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
             <br />
             when you do.
           </h1>
+          {/* Written for a stranger at a booth who has never heard the name:
+              first sentence is what the company does, second is why this page
+              is unusual. No persona name and no pronoun — the persona is
+              swappable (see persona.ts) and a name means nothing to someone
+              three seconds in. */}
           <p className="lp__sub">
-            {persona.name} runs SwishX live on this screen. Ask her anything, cut in
-            whenever.
+            SwishX makes on-label video, avatars and infographics for pharma
+            marketing. An AI rep builds it live on this screen while you talk
+            over it.
           </p>
 
-          {/* The join row is the signature: it starts inside her frame and
-              reaches out to you, so the one thing between arriving and
-              talking to her is physically connected to her. */}
+          {/* The join row is the signature: it starts inside the portrait's
+              frame and reaches out to you, so the one thing between arriving
+              and talking is physically connected to the person on the call. */}
           <div className="lp__join">
             <VisitorGateForm
               visitorId={getVisitorId()}
@@ -250,12 +256,6 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
       </main>
 
       {galleryOpen && <ExampleGalleryPanel onClose={() => setGalleryOpen(false)} />}
-
-      <footer className="lp__meta">
-        <span>10 minutes</span>
-        <span>Live voice</span>
-        <span>No slides</span>
-      </footer>
     </div>
   );
 }

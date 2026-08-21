@@ -86,17 +86,29 @@ class TurnTelemetry:
     # --- derived -----------------------------------------------------------
     def derived(self) -> dict:
         return {
-            # Ours. The 1.5-2.6s window lives here.
-            "turn_detection_ms": _ms(self.t_user_speech_end, self.t_turn_committed),
-            # The model's.
-            "llm_first_token_ms": _ms(self.t_llm_request, self.t_llm_first_token),
-            # Cartesia's, once first output audio is actually reported.
-            "tts_ms": _ms(self.t_first_tts_enqueue, self.t_first_output_audio),
-            # Everything before the first text reaches TTS. NOT audio.
+            # OURS. The 1.5-2.6s consolidation window lives here — the single
+            # biggest cost today and what Phase 2 attacks.
+            "turn_commit_latency_ms": _ms(self.t_user_speech_end, self.t_turn_committed),
+            # THE MODEL'S. How long DeepSeek takes to produce anything usable.
+            "llm_ttft_ms": _ms(self.t_llm_request, self.t_llm_first_token),
+            # OURS AGAIN, and easy to misattribute. This is the gap between the
+            # model producing its first token and text actually reaching the TTS
+            # service — our own sentence aggregation and routing, not Cartesia.
+            # Kept separate because calling it "TTS latency" would send anyone
+            # optimising it to the wrong vendor.
+            "llm_to_tts_enqueue_ms": _ms(self.t_llm_first_token, self.t_first_tts_enqueue),
+            # CARTESIA'S. Enqueue -> sound actually leaving the pipeline. This
+            # is the only one of the two that a TTS provider could improve.
+            "tts_acoustic_latency_ms": _ms(self.t_first_tts_enqueue, self.t_first_output_audio),
+            # Everything before the first text reaches TTS. Explicitly NOT audio,
+            # and named so nobody reads it as such.
             "time_to_first_tts_enqueue_ms": _ms(self.t_user_speech_end, self.t_first_tts_enqueue),
-            # The real one. None unless the pipeline reported output audio.
+            # THE REAL ONE — what the prospect actually experiences as "how long
+            # until she said something". None unless output audio was reported;
+            # never silently substituted with the enqueue time above.
             "acoustic_ttfa_ms": _ms(self.t_user_speech_end, self.t_first_output_audio),
-            # What I previously mislabelled as latency.
+            # Completion, not responsiveness. This is the number I previously
+            # reported as latency (median 9.9s) when it described something else.
             "ttfc_ms": _ms(self.t_user_speech_end, self.t_reply_complete),
             "user_speech_ms": _ms(self.t_user_speech_start, self.t_user_speech_end),
         }

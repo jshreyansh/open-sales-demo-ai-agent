@@ -7142,6 +7142,11 @@ body {
   justify-content: center;
   gap: clamp(28px, 5vw, 76px);
   padding: clamp(20px, 4vh, 48px) clamp(20px, 5vw, 64px);
+  /* The stage is now the last thing on the page — the meta strip that used to
+     close it is gone. Its ~39px of height is added back here rather than left
+     as free space, so the composition keeps sitting where it did between the
+     nav above and the bottom edge, instead of drifting down the screen. */
+  padding-bottom: calc(clamp(20px, 4vh, 48px) + 39px);
 }
 
 .lp__figure {
@@ -7527,36 +7532,11 @@ body {
   color: rgba(138, 131, 123, 0.6);
 }
 
-/* ---- meta strip ---- */
-.lp__meta {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 22px;
-  padding: 0 clamp(20px, 5vw, 64px) 26px;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 10.5px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: rgba(138, 131, 123, 0.75);
-}
-
-/* Hairline separators, drawn rather than typed, so the rhythm stays even. */
-.lp__meta span + span {
-  position: relative;
-  padding-left: 22px;
-}
-
-.lp__meta span + span::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 50%;
-  width: 10px;
-  height: 1px;
-  background: var(--lp-line);
-}
+/* The "10 minutes / Live voice / No slides" meta strip that used to close the
+   page is gone, and its styles with it. Three claims nobody asked about, in
+   10px uppercase mono at the very bottom — the page already proves all three
+   the moment someone presses the button. The stage absorbs the height it
+   freed up (see .lp__stage's bottom padding). */
 
 /* ---- entrance ----
    One short orchestrated sequence on load, then nothing moves again except
@@ -7611,7 +7591,6 @@ body {
   .lp__secondary { margin-top: 14px; }
   .lp__showcase { margin-top: 14px; }
   .lp__nav { padding-top: 18px; }
-  .lp__meta { padding-bottom: 18px; }
   .lp__copy {
     text-align: center;
     max-width: 460px;
@@ -7624,7 +7603,6 @@ body {
   }
   .lp .prejoin__fields { align-items: stretch; }
   .lp__sub { margin-inline: auto; }
-  .lp__meta { justify-content: center; }
   .lp__nav-links { gap: 18px; }
 }
 

@@ -16,8 +16,12 @@ export default function DashboardGate({ onGated }: DashboardGateProps) {
       <div className="dashboard-gate__card">
         <div className="prejoin__kicker">SwishX · Live Demo</div>
         <h1 className="prejoin__title">Try the product demo</h1>
+        {/* Same rule as the pre-join hero: say what the product is before
+            asking for anything, and don't hardcode the persona's name or
+            gender — the persona is swappable (see persona.ts). */}
         <p className="dashboard-gate__subtitle">
-          A couple of details first — Fiona will be right there in chat once you're in.
+          The real SwishX platform for pharma marketing content. A couple of
+          details and an AI rep will meet you in chat.
         </p>
         <VisitorGateForm
           visitorId={getVisitorId()}
