@@ -433,7 +433,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     # audio — see TTSLevelReporter's docstring for why this exists (its
     # synthesized speech has no MediaStreamTrack the frontend could
     # otherwise measure directly, unlike the visitor's own mic).
-    tts_level_reporter = TTSLevelReporter()
+    # Passed the agent so it can timestamp the first real output audio frame of
+    # each turn — see turn_telemetry.py. Without this, acoustic TTFA has no
+    # source in the pipeline at all and we'd be left reporting TTS enqueue time
+    # as though it were audio.
+    tts_level_reporter = TTSLevelReporter(agent)
 
     pipeline = Pipeline(
         [

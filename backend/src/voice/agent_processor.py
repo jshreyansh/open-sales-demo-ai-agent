@@ -40,6 +40,7 @@ from ..agent.runtime import (
 )
 from ..context.store import OPENING_GREETING, get_session
 from ..data import gate_log
+from .turn_telemetry import TurnTelemetry
 
 # Short "breathing room" between one walkthrough beat finishing and the next
 # starting on its own — long enough that an interruption landing right after
@@ -48,6 +49,14 @@ from ..data import gate_log
 # the instant real speech starts), short enough that it still reads as one
 # continuous presenter talking, not "waiting for a response" silence.
 AUTO_CONTINUE_PAUSE_SECS = 0.1
+
+# How many walkthrough beats may play back-to-back before the floor goes back
+# to the prospect. Session 7d0018d3 ran EIGHT consecutive beats (02:08:39 ->
+# 02:10:05) immediately after the prospect said, in as many words, that a good
+# salesperson stays quiet and asks which direction you want to go. He then went
+# silent and the idle timeout hung up on him. A tour that never checks in isn't
+# a demo, it's a broadcast.
+MAX_CONSECUTIVE_AUTO_BEATS = 2
 
 # Upper bound on how long _auto_continue_after_pause will wait for the
 # CURRENT beat's own speech to genuinely finish (via _speech_finished)
@@ -131,14 +140,32 @@ PENDING_FRAGMENT_STALL_GRACE_SECS = 4.0
 # that session it made the prospect repeat himself, which then tripped the
 # "still catching up" recovery. Deliberately shorter than the stall grace so
 # it lands DURING the hold rather than replacing it.
-# Raised 1.5 -> 2.6 as part of cutting the filler rate.
+# Raised 1.5 -> 2.6 as part of cutting the filler rate. At 1.5s this fired on
+# ordinary mid-thought pauses, on top of the per-turn filler, which is how a
+# real call ended up 32% filler.
 #
-# At 1.5s this fired on ordinary mid-thought pauses, on top of the
-# per-turn filler, which is how a real call ended up 32% filler. It only
-# earns its place on a genuinely long hold — where silence would read as
-# "she isn't listening" — not on every breath. Sits above the base
-# consolidation window so a normal fragment hold passes in silence.
-FRAGMENT_BACKCHANNEL_AFTER_SECS = 2.6
+# Superseded by BACKCHANNEL_MIN_FLOOR_HOLD_SECS below: raising the threshold
+# was still the wrong axis, because the timer it was measured against reset on
+# every fragment. The threshold was never the problem; what it was measured
+# FROM was.
+#
+# Measured against how long the prospect has held the floor for THIS TURN, not
+# how long since their last fragment landed. That distinction is the whole bug:
+# _last_fragment_activity resets on every fragment, so a 20-second thought
+# delivered in seven fragments never accumulated 20 seconds of hold — it
+# accumulated seven separate 2.8-second holds, and each one earned its own nod.
+# Session 7d0018d3 got "Right." / "Mm." / "Mm-hm." / "Sure." in 21 seconds
+# inside a single thought that way.
+#
+# One nod per turn is the cap; this is what makes the nod EARNED rather than
+# merely periodic.
+BACKCHANNEL_MIN_FLOOR_HOLD_SECS = 3.5
+
+# Don't nod immediately before answering. A nod that lands ~100ms ahead of the
+# real reply isn't listening behaviour, it's a stammer — and it is what makes
+# the agent sound like it's buffering rather than thinking. If the settle
+# window is closer than this, stay quiet and let the answer be the answer.
+BACKCHANNEL_MIN_LEAD_SECS = 1.2
 
 # Spoken once per held fragment while waiting — the conversational equivalent
 # of a nod. Short on purpose: this must not read as the agent taking the
@@ -146,6 +173,15 @@ FRAGMENT_BACKCHANNEL_AFTER_SECS = 2.6
 # / FLOOR_FILLERS because those bridge to an answer that's already coming,
 # whereas these bridge to "keep going, I'm with you."
 BACKCHANNELS = ["Mm-hm.", "Right.", "Mm.", "Sure."]
+
+# Spoken when the walkthrough hits MAX_CONSECUTIVE_AUTO_BEATS. Each is a real
+# question handing back a real choice — "carry on, or go somewhere else" —
+# rather than the empty "does that make sense?" that only invites "yes".
+FLOOR_RETURN_PROMPTS = [
+    "Want me to keep going, or is there something you'd rather jump to?",
+    "I can carry on from here — or is there somewhere more useful to go?",
+    "Should I keep moving through this, or would you rather steer for a bit?",
+]
 
 # How long to wait, after a barge-in cut the agent off, for the transcript
 # that would prove the barge-in was real. If nothing arrives in this window
@@ -522,6 +558,15 @@ class AgentRuntimeProcessor(FrameProcessor):
     # drain path — a crash in the one code path whose entire job is to stop
     # the pipeline getting stuck.
     _pending_interruption_since: Optional[float] = None
+    # When the prospect started holding the floor for the CURRENT turn. Set on
+    # the first fragment of a turn, cleared when the turn is released — so it
+    # measures the whole thought, not the gap since the last fragment.
+    _turn_floor_started_at: Optional[float] = None
+    _consecutive_auto_beats: int = 0
+    # The turn currently being measured. See turn_telemetry.py — this exists
+    # because "how long before she made a sound" was unanswerable from logs.
+    _telemetry: Optional[TurnTelemetry] = None
+    _turn_counter: int = 0
     # Declared at class level for the same reason: the pause gates are read
     # from the scheduler and the stall watchdog, both of which run on paths
     # that must never raise. A missing attribute there would take down the
@@ -925,6 +970,11 @@ class AgentRuntimeProcessor(FrameProcessor):
             return
 
         if isinstance(frame, VADUserStartedSpeakingFrame):
+            # Telemetry clock for the turn that's forming. Opened here rather
+            # than at commit so user_speech_ms covers the whole utterance, and
+            # so t_user_speech_end (the reference point for every latency we
+            # care about) has somewhere to land.
+            self._telemetry_open()
             # Deliberately does NOT bump _last_activity any more.
             #
             # VAD fires on any sound above threshold — a cough, a keyboard, a
@@ -983,6 +1033,17 @@ class AgentRuntimeProcessor(FrameProcessor):
             # racing one of its own — which is exactly what turns five
             # fragments into one answer instead of five.
             self._last_user_speech_ended_at = time.monotonic()
+            # THE reference point. Every latency in the report is measured
+            # from here — this is the instant the prospect stopped talking and
+            # started waiting.
+            if self._telemetry is not None:
+                self._telemetry.t_user_speech_end = time.monotonic()
+                # An early-followup marker: they're speaking again while a
+                # reply is already under way. May be a genuine interruption
+                # rather than us cutting them off, which is why the field is
+                # named for the observation and not the conclusion.
+                if self._bot_speaking:
+                    self._telemetry.early_commit_followup = True
             # Decide, right here, whether what just ended was a real
             # barge-in or a noise blip — this is the only moment both the
             # start and end of the segment are known, and it happens well
@@ -1045,6 +1106,13 @@ class AgentRuntimeProcessor(FrameProcessor):
         safety net above."""
         state, _ = await self._smart_turn.analyze_end_of_turn()
         self._last_turn_incomplete = state == EndOfTurnState.INCOMPLETE
+        if self._telemetry is not None:
+            self._telemetry.mark("t_smart_turn_verdict")
+            # Recorded per turn so Phase 2 can measure how often COMPLETE is
+            # right — the number that decides whether the fast path is safe.
+            self._telemetry.smart_turn_verdict = (
+                "INCOMPLETE" if self._last_turn_incomplete else "COMPLETE"
+            )
 
     async def _maybe_handle_transcript(self, text: str, direction: FrameDirection) -> None:
         """Gates a finalized transcript segment on whether Smart Turn judged
@@ -1076,7 +1144,11 @@ class AgentRuntimeProcessor(FrameProcessor):
             self._note_fragment_gap()
             self._pending_fragment_text = combined
             self._last_fragment_activity = time.monotonic()
-            self._fragment_backchannel_sent = False
+            # NOT re-arming the backchannel here. Appending a fragment is the
+            # same person still talking — it is not a new turn, and treating it
+            # as one is what produced the nod clusters. The nod re-arms only
+            # when a turn is actually RELEASED (see the release sites below).
+            self._start_floor_hold()
             logger.info(f"[{self._visitor_id}] holding incomplete fragment: {combined!r}")
             return
         if self._last_turn_incomplete:
@@ -1084,9 +1156,11 @@ class AgentRuntimeProcessor(FrameProcessor):
             # FAST_TRACK_AFFIRMATIONS for why this specific carve-out. These
             # hand the floor BACK ("yeah", "okay"), so they answer at once
             # rather than sitting out the consolidation window below.
+            if self._telemetry is not None:
+                self._telemetry.released_by = "fast_track"
             logger.info(f"[{self._visitor_id}] fast-tracking short affirmation past INCOMPLETE: {combined!r}")
             self._pending_fragment_text = ""
-            self._fragment_backchannel_sent = False
+            self._end_floor_hold()
             await self._handle_real_turn(combined, direction)
             return
         # COMPLETE — but "complete sentence" is not "finished talking".
@@ -1105,7 +1179,8 @@ class AgentRuntimeProcessor(FrameProcessor):
         self._note_fragment_gap()
         self._pending_fragment_text = combined
         self._last_fragment_activity = time.monotonic()
-        self._fragment_backchannel_sent = False
+        # Same reasoning as the INCOMPLETE append above: still the same turn.
+        self._start_floor_hold()
         logger.info(
             f"[{self._visitor_id}] holding fragment {self._burst_fragments} "
             f"(window now {self._settle_window():.1f}s): {combined!r}"
@@ -1249,7 +1324,9 @@ class AgentRuntimeProcessor(FrameProcessor):
                     ):
                         pending = self._pending_fragment_text
                         self._pending_fragment_text = ""
-                        self._fragment_backchannel_sent = False
+                        self._end_floor_hold()
+                        if self._telemetry is not None:
+                            self._telemetry.released_by = "settle"
                         logger.info(f"[{self._visitor_id}] settled — answering once: {pending!r}")
                         await self._handle_real_turn(pending, FrameDirection.DOWNSTREAM)
                         continue
@@ -1260,14 +1337,27 @@ class AgentRuntimeProcessor(FrameProcessor):
                     # or _last_fragment_activity: this is the agent making a
                     # sound, not the prospect speaking, so it must not extend the
                     # hold or reset the stall countdown it sits inside.
+                    floor_held = self._floor_held_for()
+                    # How much longer the settle window has to run. A nod is
+                    # only worth making if the answer isn't about to arrive
+                    # anyway — see BACKCHANNEL_MIN_LEAD_SECS. This is the
+                    # cancellation requirement in its practical form: rather
+                    # than starting a nod and racing to abort it, don't start
+                    # one we can already see will collide.
+                    quiet_for = time.monotonic() - self._last_user_speech_ended_at
+                    lead = self._settle_window() - quiet_for
                     if (
                         not self._fragment_backchannel_sent
-                        and held_for >= FRAGMENT_BACKCHANNEL_AFTER_SECS
+                        and floor_held >= BACKCHANNEL_MIN_FLOOR_HOLD_SECS
+                        and lead >= BACKCHANNEL_MIN_LEAD_SECS
                     ):
                         self._fragment_backchannel_sent = True
+                        if self._telemetry is not None:
+                            self._telemetry.backchannel_count += 1
                         backchannel = self._pick_backchannel()
                         logger.info(
-                            f"[{self._visitor_id}] fragment held {held_for:.1f}s — backchanneling {backchannel!r}"
+                            f"[{self._visitor_id}] floor held {floor_held:.1f}s (lead {lead:.1f}s) "
+                            f"— backchanneling {backchannel!r}"
                         )
                         await self._speak_without_activity_bump(backchannel)
                         continue
@@ -1275,6 +1365,12 @@ class AgentRuntimeProcessor(FrameProcessor):
                         continue
                     pending = self._pending_fragment_text
                     self._pending_fragment_text = ""
+                    # This release path never reset the nod at all, so after a
+                    # stall flush the next turn inherited a spent flag and went
+                    # un-acknowledged however long it ran.
+                    self._end_floor_hold()
+                    if self._telemetry is not None:
+                        self._telemetry.released_by = "stall_backstop"
                     logger.warning(f"[{self._visitor_id}] pending fragment stalled, flushing: {pending!r}")
                     await self._handle_real_turn(pending, FrameDirection.DOWNSTREAM)
                 except asyncio.CancelledError:
@@ -1323,6 +1419,17 @@ class AgentRuntimeProcessor(FrameProcessor):
         # Answered — the burst is over, so the next one starts impatient
         # again rather than inheriting a stretched window.
         self._burst_fragments = 0
+        # The prospect spoke, so the tour is a two-way conversation again
+        # and the beat budget resets. This is what lets "keep going" buy
+        # another full run of beats rather than one at a time.
+        self._consecutive_auto_beats = 0
+        # Committed: this is the moment we accepted their words as a turn.
+        # turn_detection_ms — the 1.5-2.6s window — is measured to right here.
+        if source == "voice":
+            self._telemetry_open()
+        if self._telemetry is not None:
+            self._telemetry.mark("t_turn_committed")
+            self._telemetry.source = source
         self._begin_spoken_tracking()
 
         try:
@@ -1348,6 +1455,8 @@ class AgentRuntimeProcessor(FrameProcessor):
             await self._speak(filler, direction)
 
             try:
+                if self._telemetry is not None:
+                    self._telemetry.mark("t_llm_request")
                 result, already_spoken = await self._consume_turn_stream(run_turn_stream(text, session), direction)
             except Exception:
                 result, already_spoken = None, False
@@ -1407,6 +1516,10 @@ class AgentRuntimeProcessor(FrameProcessor):
             await self._advance_after_turn(session, direction)
         finally:
             self._turn_in_progress = False
+            # In the finally so a turn that ends by raising, or by being
+            # interrupted, still reports. A latency record that only existed
+            # for turns that went well would flatter every average we take.
+            self._telemetry_close()
 
     async def _advance_after_turn(self, session, direction: FrameDirection) -> None:
         """Called at the end of every turn — real or auto-continued — instead
@@ -1500,6 +1613,12 @@ class AgentRuntimeProcessor(FrameProcessor):
         # the flag before it speaks its own re-entry line.
         if self._paused:
             return
+        # First text handed to TTS this turn. This is time_to_first_tts_enqueue
+        # and it is NOT acoustic TTFA — sound leaves the speaker an unmeasured
+        # amount later. Conflating the two would bake an unknown constant into
+        # every number we then tuned against, so they stay separate fields.
+        if self._telemetry is not None:
+            self._telemetry.mark("t_first_tts_enqueue")
         # TTSService only flushes its sentence-aggregation buffer on an
         # LLMFullResponseEndFrame (or EndFrame) — a bare TextFrame gets
         # buffered and never actually synthesized. Bracketing this way is
@@ -1528,6 +1647,52 @@ class AgentRuntimeProcessor(FrameProcessor):
                 f"[{self._visitor_id}] fragment {gap:.2f}s after the last — same breath, "
                 f"window held at {self._settle_window():.1f}s"
             )
+
+    def _telemetry_open(self) -> None:
+        """Starts a telemetry record if one isn't already running. Idempotent:
+        VAD can fire several times inside one forming turn (a breath, a false
+        trigger) and only the first should start the clock."""
+        if self._telemetry is None:
+            self._turn_counter += 1
+            self._telemetry = TurnTelemetry(
+                visitor_id=self._visitor_id, turn_id=self._turn_counter
+            )
+            self._telemetry.mark("t_user_speech_start")
+
+    def _telemetry_close(self, released_by: Optional[str] = None) -> None:
+        """Emits the record and clears it. Safe to call when nothing is open —
+        turns can end down several paths (normal, interrupted, disconnect) and
+        none of them should have to know whether measuring was in progress."""
+        tel = self._telemetry
+        if tel is None:
+            return
+        if released_by and tel.released_by is None:
+            tel.released_by = released_by
+        tel.interrupted = self._interrupted_this_turn
+        tel.fragments = self._burst_fragments
+        tel.consecutive_auto_beats = self._consecutive_auto_beats
+        tel.mark("t_reply_complete")
+        tel.emit()
+        self._telemetry = None
+
+    def _start_floor_hold(self) -> None:
+        """Marks the beginning of the prospect holding the floor, if it isn't
+        already running. Idempotent on purpose: every fragment of one thought
+        calls this, and only the first should set the clock."""
+        if self._turn_floor_started_at is None:
+            self._turn_floor_started_at = time.monotonic()
+
+    def _end_floor_hold(self) -> None:
+        """A turn was actually released. This — and only this — is what re-arms
+        the backchannel, which is the fix for the nod clusters."""
+        self._turn_floor_started_at = None
+        self._fragment_backchannel_sent = False
+
+    def _floor_held_for(self) -> float:
+        """Total seconds the prospect has held the floor this turn."""
+        if self._turn_floor_started_at is None:
+            return 0.0
+        return time.monotonic() - self._turn_floor_started_at
 
     def _settle_window(self) -> float:
         """How long the room must stay quiet before answering, given how
@@ -1782,6 +1947,12 @@ class AgentRuntimeProcessor(FrameProcessor):
             return False
 
         async for event in stream:
+            # First event out of the stream. Not literally the first token —
+            # run_turn_stream yields on parsed JSON boundaries — but it is the
+            # first moment the model produced anything usable, which is what
+            # llm_first_token_ms is actually asking about.
+            if self._telemetry is not None:
+                self._telemetry.mark("t_llm_first_token")
             kind = event[0]
             if stopped_speaking_early:
                 # Still need `result` from the terminal event below so the
@@ -2003,12 +2174,52 @@ class AgentRuntimeProcessor(FrameProcessor):
         # watchdog's own reschedule path too, not just end-of-turn.
         if self._pending_fragment_text or self._pending_interruption_text:
             return
+        # The floor goes back to the prospect after a couple of beats. Without
+        # this, session 7d0018d3 ran eight beats end to end and the prospect
+        # simply stopped participating.
+        #
+        # Deliberately NOT a silent stop: going quiet mid-tour is its own
+        # failure ("did it crash?"). The agent finishes this beat, asks whether
+        # to continue, and parks on walkthrough_awaiting_answer — existing
+        # machinery that already halts the chain and waits. A real turn resets
+        # the counter, so answering "keep going" buys another full budget.
+        if self._consecutive_auto_beats >= MAX_CONSECUTIVE_AUTO_BEATS:
+            logger.info(
+                f"[{self._visitor_id}] auto-continue cap reached "
+                f"({self._consecutive_auto_beats} beats) — returning the floor"
+            )
+            session.walkthrough_awaiting_answer = True
+            self._consecutive_auto_beats = 0
+            self._pending_auto_continue = asyncio.create_task(
+                self._return_floor_after_beats(direction)
+            )
+            return
         # Only one continuation is ever in flight/pending at a time — a
         # fresh schedule call (from the auto-continue turn that's about to
         # finish and chain into the next one) replacing an old reference is
         # fine, since the old task, by definition, already fired by the
         # time this runs again.
         self._pending_auto_continue = asyncio.create_task(self._auto_continue_after_pause(session, direction))
+
+    async def _return_floor_after_beats(self, direction: FrameDirection) -> None:
+        """Hands the floor back with an actual question once the beat budget is
+        spent. Waits for the beat in flight to finish first, the same way
+        _auto_continue_after_pause does, so this doesn't talk over it."""
+        try:
+            try:
+                await asyncio.wait_for(
+                    self._speech_finished.wait(), timeout=AUTO_CONTINUE_SPEECH_WAIT_TIMEOUT_SECS
+                )
+            except asyncio.TimeoutError:
+                pass
+            await asyncio.sleep(AUTO_CONTINUE_PAUSE_SECS)
+        except asyncio.CancelledError:
+            return
+        # If they started talking while we waited, they took the floor back
+        # themselves and this question would be talking over them.
+        if self._user_speaking or self._pending_fragment_text or self._turn_in_progress:
+            return
+        await self._speak(random.choice(FLOOR_RETURN_PROMPTS), direction)
 
     async def _watch_auto_continue_stall(self) -> None:
         """Self-healing safety net for the auto-continue chain.
@@ -2118,6 +2329,10 @@ class AgentRuntimeProcessor(FrameProcessor):
             pass
 
     async def _auto_continue_after_pause(self, session, direction: FrameDirection) -> None:
+        # Counted here, not at schedule time: a beat cancelled by a barge-in
+        # never reaches the prospect's ears, and charging it against the budget
+        # would cut the tour short for something that never happened.
+        self._consecutive_auto_beats += 1
         try:
             # Wait for the beat that was playing when this got scheduled to
             # genuinely finish before even starting the pause countdown.
@@ -2282,6 +2497,10 @@ class AgentRuntimeProcessor(FrameProcessor):
             await self._advance_after_turn(session, direction)
         finally:
             self._turn_in_progress = False
+            # In the finally so a turn that ends by raising, or by being
+            # interrupted, still reports. A latency record that only existed
+            # for turns that went well would flatter every average we take.
+            self._telemetry_close()
 
     async def _report_action(self, action: dict) -> None:
         try:
@@ -2796,15 +3015,25 @@ class TTSLevelReporter(FrameProcessor):
 
     _MIN_INTERVAL_SECS = 0.08  # ~12/sec — smooth enough for a CSS transition, cheap on the wire
 
-    def __init__(self):
+    def __init__(self, agent: Optional["AgentRuntimeProcessor"] = None):
         super().__init__()
         self._last_sent = 0.0
+        # Optional back-reference so the first audio frame of a turn can be
+        # timestamped. This processor sits after TTS and handles the real
+        # audio bytes, so it is the only place in the pipeline that knows when
+        # sound genuinely starts — which is what makes acoustic_ttfa_ms a
+        # measurement rather than an estimate.
+        self._agent = agent
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, TTSAudioRawFrame):
             now = time.monotonic()
+            if self._agent is not None:
+                tel = self._agent._telemetry
+                if tel is not None:
+                    tel.mark("t_first_output_audio")
             if now - self._last_sent >= self._MIN_INTERVAL_SECS:
                 self._last_sent = now
                 level = _rms_level(frame.audio)
