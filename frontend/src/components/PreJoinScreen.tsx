@@ -186,9 +186,28 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
         </figure>
 
         <div className="lp__copy">
-          {/* Says what this is, once. It used to repeat the LIVE chip on the
-              card, which spent two elements on one fact. */}
-          <div className="lp__eyebrow">SwishX · Live product demo</div>
+          {/* The badge sits ABOVE the headline, where badges go. It spent one
+              version at the foot of the column and was wrong there twice
+              over: nothing else on the page announces itself from the
+              bottom, and it sat directly under a form that grows by two
+              fields, so every visitor who typed an email watched the shiniest
+              thing on the page get shoved down the screen.
+              Up here it never moves, whatever the form does below it. */}
+          <button
+            className="meet__showcase-btn lp__showcase"
+            onClick={() => setGalleryOpen(true)}
+            title="See the best content SwishX has generated"
+          >
+            <span className="meet__showcase-btn-inner">
+              <span className="meet__showcase-btn-medal">
+                <ShowcaseMedal size={14} />
+              </span>
+              <span className="meet__showcase-btn-text">
+                <span className="meet__showcase-btn-kicker">Hall of fame</span>
+                <span className="meet__showcase-btn-label">Best Content Showcase</span>
+              </span>
+            </span>
+          </button>
           {/* The build lands on the second line: the whole proposition is that
               nothing has to be arranged first. */}
           <h1 className="lp__title">
@@ -220,25 +239,7 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
               "Coming soon" title. A dead control earns no space — and with
               the booking link promoted into the nav, the person it was aimed
               at is already served. Bring it back when scheduling is real. */}
-          {/* Deliberately the same badge, same classes, same modal as the one
-              in the meeting — not a landing-page lookalike. It already earns
-              a click in there; rebuilding it here would only be a chance to
-              make it worse, and any change to one now changes both. */}
-          <button
-            className="meet__showcase-btn lp__showcase"
-            onClick={() => setGalleryOpen(true)}
-            title="See the best content SwishX has generated"
-          >
-            <span className="meet__showcase-btn-inner">
-              <span className="meet__showcase-btn-medal">
-                <ShowcaseMedal size={14} />
-              </span>
-              <span className="meet__showcase-btn-text">
-                <span className="meet__showcase-btn-kicker">Hall of fame</span>
-                <span className="meet__showcase-btn-label">Best Content Showcase</span>
-              </span>
-            </span>
-          </button>
+
         </div>
       </main>
 

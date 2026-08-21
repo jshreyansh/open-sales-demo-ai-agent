@@ -300,16 +300,20 @@ export default function VisitorGateForm({ visitorId, path, submitLabel, submitti
 
   return (
     <div className="prejoin__fields">
-      <div className="prejoin__name">
-        <label htmlFor="gate-email-locked">Work email</label>
-        <input id="gate-email-locked" type="email" value={email} disabled />
+      {/* A confirmed address is a fact, not a field. It used to render as a
+          full disabled input with a label above and a link below — three
+          rows of chrome for one line of read-only text, on the one screen
+          that has the least vertical room to spare. */}
+      <div className="prejoin__confirmed">
+        <span className="prejoin__confirmed-value" title={email}>{email}</span>
         <button type="button" className="prejoin__change-email" onClick={handleChangeEmail}>
-          Not you? Change email
+          Change
         </button>
       </div>
 
       {step === "new" && (
         <>
+          <div className="prejoin__pair">
           <div className="prejoin__name">
             <label htmlFor="gate-name">Your name</label>
             <input
@@ -336,6 +340,7 @@ export default function VisitorGateForm({ visitorId, path, submitLabel, submitti
                 if (e.key === "Enter") void handleFinalSubmit();
               }}
             />
+          </div>
           </div>
         </>
       )}

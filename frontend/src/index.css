@@ -7362,15 +7362,23 @@ body {
 .lp .prejoin__fields {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  /* Explicit: the shared .prejoin__fields rule centres its children for the
+     old layout, and inherited centring left the confirmed-address chip
+     floating out of line with the fields beneath it. */
+  align-items: stretch;
+  gap: 10px;
   width: 100%;
-  max-width: 420px;
+  /* Narrower than before. A single short input stretched to 420px reads as a
+     slab; at 380 it reads as a field, and the CTA under it stops looking
+     like a banner. */
+  max-width: 380px;
 }
 
 .lp .prejoin__name {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 5px;
+  min-width: 0;
   /* Both explicit: the shared .prejoin__name rule centres its contents for
      the old layout, and inherited centring is not something a later rule
      overrides by accident. */
@@ -7380,7 +7388,7 @@ body {
 
 .lp .prejoin__name label {
   font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 10px;
+  font-size: 9.5px;
   letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--lp-muted);
@@ -7388,13 +7396,13 @@ body {
 
 .lp .prejoin__name input {
   width: 100%;
-  padding: 14px 16px;
-  border-radius: 12px;
+  padding: 11px 14px;
+  border-radius: 10px;
   border: 1px solid var(--lp-line);
   background: var(--lp-raise);
   color: var(--lp-text);
   font-family: var(--font);
-  font-size: 15px;
+  font-size: 14.5px;
   transition: border-color 0.16s, background 0.16s;
 }
 
@@ -7415,13 +7423,13 @@ body {
 /* The one orange element on the page. */
 .lp .prejoin__join {
   width: 100%;
-  padding: 15px 22px;
-  border-radius: 12px;
+  padding: 12px 22px;
+  border-radius: 10px;
   border: none;
   background: var(--accent);
   color: #fff;
   font-family: var(--font);
-  font-size: 15.5px;
+  font-size: 15px;
   font-weight: 650;
   letter-spacing: -0.01em;
   cursor: pointer;
@@ -7642,9 +7650,9 @@ body {
    in normal flow here. */
 .lp__showcase {
   position: static;
-  /* Alone under the join block now that "Schedule instead" is gone, so it
-     gets real space above it rather than being crowded into a row. */
-  margin-top: 30px;
+  /* Sits above the headline now, in the eyebrow's old slot — so it holds
+     still no matter how many fields the form grows below it. */
+  margin: 0 0 20px;
   transform: none;
 }
 
@@ -7700,4 +7708,101 @@ body {
    should be ours. */
 @media (prefers-reduced-motion: reduce) {
   .showcase-medal { animation: none; transform: rotateY(180deg); }
+}
+
+/* ---- gate form, laid out for its LARGEST state ----
+   The form starts as one field and grows to a confirmed-address line plus
+   name plus company plus a CTA. It was only ever designed at its smallest,
+   so the fullest state pushed the page into a scroll — on a layout whose one
+   promise is that it never scrolls. These rules size it for the fullest
+   state, and the smaller ones simply have room to spare. */
+
+/* Name and company share a row. Both are short, both are always asked in the
+   same breath, and stacking them cost a whole row plus a gap for nothing. */
+.lp .prejoin__pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+/* The confirmed address: one line, aligned like a value rather than a form
+   control, with the escape hatch sitting inline instead of underneath. */
+.lp .prejoin__confirmed {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--lp-line);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 13.5px;
+  color: var(--lp-muted);
+  min-width: 0;
+}
+
+.lp .prejoin__confirmed-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--lp-text);
+}
+
+.lp .prejoin__confirmed .prejoin__change-email {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--lp-muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.lp .prejoin__confirmed .prejoin__change-email:hover {
+  color: var(--lp-text);
+}
+
+@media (max-width: 560px) {
+  /* Side by side stops working once the column is this narrow — two 8ch
+     inputs are worse than two stacked full-width ones. */
+  .lp .prejoin__pair { grid-template-columns: 1fr; }
+}
+
+/* ---- form state changes ----
+   The gate goes from one field to three. It used to jump: fields appeared
+   fully formed and everything under them teleported down, which is a jarring
+   half-second on a page that is otherwise composed. Each field now arrives
+   under its own power, staggered, and the block that follows eases into its
+   new position instead of snapping there. */
+.lp .prejoin__confirmed,
+.lp .prejoin__pair,
+.lp .prejoin__name {
+  animation: lp-field-in 0.34s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* A short stagger so the group reads as arriving, not as one block appearing.
+   Kept under 150ms end to end — any longer and it stops feeling responsive
+   to the click that caused it. */
+.lp .prejoin__confirmed { animation-delay: 0s; }
+.lp .prejoin__pair { animation-delay: 0.05s; }
+.lp .prejoin__fields > .prejoin__join { animation: lp-field-in 0.34s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both; }
+
+@keyframes lp-field-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Everything below the form eases rather than jumps when the form's height
+   changes underneath it. */
+.lp__instant {
+  transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp .prejoin__confirmed,
+  .lp .prejoin__pair,
+  .lp .prejoin__name,
+  .lp .prejoin__fields > .prejoin__join {
+    animation: none;
+  }
+  .lp__instant { transition: none; }
 }
