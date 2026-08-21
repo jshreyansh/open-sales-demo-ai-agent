@@ -1646,6 +1646,66 @@ def _sub_actions_remaining(session: SessionState, step) -> list:
     return [a for a in STEP_SUB_ACTIONS[step.index] if a not in session.walkthrough_fired_actions]
 
 
+def _enforce_step_order(session: SessionState, action: Optional[dict]) -> tuple[Optional[dict], bool]:
+    """The hard invariant: a step 6/7 wizard sub-action may only fire if it
+    is the deterministic next legal one, or a revisit of something already
+    fired.
+
+    Root cause this closes: next_sub_action (used by _walkthrough_note,
+    above) was correctly computed all along, but only ever handed to the
+    model as a sentence in the prompt. The tool schema's "method" field is
+    an unconstrained string, and the write that records what fired
+    (_finalize_turn) accepted whatever the model returned with no
+    comparison to what was actually legal. Three advisory layers, zero
+    enforcement — a model could (and, live, did) skip step-brief entirely
+    for MagicAvatar and fire step-generate before step-options.
+
+    Returns (possibly-corrected action, was_corrected). Only ever touches
+    the "method" field, and only when session.walkthrough_step is 6 or 7
+    AND the proposed method is actually one of that step's own sub-actions
+    — an action for something else entirely (a different page, a top-level
+    registry action) is out of scope for this invariant and passes through
+    untouched. When corrected, the caller is responsible for suppressing
+    whatever reply text the model composed against the wrong action and
+    regenerating it against the corrected one (see _stream_with_claude and
+    run_turn) — this function only ever decides the action, never the
+    reply, because by the time an action is known during streaming the
+    reply hasn't been generated yet (the schema is ordered action-before-
+    reply for exactly this reason; see _stream_with_claude's docstring),
+    but for the non-streaming path nothing has been spoken yet either way.
+    """
+    if not action or session.walkthrough_step not in (6, 7):
+        return action, False
+    step_idx = session.walkthrough_step
+    sub_actions = STEP_SUB_ACTIONS.get(step_idx, [])
+    method = action.get("method")
+    if method not in sub_actions:
+        # Not a recognized sub-action of the CURRENT wizard step (a
+        # different page/registry action, or step_idx has no sub-list at
+        # all) — this invariant has nothing to say about it.
+        return action, False
+    if method in session.walkthrough_fired_actions:
+        return action, False  # legitimate "show me that again"
+    step = WALKTHROUGH_STEPS_BY_INDEX.get(step_idx)
+    remaining = _sub_actions_remaining(session, step)
+    legal_next = remaining[0] if remaining else None
+    if method == legal_next:
+        return action, False
+    if legal_next is None:
+        # Everything in the canonical list already fired; nothing left to
+        # correct TO. Let it through rather than silently eating a turn —
+        # this is a "wants to revisit something with an unrecognized name"
+        # edge case the invariant can't resolve on its own.
+        return action, False
+    logger.warning(
+        f"[{session.visitor_id}] walkthrough order violation: step {step_idx} proposed "
+        f"{method!r}, correcting to the legal next sub-action {legal_next!r}"
+    )
+    corrected = dict(action)
+    corrected["method"] = legal_next
+    return corrected, True
+
+
 def _promised_to_continue(text: str) -> bool:
     """True when the reply commits to carrying the walkthrough on.
 
@@ -2089,6 +2149,20 @@ def _finalize_turn(
     # its own dedicated flag/backstop right below since it needs stronger
     # handling — forcing wrap-up on a repeat, not just a prompt note).
     if session.walkthrough_step in (6, 7) and action_method:
+        # Should always already be legal by the time it reaches here — see
+        # _enforce_step_order, applied upstream in _stream_with_claude and
+        # run_turn before this function ever runs. Logged rather than
+        # blocked: this is a sanity check on the gate, not a second gate,
+        # and a call must never go silent over a bookkeeping assertion.
+        sub_actions = STEP_SUB_ACTIONS.get(session.walkthrough_step, [])
+        if action_method in sub_actions and action_method not in session.walkthrough_fired_actions:
+            remaining = _sub_actions_remaining(session, WALKTHROUGH_STEPS_BY_INDEX.get(session.walkthrough_step))
+            if remaining and action_method != remaining[0]:
+                logger.error(
+                    f"[{session.visitor_id}] walkthrough order violation reached _finalize_turn "
+                    f"uncorrected: {action_method!r}, expected {remaining[0]!r} — "
+                    "the upstream gate in _stream_with_claude/run_turn should have caught this"
+                )
         session.walkthrough_fired_actions.add(action_method)
     if session.walkthrough_step in (6, 7) and action_method == "start-generation":
         if already_fired:
@@ -2290,6 +2364,14 @@ def run_turn(message: str, session: SessionState) -> AgentResult:
     if _client is not None:
         try:
             result = _select_with_claude(message, session)
+            # Same invariant as the streaming path — see _enforce_step_order
+            # and _stream_with_claude. No live-speech risk here at all (this
+            # is the text-chat path; nothing is ever spoken), so this is
+            # just the action correction plus the existing backfill, no
+            # streaming-suppression needed.
+            result["action"], corrected = _enforce_step_order(session, result.get("action"))
+            if corrected:
+                result["_reply_needs_backfill"] = True
             result = _maybe_backfill_reply_sync(result, session)
         except Exception:
             logger.exception("LLM call failed, falling back to keyword matcher")
@@ -2531,6 +2613,15 @@ async def _stream_with_claude(message: str, session: SessionState, user_content:
     lead_in_extractor = _StreamingFieldExtractor("lead_in")
     reply_extractor = _StreamingFieldExtractor("reply")
     lead_in_and_action_handled = False
+    # Set the moment _enforce_step_order corrects an out-of-order wizard
+    # action. From then on this turn, reply text must NOT stream live — the
+    # model is still composing an explanation of the WRONG step, and this
+    # codebase has no way to un-speak a sentence once it reaches TTS. The
+    # corrected reply is generated afterward, via the same backfill path
+    # already used for a missing reply (see the _reply_needs_backfill block
+    # below), and reaches the prospect through the existing "nothing was
+    # streamed live, so speak the final reply in one shot" fallback.
+    order_corrected_this_turn = False
 
     # See _select_with_claude's matching comment — user_content lets
     # run_walkthrough_continuation() override the literal API turn content.
@@ -2564,6 +2655,7 @@ async def _stream_with_claude(message: str, session: SessionState, user_content:
                     if action_dict:
                         action_dict = _repair_action(action_dict)
                     if action_dict:
+                        action_dict, order_corrected_this_turn = _enforce_step_order(session, action_dict)
                         yield ("lead_in", lead_in_extractor.value)
                         yield ("action", action_dict)
                     # An action span that parsed but failed validation (even
@@ -2581,7 +2673,7 @@ async def _stream_with_claude(message: str, session: SessionState, user_content:
             # schema, it never will -- see _tool_schema's docstring).
             reply_safe_to_stream = reply_extractor.started and (
                 lead_in_and_action_handled or not action_extractor.key_seen
-            )
+            ) and not order_corrected_this_turn
             if reply_safe_to_stream and reply_new_text:
                 yield ("reply_delta", reply_new_text)
 
@@ -2590,6 +2682,15 @@ async def _stream_with_claude(message: str, session: SessionState, user_content:
     if tool_use is None:
         raise RuntimeError("no tool use in streamed response")
     result = _parse_tool_result(tool_use.input, final_message.stop_reason)
+    # Applied again against the AUTHORITATIVE parse, independently of the
+    # incremental correction above — result["action"] comes straight from
+    # the SDK's own final parse of the raw tool call, not from the fast
+    # extractor, so the two are corrected separately even though they
+    # should (and, per this codebase's existing trust model for the
+    # incremental path, do) agree.
+    result["action"], order_corrected_this_turn = _enforce_step_order(session, result.get("action"))
+    if order_corrected_this_turn:
+        result["_reply_needs_backfill"] = True
     result = await _maybe_backfill_reply(result, session)
 
     # Only trust that reply's incremental text was genuinely fully spoken

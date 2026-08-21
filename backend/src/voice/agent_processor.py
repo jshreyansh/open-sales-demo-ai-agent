@@ -261,6 +261,16 @@ FLOOR_RETURN_PROMPTS = [
 # the window, so the timer beat the transcript on genuine speech and the
 # agent resumed on top of a real question. Confirmed live (visitor
 # 5b7b77ff, turns 2-8): three replies to one question.
+#
+# Now also the wait for a LONG (>= MIN_REAL_INTERRUPTION_SECS) VAD event with
+# no transcript, not just short ones -- see the real-barge-in branch below.
+# The honest tradeoff: a genuinely noisy, wordless interruption that used to
+# be abandoned instantly (and permanently) now takes up to this many seconds
+# to recover instead. That is a real, deliberate cost, accepted because the
+# alternative -- what shipped before this -- was worse: 35 of 40 measured
+# no-transcript VAD events in one call were long enough to hit the old
+# "certain, instant, permanent" path, with no way back at all. A few seconds
+# of delayed recovery beats a response that's gone for good.
 FALSE_INTERRUPTION_GRACE_AFTER_SILENCE_SECS = 2.5
 
 # How much continuous VAD-active speech counts as a real barge-in rather
@@ -1270,24 +1280,42 @@ class AgentRuntimeProcessor(FrameProcessor):
                 self._note_fragmentation_event("spoke over the reply")
             # Decide, right here, whether what just ended was a real
             # barge-in or a noise blip — this is the only moment both the
-            # start and end of the segment are known, and it happens well
-            # before the transcript could arrive. Long enough to be speech
-            # means a reply is owed to THEM, so the interrupted explanation
-            # is abandoned for good; too short to be speech means nothing
-            # was said and the explanation is still worth finishing.
+            # start and end of the segment are known -- and it happens well
+            # before the transcript could arrive, which is exactly the bug
+            # this used to have: duration alone decided "this was definitely
+            # real" and _unspoken_remainder was wiped right here, permanently,
+            # with no later check for whether any words actually showed up.
+            #
+            # Session 8439c3af measured the cost precisely: 40 VAD events in
+            # one 19-minute call produced no transcript at all, 35 of them
+            # long enough (>= MIN_REAL_INTERRUPTION_SECS) to have hit the old
+            # "certain, don't resume" branch -- meaning 35 times the agent
+            # would have abandoned whatever she was saying over noise that
+            # was never actually speech, with no way back.
+            #
+            # spoke_for still matters as a signal, just not as a VERDICT: it
+            # only changes what gets logged, not whether recovery is
+            # possible. Both branches now do the same thing the short-blip
+            # case always did -- start the grace clock and let a transcript,
+            # if one shows up, settle it. Genuine long barge-ins lose nothing
+            # here: real speech produces a transcript in well under a
+            # second, long before FALSE_INTERRUPTION_GRACE_AFTER_SILENCE_SECS
+            # elapses, and the instant it lands, _maybe_handle_transcript's
+            # own "real words arrived" clear (see its comment) cancels this
+            # exactly as before -- confirmed real, remainder dropped,
+            # nothing resumes. This block only ever changes the outcome for
+            # the case that used to have no recovery at all: long silence,
+            # confirmed genuinely empty.
             if self._interrupted_at is not None:
                 started = self._interruption_speech_started_at
                 spoke_for = (time.monotonic() - started) if started is not None else 0.0
+                self._interruption_quiet_since = time.monotonic()
                 if spoke_for >= MIN_REAL_INTERRUPTION_SECS:
                     logger.info(
-                        f"[{self._visitor_id}] real barge-in ({spoke_for:.2f}s of speech) "
-                        f"— not resuming, waiting for their words"
+                        f"[{self._visitor_id}] long VAD event ({spoke_for:.2f}s) — "
+                        f"waiting for a transcript before deciding; resuming if none lands"
                     )
-                    self._interrupted_at = None
-                    self._unspoken_remainder = None
                 else:
-                    # Start the grace clock only now that the room is quiet.
-                    self._interruption_quiet_since = time.monotonic()
                     logger.info(
                         f"[{self._visitor_id}] possible false interruption "
                         f"({spoke_for:.2f}s) — will resume if no transcript lands"
