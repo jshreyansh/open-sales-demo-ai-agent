@@ -301,6 +301,33 @@ def _is_acknowledgement(text: str) -> bool:
     return bool(_ACKNOWLEDGEMENTS.match(t))
 
 
+# A bare affirmative. On its own this means nothing in particular — but
+# directly after "want me to keep going?" it is unambiguous permission.
+_BARE_AFFIRMATIVE = re.compile(
+    r"^\W*(yes|yeah|yep|yup|ya|sure|ok|okay|alright|please|go|absolutely|"
+    r"definitely|of\s*course|sounds\s*good|fine)\W*$",
+    re.I,
+)
+
+
+def _is_permission_to_continue(text: str, agent_just_asked: bool) -> bool:
+    """Did the prospect just grant permission to carry on?
+
+    Context-dependent by design. Session 0aa0aaeb is the whole argument: the
+    agent asked "want me to keep going?" TEN times and the answer was "yes"
+    every single time, but a bare "yes" isn't in the continuation vocabulary,
+    so it counted as a mere nod and the budget never grew past 2.
+
+    Globally treating "yes" as continue would be worse — "yes" answering
+    "is your team producing a lot of content?" is data, not a green light.
+    So the same word means different things depending on what was just asked,
+    which is how it works between people too.
+    """
+    if _is_bare_continuation(text):
+        return True
+    return agent_just_asked and bool(_BARE_AFFIRMATIVE.match((text or "").strip()))
+
+
 # How long the room must stay genuinely quiet before anything the prospect
 # said gets answered.
 #
@@ -704,6 +731,9 @@ class AgentRuntimeProcessor(FrameProcessor):
     # How many beats this tour may run before asking again. Doubles on each
     # bare "keep going" — see AUTO_BEAT_BUDGET_CAP.
     _auto_beat_budget: int = MAX_CONSECUTIVE_AUTO_BEATS
+    # True only between speaking a FLOOR_RETURN_PROMPT and the prospect's next
+    # turn. Gives "yes" its meaning; see _is_permission_to_continue.
+    _awaiting_continue_answer: bool = False
     # Session fragmentation profile — the evidence the commit window reads.
     # Counts events where this speaker demonstrably had NOT finished when we
     # decided they had. Session-scoped only: nothing is learned across calls.
@@ -1636,7 +1666,9 @@ class AgentRuntimeProcessor(FrameProcessor):
         # substantive resets to the cautious default, because that is evidence
         # they want the floor. Session 5e1732cb asked six times in five minutes
         # and got "continue" five times — the budget has to learn.
-        if _is_bare_continuation(text):
+        asked = self._awaiting_continue_answer
+        self._awaiting_continue_answer = False
+        if _is_permission_to_continue(text, asked):
             grown = min(self._auto_beat_budget * 2, AUTO_BEAT_BUDGET_CAP)
             if grown != self._auto_beat_budget:
                 logger.info(
@@ -1656,7 +1688,23 @@ class AgentRuntimeProcessor(FrameProcessor):
         # turn_detection_ms — the 1.5-2.6s window — is measured to right here.
         if source == "voice":
             self._telemetry_open()
-        if self._telemetry is not None:
+        if source != "voice":
+            # A typed message has no VAD window, so there is no honest zero
+            # point for any of the voice latencies. Back-filling one from
+            # _last_user_speech_ended_at is what produced
+            # turn_commit_latency_ms = 49050 on a chat turn: a timestamp from
+            # 49 seconds and one whole conversation earlier. Three of the four
+            # telemetry records in session 0aa0aaeb were chat, all with
+            # fabricated latencies, which would have poisoned any A/B built on
+            # them. Chat turns are dropped from latency telemetry entirely
+            # rather than reported with an invented reference.
+            if self._telemetry is not None:
+                logger.debug(
+                    f"[{self._visitor_id}] {source} turn — no VAD window, "
+                    f"latency telemetry dropped"
+                )
+                self._telemetry = None
+        elif self._telemetry is not None:
             # Copied, not marked: this is when they last stopped talking before
             # this turn was accepted, which is the only defensible zero point
             # for every latency below. Taken here because only now is "before
@@ -2551,6 +2599,9 @@ class AgentRuntimeProcessor(FrameProcessor):
         session.history.append(HistoryEntry(role="agent", text=prompt))
         self._current_reply_source = "voice"
         asyncio.create_task(self._report_reply(prompt))
+        # Arm the context. From here until their next turn, a bare "yes" means
+        # "keep going" rather than merely "I'm listening".
+        self._awaiting_continue_answer = True
         await self._speak(prompt, direction)
 
     async def _watch_auto_continue_stall(self) -> None:

@@ -31,6 +31,46 @@ export async function connectVoice(visitorId: string, name?: string, company?: s
   if (email) params.set("email", email);
   const wsUrl = `${VOICE_URL.replace(/^http/, "ws")}/ws-client?${params.toString()}`;
   await pipecatClient.connect({ wsUrl });
+  await enableMicNoiseSuppression();
+}
+
+/**
+ * Turns on the browser's own noise suppression, echo cancellation and auto gain
+ * on the live mic track.
+ *
+ * A headphones-and-keyboard test (session 0aa0aaeb) produced 17 VAD triggers
+ * and all 17 contained zero speech — a 100% false rate on a quiet desk. Two of
+ * them ran ~1.6s, past MIN_REAL_INTERRUPTION_SECS = 0.6, so typing was being
+ * promoted to a genuine barge-in and cutting the agent off mid-sentence. That
+ * is the "sounds like a bad connection" symptom, produced entirely locally.
+ *
+ * Applied to the track rather than passed as getUserMedia constraints because
+ * WebSocketTransport calls getUserMedia({ audio: true }) internally and exposes
+ * no constraints hook (checked in its dist). applyConstraints() is the standard
+ * MediaStreamTrack API for exactly this, needs no fork and no monkeypatching of
+ * navigator.mediaDevices, and both sides of the call are public.
+ *
+ * Best-effort by design: constraint support varies by browser, and failing to
+ * denoise is not a reason to fail a connection the user is waiting on.
+ */
+async function enableMicNoiseSuppression() {
+  try {
+    const track = pipecatClient.tracks()?.local?.audio;
+    if (!track) return;
+    await track.applyConstraints({
+      noiseSuppression: true,
+      echoCancellation: true,
+      autoGainControl: true,
+    });
+    const applied = track.getSettings();
+    console.info(
+      "[mic] noise suppression:", applied.noiseSuppression,
+      "| echo cancellation:", applied.echoCancellation,
+      "| auto gain:", applied.autoGainControl,
+    );
+  } catch (err) {
+    console.warn("[mic] could not apply noise constraints, continuing", err);
+  }
 }
 
 export async function disconnectVoice() {
