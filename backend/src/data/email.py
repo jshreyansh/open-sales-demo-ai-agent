@@ -23,6 +23,13 @@ surface that is already dark comes through both modes unchanged.
 import base64
 import os
 import re
+import smtplib
+import ssl
+import uuid
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email import encoders
 from typing import List, Optional, Tuple
 
 import requests
@@ -89,6 +96,97 @@ class EmailSendError(RuntimeError):
     network error, or a non-200 from Postmark. Callers are expected to catch
     this and surface something to the user; the gate in particular must fail
     closed on it rather than letting an unverified visitor through."""
+
+
+def _send(
+    to: str,
+    subject: str,
+    html_body: str,
+    text_body: str,
+    tag: str,
+    attachments: Optional[List[dict]] = None,
+) -> str:
+    """Dispatches to whichever provider EMAIL_PROVIDER names, defaulting to
+    Postmark unchanged — this function is the only thing that changed at
+    every call site below, none of them know or care which transport runs.
+
+    Same pattern as runtime.py's LLM_PROVIDER: read at call time so a
+    forgotten/misspelled value degrades to the default rather than silently
+    killing email outright, and switching providers later is one env var,
+    not a code change."""
+    provider = os.getenv("EMAIL_PROVIDER", "postmark").strip().lower()
+    if provider == "smtp":
+        return _smtp_send(to, subject, html_body, text_body, tag, attachments)
+    return _postmark_send(to, subject, html_body, text_body, tag, attachments)
+
+
+def _smtp_send(
+    to: str,
+    subject: str,
+    html_body: str,
+    text_body: str,
+    tag: str,
+    attachments: Optional[List[dict]] = None,
+) -> str:
+    """Gmail SMTP fallback while Postmark is blocked on a billing issue —
+    same signature and same return contract (a MessageID-shaped string) as
+    _postmark_send, so send_otp_email/send_summary_email need no changes at
+    all. Meant for the current testing/POC phase only; the plan is Outlook
+    once real customer-facing sends resume, at which point this becomes a
+    third branch in _send() rather than a replacement.
+
+    Credentials read at call time, same reasoning as _postmark_send: bake
+    nothing in at import time."""
+    host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    port = int(os.getenv("SMTP_PORT", "587"))
+    user = os.getenv("SMTP_USER")
+    password = os.getenv("SMTP_PASS")
+    if not user or not password:
+        raise EmailSendError("SMTP is not configured — SMTP_USER and SMTP_PASS must both be set")
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = user
+    msg["To"] = to
+    # Postmark's X-PM-Tag has no SMTP equivalent that Gmail preserves end to
+    # end; kept as a header anyway so grep still finds it in a raw .eml if
+    # this is ever debugged from a saved copy.
+    msg["X-Tag"] = tag
+    msg.attach(MIMEText(text_body, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+
+    for att in attachments or []:
+        # Postmark's shape: {"Name": ..., "Content": base64 str, "ContentType": ...}.
+        # Converted here, not upstream, so _video_attachment() stays provider-
+        # agnostic and doesn't need to know which transport will consume it.
+        part = MIMEBase(*att["ContentType"].split("/", 1))
+        part.set_payload(base64.b64decode(att["Content"]))
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f'attachment; filename="{att["Name"]}"')
+        msg.attach(part)
+
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP(host, port, timeout=_POSTMARK_TIMEOUT_SECS) as server:
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
+            server.login(user, password)
+            server.sendmail(user, [to], msg.as_string())
+    except smtplib.SMTPAuthenticationError as exc:
+        logger.error(f"SMTP auth failed for tag={tag} to={to}: {exc}")
+        raise EmailSendError(f"SMTP authentication failed: {exc}") from exc
+    except Exception as exc:
+        logger.exception(f"SMTP send failed for tag={tag} to={to}")
+        raise EmailSendError(f"SMTP send failed: {exc}") from exc
+
+    # SMTP has no server-assigned message ID to hand back the way Postmark's
+    # response body does, so one is minted locally purely so callers that log
+    # or store "the MessageID" (see send_summary_email/send_otp_email) get a
+    # non-empty, unique value either way.
+    message_id = f"smtp-{uuid.uuid4()}"
+    logger.info(f"SMTP accepted tag={tag} to={to} MessageID={message_id}")
+    return message_id
 
 
 def _postmark_send(
@@ -279,7 +377,7 @@ It expires in {minutes} minutes. If you didn't ask for this, you can ignore this
         f"{SITE_URL}\n"
     )
 
-    return _postmark_send(
+    return _send(
         to=to_email,
         subject=subject,
         html_body=_document(subject, inner),
@@ -617,7 +715,7 @@ def send_summary_email(visitor_id: str, summary: Optional[str] = None) -> Option
         subject, html_body, text_body = build_summary_email(
             identity["name"], identity["company"], summary, video_attached=attachment is not None
         )
-        message_id = _postmark_send(
+        message_id = _send(
             to=identity["email"],
             subject=subject,
             html_body=html_body,
