@@ -3,6 +3,9 @@ import { PERSONAS } from "../lib/personas";
 import { getVisitorId, getVisitorProfile } from "../lib/session";
 import type { VisitorProfile } from "../lib/session";
 import MeetIcon from "./MeetIcons";
+import Icon from "./Icon";
+import ShowcaseMedal from "./ShowcaseMedal";
+import ExampleGalleryPanel from "./ExampleGalleryPanel";
 import SwishXLockup from "./SwishXLockup";
 import VisitorGateForm from "./VisitorGateForm";
 
@@ -63,6 +66,11 @@ function usePrefersReducedMotion(): boolean {
 export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
   const persona = AVAILABLE_PERSONAS[0];
   const [busy, setBusy] = useState(false);
+  // The same showcase the agent opens mid-call. Someone weighing up whether
+  // to start a live call is exactly the person who wants to see output first,
+  // and until now that proof only existed on the far side of the thing they
+  // were hesitating about.
+  const [galleryOpen, setGalleryOpen] = useState(false);
   const reducedMotion = usePrefersReducedMotion();
   const loopRef = useRef<HTMLVideoElement>(null);
   const showLoop = Boolean(persona.video) && !reducedMotion;
@@ -118,6 +126,18 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
         {/* The two other ways into the product. Demoted to nav on purpose:
             they are real destinations, but this page has one job. */}
         <nav className="lp__nav-links">
+          {/* Leads the nav: someone who wants a human is the visitor most
+              easily lost, and down in the form area this competed with the
+              join flow instead of quietly existing beside it. */}
+          <a
+            className="lp__nav-talk"
+            href="https://www.swishx.com/calendar"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <MeetIcon name="calendar" size={14} />
+            Talk to the team
+          </a>
           <a href="/demo/dashboard">Explore the platform</a>
           <a href="/docs">Docs</a>
         </nav>
@@ -196,11 +216,33 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
             <p className="lp__instant">Starts the second you press it. No calendar, no wait.</p>
           </div>
 
-          <button type="button" className="lp__schedule" disabled title="Coming soon">
-            Schedule instead
+          {/* "Schedule instead" used to sit here, permanently disabled with a
+              "Coming soon" title. A dead control earns no space — and with
+              the booking link promoted into the nav, the person it was aimed
+              at is already served. Bring it back when scheduling is real. */}
+          {/* Deliberately the same badge, same classes, same modal as the one
+              in the meeting — not a landing-page lookalike. It already earns
+              a click in there; rebuilding it here would only be a chance to
+              make it worse, and any change to one now changes both. */}
+          <button
+            className="meet__showcase-btn lp__showcase"
+            onClick={() => setGalleryOpen(true)}
+            title="See the best content SwishX has generated"
+          >
+            <span className="meet__showcase-btn-inner">
+              <span className="meet__showcase-btn-medal">
+                <ShowcaseMedal size={14} />
+              </span>
+              <span className="meet__showcase-btn-text">
+                <span className="meet__showcase-btn-kicker">Hall of fame</span>
+                <span className="meet__showcase-btn-label">Best Content Showcase</span>
+              </span>
+            </span>
           </button>
         </div>
       </main>
+
+      {galleryOpen && <ExampleGalleryPanel onClose={() => setGalleryOpen(false)} />}
 
       <footer className="lp__meta">
         <span>10 minutes</span>

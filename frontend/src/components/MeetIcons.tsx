@@ -1,5 +1,7 @@
 import {
   mdiMicrophone,
+  mdiPause,
+  mdiPlay,
   mdiMicrophoneOff,
   mdiVideo,
   mdiVideoOff,
@@ -26,6 +28,8 @@ import {
 interface MeetIconProps {
   name:
     | "mic"
+    | "pause"
+    | "play"
     | "mic-off"
     | "camera"
     | "camera-off"
@@ -56,6 +60,11 @@ interface MeetIconProps {
 // hangup icon looked like a blank pill).
 const PATHS: Record<MeetIconProps["name"], string> = {
   mic: mdiMicrophone,
+  // Play/pause for the whole agent. The two shapes every media player
+  // already uses — this control does exactly what people expect, so it
+  // should not invent a symbol for it.
+  pause: mdiPause,
+  play: mdiPlay,
   "mic-off": mdiMicrophoneOff,
   camera: mdiVideo,
   "camera-off": mdiVideoOff,

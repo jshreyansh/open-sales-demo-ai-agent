@@ -65,6 +65,7 @@ from pipecat.workers.runner import WorkerRunner
 from ..agent.runtime import generate_call_summary
 from ..context.store import start_session
 from ..data import gate_log
+from ..data.email import send_summary_email
 from .agent_processor import (
     IDLE_CHECK_INTERVAL_SECS,
     IDLE_CHECKIN_THRESHOLD_SECS,
@@ -101,6 +102,13 @@ async def _save_call_summary(visitor_id: str) -> None:
         summary = await asyncio.to_thread(generate_call_summary, visitor_id)
         if summary:
             gate_log.save_call_summary(visitor_id, summary)
+            # to_thread because Postmark goes out over blocking `requests`,
+            # same reasoning as generate_call_summary above. The send never
+            # raises (it swallows and returns None) and is idempotent against
+            # the summary_emails table, so neither a dead mail provider nor a
+            # second teardown can break the hang-up path or double-mail
+            # anyone.
+            await asyncio.to_thread(send_summary_email, visitor_id, summary)
     except Exception:
         logger.exception(f"Failed to generate/save call summary for visitor {visitor_id}")
 

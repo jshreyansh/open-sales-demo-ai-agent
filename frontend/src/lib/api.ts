@@ -84,12 +84,94 @@ export async function sendMeetingChatMessage(visitorId: string, message: string)
  * never lowers it on its own — only another call to this with raised=false
  * does.
  */
+/**
+ * The play/pause control in the meeting's bottom bar.
+ *
+ * Distinct from hand-raise, which politely queues a question behind the
+ * agent's current sentence. This stops her outright: audio is cut, any queued
+ * walkthrough beat is dropped, and nothing runs until play. Being able to
+ * stop a demo mid-sentence is the thing a live human rep cannot offer, so it
+ * gets its own control rather than living inside the hand-raise flow.
+ */
+export async function setPausedState(visitorId: string, paused: boolean): Promise<void> {
+  await fetch(`${API_URL}/api/pause/${visitorId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paused }),
+  });
+}
+
 export async function setHandRaiseState(visitorId: string, raised: boolean): Promise<void> {
   await fetch(`${API_URL}/api/hand-raise/${visitorId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ raised }),
   });
+}
+
+/**
+ * Every failure from the two OTP endpoints answers in the same shape (see
+ * server.py's _otp_error): `code` is what the form switches on, `message` is
+ * shown to the visitor verbatim so the wording lives in exactly one place
+ * instead of being half here and half on the backend.
+ */
+export interface OtpError {
+  ok: false;
+  code:
+    | "invalid_email"
+    | "cooldown"
+    | "rate_limited"
+    | "send_failed"
+    | "no_code"
+    | "expired"
+    | "too_many_attempts"
+    | "invalid_code"
+    | "network";
+  message: string;
+  retryAfter?: number;
+}
+
+export type OtpResult = { ok: true } | OtpError;
+
+/**
+ * Shared by both OTP calls. A failed send/verify is a real non-2xx (429, 400,
+ * 502) rather than a 200 carrying an error field, so the error body has to be
+ * unpacked here; anything genuinely unexpected — the backend down, DNS gone —
+ * collapses to a "network" code so the form always has something to show
+ * rather than throwing out of an event handler.
+ */
+async function postOtp(path: string, body: unknown): Promise<OtpResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    return { ok: false, code: "network", message: "Couldn't reach the server. Check your connection and try again." };
+  }
+  if (res.ok) return { ok: true };
+  const detail = await res.json().then((d) => d?.detail).catch(() => null);
+  if (detail && typeof detail.message === "string") {
+    return { ok: false, code: detail.code, message: detail.message, retryAfter: detail.retry_after };
+  }
+  return { ok: false, code: "network", message: "Something went wrong. Please try again." };
+}
+
+/**
+ * Step one of the gate: mails a 6-digit code to prove the address is real,
+ * before any of the existing lookup/known/new steps run. Deliberately says
+ * nothing about whether the email is already on file — that's what the
+ * lookup step below is for, and only after the code has been verified.
+ */
+export function sendVisitorOtp(email: string): Promise<OtpResult> {
+  return postOtp("/api/visitor/otp/send", { email });
+}
+
+/** Step two: on {ok: true} the form continues into the existing flow unchanged. */
+export function verifyVisitorOtp(email: string, code: string): Promise<OtpResult> {
+  return postOtp("/api/visitor/otp/verify", { email, code });
 }
 
 /**

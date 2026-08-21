@@ -85,6 +85,15 @@ AUTO_CONTINUE_STALL_GRACE_SECS = 0.75
 # worth throttling further.
 HAND_RAISE_POLL_INTERVAL_SECS = 0.3
 
+# How long after the visitor presses play to wait before saying anything.
+#
+# Pressing play usually means they are about to speak — they paused to think
+# or to talk to someone in the room, and now they're back. Talking over them
+# in that first moment is the exact rudeness the pause button exists to fix.
+# So she waits, and if they take the floor first she simply doesn't say the
+# re-entry line at all.
+RESUME_GRACE_SECS = 1.2
+
 # A typed message deserves at least as prompt a reaction as a hand-raise —
 # arguably more, since unlike a raise (a pure signal) it already carries the
 # actual thing the visitor wants answered.
@@ -477,6 +486,12 @@ class AgentRuntimeProcessor(FrameProcessor):
     # drain path — a crash in the one code path whose entire job is to stop
     # the pipeline getting stuck.
     _pending_interruption_since: Optional[float] = None
+    # Declared at class level for the same reason: the pause gates are read
+    # from the scheduler and the stall watchdog, both of which run on paths
+    # that must never raise. A missing attribute there would take down the
+    # loop whose entire job is keeping the call alive.
+    _paused: bool = False
+    _paused_remainder: Optional[str] = None
 
     def __init__(self, visitor_id: str):
         super().__init__()
@@ -508,6 +523,19 @@ class AgentRuntimeProcessor(FrameProcessor):
         # gives up waiting).
         self._pending_fragment_text = ""
         self._pending_interruption_since = None
+        # The play/pause control (server.py's /api/pause mailbox). Paused
+        # means: stop speaking now, run no new turns, schedule no walkthrough
+        # beats. It is the visitor taking the floor outright, as opposed to
+        # hand-raise, which queues a question politely behind the current
+        # sentence.
+        self._paused = False
+        self._pause_poll_task: asyncio.Task | None = None
+        # What she was part-way through saying when the pause landed, so play
+        # can resume from the START of that sentence rather than its middle.
+        # Streaming services all behave this way for the same reason: coming
+        # back mid-clause is disorienting, and a couple of repeated words cost
+        # nothing.
+        self._paused_remainder: Optional[str] = None
         self._last_fragment_activity = time.monotonic()
         self._pending_fragment_watch_task: Optional[asyncio.Task] = None
         self._bot_speaking = False
@@ -815,6 +843,7 @@ class AgentRuntimeProcessor(FrameProcessor):
             if not self._greeted:
                 self._greeted = True
                 self._hand_raise_poll_task = asyncio.create_task(self._poll_hand_raise())
+                self._pause_poll_task = asyncio.create_task(self._poll_paused())
                 self._meeting_chat_poll_task = asyncio.create_task(self._poll_meeting_chat())
                 self._auto_continue_watchdog_task = asyncio.create_task(self._watch_auto_continue_stall())
                 self._pending_fragment_watch_task = asyncio.create_task(self._watch_pending_fragment_stall())
@@ -1234,6 +1263,13 @@ class AgentRuntimeProcessor(FrameProcessor):
             # Rationed: at most one filler, then a turn without. Two or
             # three in a row is what turns "thinking" into a stammer. The
             # backchannel path emits sounds too, so unrationed they stack.
+            if self._paused:
+                # Paused means the visitor holds the floor. Anything picked up
+                # here is them talking to someone else in the room, or thinking
+                # out loud — answering it would be exactly the interruption
+                # they pressed the button to stop.
+                logger.info(f"[{self._visitor_id}] dropping turn while paused: {text[:60]!r}")
+                return
             if self._consecutive_fillers < 1:
                 self._consecutive_fillers += 1
                 filler = self._pick_filler(text)
@@ -1857,6 +1893,10 @@ class AgentRuntimeProcessor(FrameProcessor):
         walkthrough" keep going without the prospect needing to prompt
         every single beat, while still actually pausing for a real question
         instead of talking over it."""
+        if self._paused:
+            # Same shape as walkthrough_user_stopped below: while the visitor
+            # holds the floor, nothing schedules itself behind them.
+            return
         if session.walkthrough_step is None or session.walkthrough_awaiting_answer:
             return
         # Hard stop: nothing schedules a beat while the prospect has asked
@@ -1920,6 +1960,9 @@ class AgentRuntimeProcessor(FrameProcessor):
                 # model that froze on a garbled transcript, and applying it
                 # here is exactly what resumed the tour 45s after a real
                 # person asked for quiet (see SessionState.walkthrough_user_stopped).
+                if self._paused:
+                    self._latch_since = None
+                    continue
                 if session.walkthrough_user_stopped:
                     self._latch_since = None
                     continue
@@ -2250,6 +2293,81 @@ class AgentRuntimeProcessor(FrameProcessor):
             gate_log.append_transcript_turn(session.visitor_id, "agent", handoff)
         asyncio.create_task(self._report_reply(handoff))
         await self._speak(handoff, direction)
+
+    async def _poll_paused(self) -> None:
+        """Watches the pause mailbox and turns a button press into silence.
+
+        Separate loop from _poll_hand_raise because the two mean opposite
+        things about who holds the floor. A raised hand is a request that
+        waits for a sentence boundary; pause is the visitor taking the floor
+        immediately, which is the whole reason it exists — you cannot stop a
+        human rep mid-sentence, and being able to stop this one is the
+        advantage of the format.
+        """
+        try:
+            async with aiohttp.ClientSession() as http:
+                while True:
+                    await asyncio.sleep(HAND_RAISE_POLL_INTERVAL_SECS)
+                    try:
+                        async with http.get(
+                            f"{REST_API_URL}/internal/paused/{self._visitor_id}",
+                            timeout=aiohttp.ClientTimeout(total=3),
+                        ) as resp:
+                            paused = bool((await resp.json()).get("paused"))
+                    except Exception:
+                        logger.exception(f"Failed to poll pause for visitor {self._visitor_id}")
+                        continue
+
+                    if paused == self._paused:
+                        continue
+
+                    if paused:
+                        await self._enter_pause()
+                    else:
+                        await self._leave_pause()
+        except asyncio.CancelledError:
+            pass
+
+    async def _enter_pause(self) -> None:
+        """Stop talking now; keep the place."""
+        self._paused = True
+        # Whatever hasn't been said yet is what play will resume from. Read
+        # before the interruption, since that clears the speaking state.
+        self._paused_remainder = self._unspoken_remainder
+        # Cuts audio in ~5ms — same path a real barge-in uses.
+        await self.broadcast_interruption()
+        # Nothing may queue a walkthrough beat behind a pause.
+        self._cancel_pending_auto_continue()
+        logger.info(
+            f"[{self._visitor_id}] PAUSED by the visitor"
+            + (f" (holding {len(self._paused_remainder or '')} chars to resume)"
+               if self._paused_remainder else "")
+        )
+
+    async def _leave_pause(self) -> None:
+        """Play. Give them the first move, then pick the thread back up."""
+        self._paused = False
+        logger.info(f"[{self._visitor_id}] RESUMED by the visitor")
+
+        # They almost certainly pressed play because they are about to talk.
+        # Wait, and if they do, say nothing at all — the re-entry line would
+        # be talking over the very person who just took the floor back.
+        await asyncio.sleep(RESUME_GRACE_SECS)
+        if self._paused or self._user_speaking or self._turn_in_progress:
+            self._paused_remainder = None
+            return
+        if self._pending_fragment_text or self._pending_interruption_text:
+            self._paused_remainder = None
+            return
+
+        remainder = self._paused_remainder
+        self._paused_remainder = None
+        # A short marker that the floor is coming back — the spoken
+        # equivalent of looking up. Without it, audio simply reappearing
+        # mid-thought is jarring.
+        await self._speak("Okay — picking up where we left off.", FrameDirection.DOWNSTREAM)
+        if remainder:
+            await self._speak(remainder, FrameDirection.DOWNSTREAM)
 
     async def _poll_hand_raise(self) -> None:
         # This process (the voice pipeline, :7860) and the REST API (:8787)

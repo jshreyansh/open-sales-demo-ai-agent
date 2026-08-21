@@ -1,16 +1,21 @@
 import os
+import re
+import secrets
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from loguru import logger
 from pydantic import BaseModel
 
 load_dotenv()
 
 from .agent.runtime import generate_call_summary, run_turn
 from .context.store import get_session, start_session
+from .data import email as email_service
 from .data import gate_log
 from .data.dashboard import dashboard_data
 from .data.analytics import analytics_overview
@@ -74,6 +79,12 @@ _pending_meeting_chat: Dict[str, List[str]] = {}
 # auto-expires a raise; only a visitor clicking the button again does.
 _hand_raise_state: Dict[str, bool] = {}
 
+# Same mailbox shape for the pause button. Distinct from hand-raise on
+# purpose: a raised hand means "I have a question, finish your sentence and
+# come to me", whereas pause means "stop, right now, and don't do anything
+# until I say" — the visitor is taking the floor rather than queuing for it.
+_paused_state: Dict[str, bool] = {}
+
 # Whole-app single-call gate: the voicebot (bot.py) is one process running
 # every concurrent call's VAD/STT/TTS on one event loop, with no worker pool
 # and no autoscaling behind it — a second simultaneous caller doesn't get a
@@ -125,6 +136,149 @@ def start_session_endpoint(body: StartSessionRequest):
     company = body.company.strip() if body.company else None
     email = body.email.strip() if body.email else None
     start_session(body.visitorId, name, company, email)
+    return {"ok": True}
+
+
+# --- Gate email verification -----------------------------------------------
+#
+# Sits in FRONT of the existing lookup/known/new steps, which are unchanged:
+# a visitor proves the address is theirs, and only then does the gate go on to
+# ask whether we already know them. Splitting it that way is deliberate —
+# neither endpoint below ever says whether an email is on file, because
+# answering that before verification turns the gate into a free "is this
+# person a SwishX customer" oracle for anyone with a list of addresses.
+
+_EMAIL_FORMAT_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def _otp_error(status: int, code: str, message: str, **extra: Any) -> HTTPException:
+    """Every failure below answers in the same shape — {code, message, ...} —
+    so the gate form can switch on `code` for behaviour (start the resend
+    countdown, clear the input) while showing `message` verbatim. Real status
+    codes rather than a 200 carrying an error field: a send that didn't happen
+    is not a successful request, and the difference matters to anything
+    watching this endpoint from outside the browser."""
+    return HTTPException(status_code=status, detail={"code": code, "message": message, **extra})
+
+
+class OtpSendRequest(BaseModel):
+    email: str
+
+
+@app.post("/api/visitor/otp/send")
+def send_otp(body: OtpSendRequest):
+    """Issues a 6-digit code and emails it. Two separate limits apply, and
+    they're doing different jobs: the 30-second cooldown stops a visitor
+    double-tapping "Resend" and racing two codes against each other, while
+    the 3-per-15-minutes cap is what stops this endpoint being used to mail
+    someone repeatedly."""
+    email = body.email.strip().lower()
+    if not _EMAIL_FORMAT_RE.match(email):
+        raise _otp_error(400, "invalid_email", "Enter a valid email address.")
+
+    # The personal-domain rule (see frontend/src/lib/email.ts) stays where it
+    # is — the form blocks those before it ever gets here, and the rate limit
+    # below caps what a direct caller could do with one anyway. Duplicating
+    # that domain list into a second place it could drift from is worse than
+    # what it would buy.
+    window = gate_log.recent_otp_sends(email, email_service.OTP_SEND_WINDOW_SECS)
+    if window:
+        since_last = (datetime.now(timezone.utc) - max(window)).total_seconds()
+        if since_last < email_service.OTP_RESEND_COOLDOWN_SECS:
+            wait = int(email_service.OTP_RESEND_COOLDOWN_SECS - since_last) + 1
+            raise _otp_error(
+                429,
+                "cooldown",
+                f"Hang on {wait} more second{'s' if wait != 1 else ''} before asking for another code.",
+                retry_after=wait,
+            )
+    if len(window) >= email_service.OTP_MAX_SENDS_PER_WINDOW:
+        minutes = email_service.OTP_SEND_WINDOW_SECS // 60
+        raise _otp_error(
+            429,
+            "rate_limited",
+            f"Too many codes requested. Try again in {minutes} minutes, or contact us directly.",
+            retry_after=email_service.OTP_SEND_WINDOW_SECS,
+        )
+
+    # secrets, not random: this is the only thing standing between a stranger
+    # and someone else's identity on the gate, and random's Mersenne Twister
+    # is reconstructable from enough observed output.
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    gate_log.burn_otp_codes(email)
+    # Written before the send, not after, so a send that fails still counts
+    # against the limits above — otherwise a caller could hammer Postmark
+    # indefinitely as long as every attempt errored.
+    gate_log.create_otp_code(email, code)
+
+    try:
+        email_service.send_otp_email(email, code)
+    except email_service.EmailSendError as exc:
+        logger.error(f"OTP send failed for {email}: {exc}")
+        # Fails closed. The visitor does not continue, and nothing here hints
+        # at whether the address is known — the message is about our send,
+        # not about them.
+        raise _otp_error(
+            502,
+            "send_failed",
+            "We couldn't send your code just now. Please try again in a moment.",
+        )
+
+    return {
+        "ok": True,
+        "expires_in": email_service.OTP_TTL_SECS,
+        "resend_after": email_service.OTP_RESEND_COOLDOWN_SECS,
+    }
+
+
+class OtpVerifyRequest(BaseModel):
+    email: str
+    code: str
+
+
+@app.post("/api/visitor/otp/verify")
+def verify_otp(body: OtpVerifyRequest):
+    """Checks a code and, on success, consumes it. Success returns nothing but
+    {"ok": true} — the frontend then continues into the existing lookup step
+    exactly as it did before this endpoint existed."""
+    email = body.email.strip().lower()
+    submitted = body.code.strip()
+
+    record = gate_log.get_active_otp(email)
+    if record is None:
+        raise _otp_error(400, "no_code", "That code is no longer valid. Request a new one.")
+
+    try:
+        issued_at = datetime.fromisoformat(record["created_at"])
+    except ValueError:
+        issued_at = datetime.now(timezone.utc)
+    if (datetime.now(timezone.utc) - issued_at).total_seconds() > email_service.OTP_TTL_SECS:
+        gate_log.consume_otp(record["id"])
+        raise _otp_error(400, "expired", "That code has expired. Request a new one.")
+
+    if record["attempts"] >= email_service.OTP_MAX_ATTEMPTS:
+        gate_log.consume_otp(record["id"])
+        raise _otp_error(400, "too_many_attempts", "Too many incorrect attempts. Request a new code.")
+
+    # Counted before the comparison, so a wrong guess costs an attempt even if
+    # the response never reaches the caller.
+    attempts = gate_log.record_otp_attempt(record["id"])
+    # compare_digest, not ==: string equality short-circuits on the first
+    # differing character, which leaks how much of the code was right through
+    # response timing.
+    if not secrets.compare_digest(record["code"], submitted):
+        remaining = max(0, email_service.OTP_MAX_ATTEMPTS - attempts)
+        if remaining == 0:
+            gate_log.consume_otp(record["id"])
+            raise _otp_error(400, "too_many_attempts", "Too many incorrect attempts. Request a new code.")
+        raise _otp_error(
+            400,
+            "invalid_code",
+            f"That code isn't right. {remaining} attempt{'s' if remaining != 1 else ''} left.",
+            attempts_left=remaining,
+        )
+
+    gate_log.consume_otp(record["id"])
     return {"ok": True}
 
 
@@ -252,6 +406,7 @@ def release_voice_lock(body: VoiceLockRequest):
     # nobody having touched the button. Same for any typed message that was
     # queued but never delivered.
     _hand_raise_state.pop(body.visitorId, None)
+    _paused_state.pop(body.visitorId, None)
     _pending_meeting_chat.pop(body.visitorId, None)
     return {"ok": True}
 
@@ -394,6 +549,34 @@ def set_hand_raise(visitor_id: str, body: HandRaiseRequest):
     else:
         _hand_raise_state.pop(visitor_id, None)
     return {"ok": True}
+
+
+class PauseRequest(BaseModel):
+    paused: bool
+
+
+@app.post("/api/pause/{visitor_id}")
+def set_paused(visitor_id: str, body: PauseRequest):
+    """The play/pause control in the meeting's bottom bar.
+
+    A real demo can't be stopped mid-sentence — that is precisely the
+    advantage this format has over a human rep, so it gets a first-class
+    control rather than being buried in the hand-raise flow. Hand-raise
+    politely queues a question; this stops everything.
+    """
+    if body.paused:
+        _paused_state[visitor_id] = True
+    else:
+        _paused_state.pop(visitor_id, None)
+    return {"ok": True}
+
+
+@app.get("/internal/paused/{visitor_id}")
+def get_paused(visitor_id: str):
+    """Polled by the voice process. Non-consuming, same as hand-raise: the
+    voice process tracks for itself whether it has already acted on the
+    current pause."""
+    return {"paused": _paused_state.get(visitor_id, False)}
 
 
 @app.get("/internal/hand-raise/{visitor_id}")

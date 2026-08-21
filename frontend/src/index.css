@@ -3884,6 +3884,47 @@ body {
   text-align: center;
 }
 
+/* ---- OTP code entry ----
+   Overrides the shared .prejoin__name input rather than defining a new input
+   from scratch, so the field keeps the same shell, focus ring and disabled
+   treatment as every other one in the form. Selector is descendant-scoped
+   (.prejoin__name .prejoin__code-input) purely to outrank .prejoin__name
+   input, which is more specific than a bare class would be. */
+.prejoin__name .prejoin__code-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 0.42em;
+  /* letter-spacing appends its gap after the LAST character too, which drags
+     centred text left by half a gap. The indent puts it back. */
+  text-indent: 0.42em;
+}
+
+.prejoin__code-sent {
+  font-size: 12px;
+  color: #9aa0a6;
+  text-align: center;
+}
+
+.prejoin__resend {
+  background: none;
+  border: none;
+  padding: 4px 0;
+  color: #9aa0a6;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Still readable while counting down — it's showing the visitor how long
+   they have to wait, which is information, not a dead control. */
+.prejoin__resend:disabled {
+  color: #6c6f73;
+  cursor: default;
+  text-decoration: none;
+}
+
 .prejoin__actions {
   display: flex;
   flex-direction: column;
@@ -7047,6 +7088,25 @@ body {
   color: var(--lp-text);
 }
 
+/* Slightly brighter than its neighbours and carrying an icon — it is the one
+   nav item that leads to a person rather than to a page. */
+.lp__nav-talk {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--lp-text) !important;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--lp-line);
+  background: rgba(255, 255, 255, 0.04);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.lp__nav-talk:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
 .lp__nav-links a:focus-visible,
 .lp__schedule:focus-visible {
   outline: 2px solid var(--accent);
@@ -7240,8 +7300,44 @@ body {
   color: rgba(138, 131, 123, 0.85);
 }
 
-.lp__schedule {
+.lp__secondary {
+  display: flex;
+  align-items: center;
+  gap: 18px;
   margin-top: 20px;
+  flex-wrap: wrap;
+}
+
+/* Reads as a real destination rather than a third disabled control — the
+   whole point is that this one works when "Schedule instead" doesn't. */
+.lp__talk {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--lp-text);
+  text-decoration: none;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--lp-line);
+  background: rgba(255, 255, 255, 0.04);
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+
+.lp__talk:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.28);
+  transform: translateY(-1px);
+}
+
+.lp__talk:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.lp__schedule {
+  margin-top: 0;
   padding: 0;
   background: none;
   border: none;
@@ -7376,6 +7472,32 @@ body {
   color: #ff7a54;
 }
 
+/* The landing skin's take on the same code field. Left-aligned like every
+   other input here, unlike the centred pre-join one. */
+.lp .prejoin__name .prejoin__code-input {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.34em;
+}
+
+.lp .prejoin__code-sent {
+  font-size: 12.5px;
+  color: var(--lp-muted);
+  text-align: left;
+}
+
+.lp .prejoin__resend {
+  align-self: flex-start;
+  font-family: var(--font);
+  font-size: 12.5px;
+  color: var(--lp-muted);
+}
+
+.lp .prejoin__resend:disabled {
+  color: rgba(138, 131, 123, 0.6);
+}
+
 /* ---- meta strip ---- */
 .lp__meta {
   position: relative;
@@ -7448,12 +7570,17 @@ body {
     justify-self: center;
     align-self: center;
     margin-top: 0;
-    height: min(32vh, 290px);
+    /* The showcase badge added a row below the join block; the figure gives
+       that height back so the page still resolves without scrolling, which
+       is the one property this layout is built around. */
+    height: min(26vh, 235px);
   }
   .lp__title { font-size: clamp(32px, 6.4vw, 46px); }
   .lp__sub { margin-top: 14px; font-size: 14.5px; }
   .lp__eyebrow { margin-bottom: 14px; }
-  .lp__join { margin-top: 22px; }
+  .lp__join { margin-top: 18px; }
+  .lp__secondary { margin-top: 14px; }
+  .lp__showcase { margin-top: 14px; }
   .lp__nav { padding-top: 18px; }
   .lp__meta { padding-bottom: 18px; }
   .lp__copy {
@@ -7474,9 +7601,103 @@ body {
 
 @media (max-width: 560px) {
   .lp__nav-links a:first-child { display: none; }
-  .lp__figure { height: min(38vh, 330px); }
+  /* Phone has the least room and the most stacked content, so the portrait
+     gives up the most here. Everything below it is a control the visitor
+     needs to reach without scrolling. */
+  .lp__figure { height: min(24vh, 200px); }
+  .lp__title { font-size: clamp(28px, 8vw, 36px); }
+  .lp__sub { font-size: 13.5px; }
+  .lp__showcase { margin-top: 12px; }
   .lp__onair-place { display: none; }
   .lp__onair { font-size: 9.5px; padding: 6px 9px; }
   /* Match the centred hero copy so the form doesn't read as a stray column. */
   .lp .prejoin__name { align-items: center; text-align: center; }
+}
+
+/* Paused state for the control strip.
+   Amber rather than the accent orange: this is a held state the visitor is
+   responsible for clearing, closer to a warning than to an action, and it has
+   to be obvious at a glance why the room went quiet. */
+.meet__ctrl--paused {
+  background: rgba(255, 176, 32, 0.16);
+  color: #ffb020;
+  box-shadow: inset 0 0 0 1px rgba(255, 176, 32, 0.45);
+}
+
+.meet__ctrl--paused:hover {
+  background: rgba(255, 176, 32, 0.24);
+}
+
+/* Composer locked while paused — readable, obviously inert, not hidden.
+   The history above it stays fully legible; only the way in is closed. */
+.meet__chat-input--locked input,
+.meet__chat-input--locked button {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* The showcase badge on the landing page.
+   Inherits everything from .meet__showcase-btn — this only undoes the
+   absolute pinning it needs inside the meeting's control row, so it can sit
+   in normal flow here. */
+.lp__showcase {
+  position: static;
+  /* Alone under the join block now that "Schedule instead" is gone, so it
+     gets real space above it rather than being crowded into a row. */
+  margin-top: 30px;
+  transform: none;
+}
+
+/* ---- showcase medal: trophy <-> SwishX emblem ----
+   A flip rather than a crossfade. The two glyphs are the same weight on the
+   same tile, so turning one object over is what actually happens visually;
+   fading would read as two icons fighting for the same square.
+
+   6s cycle, deliberately slow: this sits next to a pulsing LIVE dot and a
+   glowing badge border, and a third fast-moving thing would turn a confident
+   page into a fairground. It should be caught out of the corner of the eye,
+   not watched. */
+.showcase-medal {
+  position: relative;
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  transform-style: preserve-3d;
+  animation: showcase-medal-flip 6s ease-in-out infinite;
+}
+
+.showcase-medal__face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* The emblem starts pre-rotated so it faces outward exactly when the trophy
+   turns away — the two are the front and back of one tile, not a sequence. */
+.showcase-medal__face--emblem {
+  transform: rotateY(180deg);
+}
+
+.showcase-medal__face--emblem img {
+  display: block;
+  object-fit: contain;
+}
+
+@keyframes showcase-medal-flip {
+  /* Long holds either side, quick turn between: the badge should be legible
+     almost all the time and in motion only briefly. */
+  0%, 42% { transform: rotateY(0deg); }
+  50%, 92% { transform: rotateY(180deg); }
+  100% { transform: rotateY(360deg); }
+}
+
+/* Anyone who has asked the OS to calm things down gets the mark, held still.
+   The emblem rather than the trophy because if only one can be shown, it
+   should be ours. */
+@media (prefers-reduced-motion: reduce) {
+  .showcase-medal { animation: none; transform: rotateY(180deg); }
 }

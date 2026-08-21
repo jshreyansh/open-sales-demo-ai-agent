@@ -34,6 +34,13 @@ function renderWithLinks(text: string) {
 interface MeetingChatPanelProps {
   messages: MeetingChatMessage[];
   onSend: (text: string) => void;
+  // Locked while the agent is paused. Pause means the visitor has the floor
+  // and nothing runs until they give it back — a typed message would be a
+  // second, contradictory channel into a stopped agent, and a chat reply is
+  // multi-turn, so the first turn would land and the rest would silently
+  // vanish. Simpler and more honest to close the door: the panel stays open
+  // and readable, only the composer goes quiet.
+  paused?: boolean;
   onClose: () => void;
 }
 
@@ -41,7 +48,7 @@ interface MeetingChatPanelProps {
 // own "In-call messages" panel. Deliberately not a reuse of ChatWidget.tsx —
 // that component is Product Mode's floating/fixed-position launcher and
 // isn't meant to be laid out as a flex child inside .meet__body.
-export default function MeetingChatPanel({ messages, onSend, onClose }: MeetingChatPanelProps) {
+export default function MeetingChatPanel({ messages, onSend, onClose, paused = false }: MeetingChatPanelProps) {
   const [input, setInput] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -78,14 +85,15 @@ export default function MeetingChatPanel({ messages, onSend, onClose }: MeetingC
           </div>
         ))}
       </div>
-      <div className="meet__chat-input">
+      <div className={`meet__chat-input ${paused ? "meet__chat-input--locked" : ""}`}>
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSend()}
-          placeholder="Send a message"
+          placeholder={paused ? "Paused — press play to talk" : "Send a message"}
+          disabled={paused}
         />
-        <button onClick={handleSend} aria-label="Send message">
+        <button onClick={handleSend} aria-label="Send message" disabled={paused}>
           <MeetIcon name="send" size={16} />
         </button>
       </div>

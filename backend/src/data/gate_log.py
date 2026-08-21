@@ -104,11 +104,55 @@ def init_db() -> None:
             )
             """
         )
+        # Email-verification codes for the gate (see server.py's
+        # /api/visitor/otp/send). Append-only like gate_attempts rather than
+        # one mutable row per email: the send rate limit is "how many rows
+        # for this email in the last 15 minutes", which only works if every
+        # issued code leaves a row behind. `consumed` and `attempts` are the
+        # two things that DO mutate, both on the single newest row.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS otp_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                code TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                consumed INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_otp_codes_email ON otp_codes(email, created_at)")
+        # One row per session that has had its recap email sent, written only
+        # after Postmark confirms. This is the idempotency guard on the
+        # post-call email: the summary path can legitimately run more than
+        # once for the same visitor_id (bot.py's on_client_disconnected, plus
+        # the admin endpoint's on-demand fallback regenerating an uncached
+        # summary), and the visitor should not get the same recap twice.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS summary_emails (
+                visitor_id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                sent_at TEXT NOT NULL
+            )
+            """
+        )
 
 
 class VisitorLookup(TypedDict):
     name: str
     company: str
+
+
+class VisitorIdentity(TypedDict):
+    """What get_visitor_identity() returns. name/company are Optional because
+    a gate row can legitimately have neither — see list_visitors_summary."""
+
+    email: str
+    name: Optional[str]
+    company: Optional[str]
 
 
 def record_attempt(
@@ -306,6 +350,120 @@ def get_call_summary(visitor_id: str) -> Optional[str]:
             (visitor_id,),
         ).fetchone()
     return row["summary"] if row else None
+
+
+def get_visitor_identity(visitor_id: str) -> Optional[VisitorIdentity]:
+    """Who a given session belongs to — the reverse of the email-keyed lookups
+    above, which can't answer this because a returning visitor gets a fresh
+    visitor_id every session (see frontend/src/lib/session.ts). Needed by the
+    post-call recap email, which starts from a visitor_id (that's all the
+    call-summary path has) and has to work out where to send and who to
+    address. Reads the newest allowed row so the name/company are the ones
+    the visitor most recently confirmed at the gate."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT email, name, company FROM gate_attempts
+            WHERE visitor_id = ? AND status = 'allowed'
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (visitor_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {"email": row["email"], "name": row["name"], "company": row["company"]}
+
+
+def create_otp_code(email: str, code: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO otp_codes (email, code, created_at) VALUES (?, ?, ?)",
+            (email.strip().lower(), code, datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def recent_otp_sends(email: str, within_seconds: int) -> List[datetime]:
+    """Send timestamps for this email inside the given window, newest first —
+    the raw material for both send limits in server.py (3 per 15 minutes, and
+    the 30-second resend cooldown), returned as datetimes rather than a count
+    so one query answers both without the caller re-deriving anything.
+
+    Timestamps are parsed rather than compared as ISO strings: the string
+    form only sorts correctly while every row shares an identical format, and
+    a fractional-second difference is meaningless against a 15-minute window
+    but not against a 30-second one."""
+    cutoff = datetime.now(timezone.utc).timestamp() - within_seconds
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT created_at FROM otp_codes WHERE email = ? ORDER BY id DESC LIMIT 50",
+            (email.strip().lower(),),
+        ).fetchall()
+    sends = []
+    for r in rows:
+        try:
+            sent = datetime.fromisoformat(r["created_at"])
+        except ValueError:
+            continue
+        if sent.timestamp() >= cutoff:
+            sends.append(sent)
+    return sends
+
+
+def get_active_otp(email: str) -> Optional[dict]:
+    """The single newest unconsumed code for this email. Only the newest one
+    is ever live: requesting a fresh code has to invalidate the previous one,
+    otherwise the 5-attempt cap means nothing — a caller could just keep
+    requesting codes and keep guessing against every old one in parallel."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, code, created_at, attempts FROM otp_codes
+            WHERE email = ? AND consumed = 0
+            ORDER BY id DESC LIMIT 1
+            """,
+            (email.strip().lower(),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def burn_otp_codes(email: str) -> None:
+    """Marks every outstanding code for this email consumed. Called just
+    before issuing a new one — see get_active_otp for why only one code may
+    be live at a time."""
+    with _connect() as conn:
+        conn.execute("UPDATE otp_codes SET consumed = 1 WHERE email = ? AND consumed = 0", (email.strip().lower(),))
+
+
+def record_otp_attempt(otp_id: int) -> int:
+    """Counts one verify attempt against a code and returns the new total.
+    The increment happens before the code is compared (see server.py), so a
+    wrong guess always costs an attempt even if the request dies afterward."""
+    with _connect() as conn:
+        conn.execute("UPDATE otp_codes SET attempts = attempts + 1 WHERE id = ?", (otp_id,))
+        row = conn.execute("SELECT attempts FROM otp_codes WHERE id = ?", (otp_id,)).fetchone()
+    return row["attempts"] if row else 0
+
+
+def consume_otp(otp_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE otp_codes SET consumed = 1 WHERE id = ?", (otp_id,))
+
+
+def summary_email_sent(visitor_id: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute("SELECT 1 FROM summary_emails WHERE visitor_id = ?", (visitor_id,)).fetchone()
+    return row is not None
+
+
+def record_summary_email(visitor_id: str, email: str, message_id: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO summary_emails (visitor_id, email, message_id, sent_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(visitor_id) DO NOTHING
+            """,
+            (visitor_id, email.strip().lower(), message_id, datetime.now(timezone.utc).isoformat()),
+        )
 
 
 def get_stats() -> dict:

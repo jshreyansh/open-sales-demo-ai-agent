@@ -5,11 +5,12 @@ import { useAudioLevelRing } from "../lib/useAudioLevelRing";
 import { useReportedAudioLevelRing } from "../lib/useReportedAudioLevelRing";
 import { useFlipTiles } from "../lib/useFlipTiles";
 import { useLocalCamera } from "../lib/useLocalCamera";
-import { claimVoiceLock, sendMeetingChatMessage, setHandRaiseState, startSession, type AgentAction } from "../lib/api";
+import { claimVoiceLock, sendMeetingChatMessage, setHandRaiseState, startSession, type AgentAction, setPausedState } from "../lib/api";
 import { getVisitorId } from "../lib/session";
 import { useRegisterComponent } from "../lib/uiRegistry";
 import MeetIcon from "./MeetIcons";
 import Icon from "./Icon";
+import ShowcaseMedal from "./ShowcaseMedal";
 import PreJoinScreen from "./PreJoinScreen";
 import MeetingChatPanel, { type MeetingChatMessage } from "./MeetingChatPanel";
 import ExampleGalleryPanel from "./ExampleGalleryPanel";
@@ -116,6 +117,9 @@ function TileAvatar({
 export default function MeetingShell({ children, onLeave, onAction }: MeetingShellProps) {
   const time = useClock();
   const [handRaised, setHandRaised] = useState(false);
+  // Play/pause for the whole agent. See setPausedState — this is the visitor
+  // taking the floor outright, not queueing a question behind her sentence.
+  const [paused, setPaused] = useState(false);
   const [countdown, setCountdown] = useState(JOIN_COUNTDOWN_SECS);
   // Gates the join countdown (and, transitively, the voice connect effect
   // below) behind PreJoinScreen — the visitor picks a rep and gives their
@@ -404,6 +408,19 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
     void setHandRaiseState(visitorId, next);
   }
 
+  function handleTogglePause() {
+    const next = !paused;
+    setPaused(next);
+    void setPausedState(visitorId, next);
+    // Pausing while the hand is up would leave two contradictory signals
+    // pointing at the same floor. Pause is the stronger of the two, so it
+    // takes the hand down rather than sitting on top of it.
+    if (next && handRaised) {
+      setHandRaised(false);
+      void setHandRaiseState(visitorId, false);
+    }
+  }
+
   // Claimed here, at the moment of clicking Join, not later when connect()
   // actually opens the WebSocket after the countdown — reserving the slot
   // immediately (rather than leaving a 5-second window where a second
@@ -558,6 +575,7 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
 
         {chatOpen && (
           <MeetingChatPanel
+            paused={paused}
             messages={chatMessages}
             onSend={handleSendChat}
             onClose={() => setChatOpen(false)}
@@ -613,6 +631,21 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
           onClick={() => enableMic(!isMicEnabled)}
         >
           <MeetIcon name={isMicEnabled ? "mic" : "mic-off"} />
+        </button>
+        {/* Pause sits immediately after the mic because it belongs to the
+            same idea: who is allowed to talk right now. Hand-raise, two along,
+            is the polite version — this is the blunt one. */}
+        <button
+          className={`meet__ctrl ${paused ? "meet__ctrl--paused" : ""}`}
+          onClick={handleTogglePause}
+          aria-pressed={paused}
+          title={
+            paused
+              ? "Resume — she'll pick up where she left off"
+              : "Pause — stops her mid-sentence, nothing runs until you resume"
+          }
+        >
+          <MeetIcon name={paused ? "play" : "pause"} />
         </button>
         <button
           className={`meet__ctrl ${handRaised ? "meet__ctrl--pressed" : ""}`}
@@ -703,7 +736,7 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
         >
           <span className="meet__showcase-btn-inner">
             <span className="meet__showcase-btn-medal">
-              <Icon name="trophy" size={14} />
+              <ShowcaseMedal size={14} />
             </span>
             <span className="meet__showcase-btn-text">
               <span className="meet__showcase-btn-kicker">Hall of fame</span>

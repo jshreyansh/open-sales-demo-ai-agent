@@ -15,9 +15,15 @@ from ..persona import AGENT_NAME
 # and the frontend shows the identical text as the first chat bubble;
 # seeding it into history here means run_turn's very next call already sees
 # it as the opening turn.
+# Opens social, not transactional.
+#
+# Two people joining a call say hello and exchange a line before they get to
+# business — that is how the ice actually breaks. Opening on "want a
+# walkthrough, or something specific?" skips straight past it and makes the
+# first thing she does a menu. The discovery sequence (runtime.py instruction
+# 0) picks up from here.
 OPENING_GREETING = (
-    f"Hi, I'm {AGENT_NAME}, sales rep at SwishX. Want me to give you a walkthrough of the "
-    "platform, or is there something specific on your mind first?"
+    f"Hi, I'm {AGENT_NAME}, sales rep at SwishX. How's your day going so far?"
 )
 
 
@@ -29,8 +35,7 @@ def build_greeting(prospect_name: Optional[str] = None) -> str:
     if not prospect_name:
         return OPENING_GREETING
     return (
-        f"Hi {prospect_name}, I'm {AGENT_NAME}, sales rep at SwishX. Want me to give you a "
-        "walkthrough of the platform, or is there something specific on your mind first?"
+        f"Hi {prospect_name}, I'm {AGENT_NAME}, sales rep at SwishX. How's your day going so far?"
     )
 
 
@@ -83,6 +88,12 @@ class SessionState:
     qual_daily_users: Optional[str] = None
     qual_past_attempts: Optional[str] = None
     qual_next_step_response: Optional[str] = None
+    # Asked in the opening sequence (see runtime.py instruction 0). Kept
+    # separate from the MEDDIC fields because these two are asked deliberately
+    # and early, by name, rather than inferred from whatever the prospect
+    # happens to volunteer later.
+    qual_urgency: Optional[str] = None
+    qual_budget: Optional[str] = None
     # Turn number (see runtime.py's _qualification_note — len(history)//2)
     # the last qualification/MEDDIC field was captured on, 0 if none yet.
     # Drives turn-count-based escalating pressure instead of a wall-clock

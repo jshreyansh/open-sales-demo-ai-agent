@@ -2,6 +2,10 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.30.6
 anthropic>=0.34.2
 python-dotenv>=1.0.1
+# Postmark's REST API is called directly (src/data/email.py). Listed
+# explicitly rather than leaned on as a transitive dep of the pipecat/fastapi
+# stack — a dependency you import is one you own, whoever else pulls it in.
+requests>=2.32.0
 pydantic>=2.10.6
 pipecat-ai[groq,cartesia,webrtc,silero,runner]>=1.4.0
 deepgram-sdk==7.7.0
