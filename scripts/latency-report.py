@@ -20,7 +20,8 @@ METRICS = [
     ("llm_ttft_ms",                 "LLM first token",        "model"),
     ("llm_to_tts_enqueue_ms",       "LLM -> TTS enqueue",     "ours"),
     ("tts_acoustic_latency_ms",     "TTS acoustic",           "vendor"),
-    ("time_to_first_tts_enqueue_ms","-> first TTS enqueue",   "sum"),
+    ("time_to_first_sound_ms",      "-> first SOUND (bridge)", "sum"),
+    ("time_to_reply_enqueue_ms",    "-> reply enqueued",       "sum"),
     ("acoustic_ttfa_ms",            "ACOUSTIC TTFA",          "what they feel"),
     ("ttfc_ms",                     "Reply complete (TTFC)",  "completion"),
 ]

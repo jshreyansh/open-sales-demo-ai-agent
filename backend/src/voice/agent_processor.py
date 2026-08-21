@@ -570,6 +570,9 @@ class AgentRuntimeProcessor(FrameProcessor):
     # None unless RECORD_CALLS=true. Class-level default so the audio path can
     # never AttributeError on a test object built via __new__.
     _recorder: Optional[CallRecorder] = None
+    # True while the text going through _speak() is the answer rather than a
+    # bridge word, backchannel or handoff line. Read only by telemetry.
+    _speaking_reply: bool = False
     _turn_counter: int = 0
     # Declared at class level for the same reason: the pause gates are read
     # from the scheduler and the stall watchdog, both of which run on paths
@@ -1046,17 +1049,22 @@ class AgentRuntimeProcessor(FrameProcessor):
             # racing one of its own — which is exactly what turns five
             # fragments into one answer instead of five.
             self._last_user_speech_ended_at = time.monotonic()
-            # THE reference point. Every latency in the report is measured
-            # from here — this is the instant the prospect stopped talking and
-            # started waiting.
-            if self._telemetry is not None:
-                self._telemetry.t_user_speech_end = time.monotonic()
-                # An early-followup marker: they're speaking again while a
-                # reply is already under way. May be a genuine interruption
-                # rather than us cutting them off, which is why the field is
-                # named for the observation and not the conclusion.
-                if self._bot_speaking:
-                    self._telemetry.early_commit_followup = True
+            # NOT stamped into the record here. This assignment used to be
+            # direct (not mark()), so every subsequent VAD stop overwrote it —
+            # and because the consolidation window spans several VAD cycles per
+            # turn, the final value routinely landed AFTER the commit. That is
+            # what produced turn_commit_latency_ms of -732ms in the first
+            # baseline.
+            #
+            # The honest reference point is "the last time they stopped talking
+            # before we accepted the turn", which is only knowable at commit.
+            # _last_user_speech_ended_at above already tracks it; the record
+            # copies it in _handle_real_turn.
+            if self._telemetry is not None and self._bot_speaking:
+                # They started again while a reply was already under way. May
+                # be a genuine interruption rather than us cutting them off —
+                # named for the observation, not the conclusion.
+                self._telemetry.early_commit_followup = True
             # Decide, right here, whether what just ended was a real
             # barge-in or a noise blip — this is the only moment both the
             # start and end of the segment are known, and it happens well
@@ -1448,6 +1456,12 @@ class AgentRuntimeProcessor(FrameProcessor):
         if source == "voice":
             self._telemetry_open()
         if self._telemetry is not None:
+            # Copied, not marked: this is when they last stopped talking before
+            # this turn was accepted, which is the only defensible zero point
+            # for every latency below. Taken here because only now is "before
+            # the commit" a settled fact.
+            if self._telemetry.t_user_speech_end is None:
+                self._telemetry.t_user_speech_end = self._last_user_speech_ended_at
             self._telemetry.mark("t_turn_committed")
             self._telemetry.source = source
         self._begin_spoken_tracking()
@@ -1638,7 +1652,15 @@ class AgentRuntimeProcessor(FrameProcessor):
         # amount later. Conflating the two would bake an unknown constant into
         # every number we then tuned against, so they stay separate fields.
         if self._telemetry is not None:
-            self._telemetry.mark("t_first_tts_enqueue")
+            # Any sound at all — usually the bridge word, which is spoken before
+            # the LLM call even starts.
+            self._telemetry.mark("t_first_filler_enqueue")
+            if self._speaking_reply:
+                # ...and separately, the first text of the actual answer. These
+                # were one mark until the first baseline showed
+                # llm_to_tts_enqueue_ms = -1391ms on every record, because the
+                # filler legitimately precedes the first token.
+                self._telemetry.mark("t_first_reply_enqueue")
         # TTSService only flushes its sentence-aggregation buffer on an
         # LLMFullResponseEndFrame (or EndFrame) — a bare TextFrame gets
         # buffered and never actually synthesized. Bracketing this way is
@@ -1792,23 +1814,30 @@ class AgentRuntimeProcessor(FrameProcessor):
         the next. This is what lets a hand-raise mid-reply interrupt at the
         sentence boundary it happened in, instead of only ever being noticed
         after the entire explanation has already been spoken."""
-        for sentence in _split_sentences(text):
-            if self._interrupted_this_turn:
-                return
-            self._speech_finished.clear()
-            await self._speak(sentence, direction)
-            await self._speech_finished.wait()
-            if self._interrupted_this_turn:
-                # Playback of THIS sentence was cut mid-way (the interruption
-                # is what ended the wait above) — partially heard, so it's
-                # recorded as truncated rather than as fully delivered.
-                self._cut_off_part = sentence
-                return
-            self._spoken_parts.append(sentence)
-            if self._hand_raised and not self._hand_ack_sent:
-                await self._speak_hand_raise_handoff(direction)
-                return
+        # Marks everything spoken from here as the ANSWER, so telemetry can
+        # tell time-to-first-sound (the bridge word) from time-to-reply. The
+        # two were one number until the first baseline came back negative.
+        self._speaking_reply = True
+        try:
+            for sentence in _split_sentences(text):
+                if self._interrupted_this_turn:
+                    return
+                self._speech_finished.clear()
+                await self._speak(sentence, direction)
+                await self._speech_finished.wait()
+                if self._interrupted_this_turn:
+                    # Playback of THIS sentence was cut mid-way (the interruption
+                    # is what ended the wait above) — partially heard, so it's
+                    # recorded as truncated rather than as fully delivered.
+                    self._cut_off_part = sentence
+                    return
+                self._spoken_parts.append(sentence)
+                if self._hand_raised and not self._hand_ack_sent:
+                    await self._speak_hand_raise_handoff(direction)
+                    return
 
+        finally:
+            self._speaking_reply = False
     async def _consume_turn_stream(
         self,
         stream,

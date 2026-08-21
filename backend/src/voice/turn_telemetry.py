@@ -62,7 +62,19 @@ class TurnTelemetry:
     t_turn_committed: Optional[float] = None
     t_llm_request: Optional[float] = None
     t_llm_first_token: Optional[float] = None
-    t_first_tts_enqueue: Optional[float] = None
+    # Two different questions, and conflating them is what made the first
+    # baseline unreadable.
+    #
+    # The agent speaks a short bridge ("Hmmm —") BEFORE the LLM call starts, so
+    # the first text reaching TTS is the filler, not the answer. Measuring one
+    # "first enqueue" therefore produced llm_to_tts_enqueue_ms of -1391ms in
+    # every single record: the enqueue genuinely preceded the first token.
+    #
+    # Both numbers matter and they answer different things:
+    #   filler  -> "how long before she made ANY sound"  (felt responsiveness)
+    #   reply   -> "how long before she said something USEFUL"
+    t_first_filler_enqueue: Optional[float] = None
+    t_first_reply_enqueue: Optional[float] = None
     t_first_output_audio: Optional[float] = None
     t_reply_complete: Optional[float] = None
 
@@ -96,13 +108,14 @@ class TurnTelemetry:
             # service — our own sentence aggregation and routing, not Cartesia.
             # Kept separate because calling it "TTS latency" would send anyone
             # optimising it to the wrong vendor.
-            "llm_to_tts_enqueue_ms": _ms(self.t_llm_first_token, self.t_first_tts_enqueue),
+            "llm_to_tts_enqueue_ms": _ms(self.t_llm_first_token, self.t_first_reply_enqueue),
             # CARTESIA'S. Enqueue -> sound actually leaving the pipeline. This
             # is the only one of the two that a TTS provider could improve.
-            "tts_acoustic_latency_ms": _ms(self.t_first_tts_enqueue, self.t_first_output_audio),
+            "tts_acoustic_latency_ms": _ms(self.t_first_filler_enqueue, self.t_first_output_audio),
             # Everything before the first text reaches TTS. Explicitly NOT audio,
             # and named so nobody reads it as such.
-            "time_to_first_tts_enqueue_ms": _ms(self.t_user_speech_end, self.t_first_tts_enqueue),
+            "time_to_first_sound_ms": _ms(self.t_user_speech_end, self.t_first_filler_enqueue),
+            "time_to_reply_enqueue_ms": _ms(self.t_user_speech_end, self.t_first_reply_enqueue),
             # THE REAL ONE — what the prospect actually experiences as "how long
             # until she said something". None unless output audio was reported;
             # never silently substituted with the enqueue time above.
@@ -123,6 +136,19 @@ class TurnTelemetry:
         """One JSON line per turn. Idempotent — a turn that ends via both the
         normal path and a disconnect must not be counted twice."""
         if self._emitted:
+            return
+        # A record with no user-speech-end is not a user turn — it's an
+        # auto-continue beat or a chat message that borrowed the clock. Those
+        # polluted the first baseline as 7 "unknown" verdicts and 10 "unknown"
+        # release paths, and every latency in them is measured from nothing.
+        # Dropping them is more honest than publishing rows built on a missing
+        # reference point.
+        if self.t_user_speech_end is None:
+            logger.debug(
+                f"[{self.visitor_id}] turn {self.turn_id}: no user speech end — "
+                f"not a user turn, telemetry dropped"
+            )
+            self._emitted = True
             return
         self._emitted = True
         payload = {
