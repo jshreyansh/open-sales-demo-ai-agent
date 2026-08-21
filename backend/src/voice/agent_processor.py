@@ -38,7 +38,7 @@ from ..agent.runtime import (
     run_turn_stream,
     run_walkthrough_continuation,
 )
-from ..context.store import OPENING_GREETING, get_session
+from ..context.store import OPENING_GREETING, HistoryEntry, get_session
 from ..data import gate_log
 from .call_recorder import CallRecorder, recording_enabled
 from .turn_telemetry import TurnTelemetry
@@ -58,6 +58,59 @@ AUTO_CONTINUE_PAUSE_SECS = 0.1
 # silent and the idle timeout hung up on him. A tour that never checks in isn't
 # a demo, it's a broadcast.
 MAX_CONSECUTIVE_AUTO_BEATS = 2
+
+# ...but the budget GROWS each time the prospect answers "keep going".
+#
+# Session 5e1732cb: she asked six times in five minutes, he answered "continue"
+# five of them, and she asked again anyway. His words: "Why are you stopping
+# with every step? Should I keep reminding you that yeah, go ahead?" A fixed
+# cap of 2 is right for an agent narrating unprompted; it is wrong for a tour
+# the prospect explicitly asked to run, and asking someone the same question
+# six times is its own kind of not listening.
+#
+# So each bare confirmation doubles the run: 2 beats, then 4, 8, 16. Someone
+# who wants it to flow gets it to flow; someone who wants to steer still gets
+# asked early. Reset on anything substantive, since that is evidence they do
+# want the floor after all.
+AUTO_BEAT_BUDGET_CAP = 16
+
+_CONTINUATION_WORDS = re.compile(
+    r"\b(continue|carry\s*on|keep\s*going|go\s*on|go\s*ahead|proceed|"
+    r"move\s*on|listening)\b",
+    re.I,
+)
+# Any of these means they want something OTHER than the next beat, however
+# politely phrased. Checked BEFORE the continuation words, because "actually
+# no, continue somewhere else" contains both.
+_REDIRECT_MARKERS = re.compile(
+    r"\b(instead|actually|but|wait|stop|hold\s*on|drop|skip|back|why|what|"
+    r"how|when|where|who|show|open|explain|tell\s*me|go\s*to|jump|change|"
+    r"rather|first|before)\b",
+    re.I,
+)
+# Above this it isn't a nod, it's a thought — and a thought deserves an answer
+# rather than being counted as permission to keep talking.
+_CONTINUATION_MAX_WORDS = 12
+
+
+def _is_bare_continuation(text: str) -> bool:
+    """True when the prospect said "keep going" and essentially nothing else.
+
+    Conservative in the direction that matters: a false negative just means we
+    ask again sooner, while a false positive means treating a real question as
+    permission to talk over it. Keys off the continuation verb appearing in a
+    SHORT utterance with no question and no redirect, rather than trying to
+    enumerate the words that may precede it — an earlier prefix-whitelist
+    version missed "you can continue" outright.
+    """
+    t = (text or "").strip()
+    if not t or "?" in t:
+        return False
+    if len(t.split()) > _CONTINUATION_MAX_WORDS:
+        return False
+    if _REDIRECT_MARKERS.search(t):
+        return False
+    return bool(_CONTINUATION_WORDS.search(t))
 
 # Upper bound on how long _auto_continue_after_pause will wait for the
 # CURRENT beat's own speech to genuinely finish (via _speech_finished)
@@ -564,6 +617,9 @@ class AgentRuntimeProcessor(FrameProcessor):
     # measures the whole thought, not the gap since the last fragment.
     _turn_floor_started_at: Optional[float] = None
     _consecutive_auto_beats: int = 0
+    # How many beats this tour may run before asking again. Doubles on each
+    # bare "keep going" — see AUTO_BEAT_BUDGET_CAP.
+    _auto_beat_budget: int = MAX_CONSECUTIVE_AUTO_BEATS
     # The turn currently being measured. See turn_telemetry.py — this exists
     # because "how long before she made a sound" was unanswerable from logs.
     _telemetry: Optional[TurnTelemetry] = None
@@ -1451,6 +1507,20 @@ class AgentRuntimeProcessor(FrameProcessor):
         # and the beat budget resets. This is what lets "keep going" buy
         # another full run of beats rather than one at a time.
         self._consecutive_auto_beats = 0
+        # A bare "keep going" earns a longer run before we ask again; anything
+        # substantive resets to the cautious default, because that is evidence
+        # they want the floor. Session 5e1732cb asked six times in five minutes
+        # and got "continue" five times — the budget has to learn.
+        if _is_bare_continuation(text):
+            grown = min(self._auto_beat_budget * 2, AUTO_BEAT_BUDGET_CAP)
+            if grown != self._auto_beat_budget:
+                logger.info(
+                    f"[{self._visitor_id}] 'keep going' confirmed — beat budget "
+                    f"{self._auto_beat_budget} -> {grown}"
+                )
+            self._auto_beat_budget = grown
+        else:
+            self._auto_beat_budget = MAX_CONSECUTIVE_AUTO_BEATS
         # Committed: this is the moment we accepted their words as a turn.
         # turn_detection_ms — the 1.5-2.6s window — is measured to right here.
         if source == "voice":
@@ -2241,10 +2311,11 @@ class AgentRuntimeProcessor(FrameProcessor):
         # to continue, and parks on walkthrough_awaiting_answer — existing
         # machinery that already halts the chain and waits. A real turn resets
         # the counter, so answering "keep going" buys another full budget.
-        if self._consecutive_auto_beats >= MAX_CONSECUTIVE_AUTO_BEATS:
+        if self._consecutive_auto_beats >= self._auto_beat_budget:
             logger.info(
                 f"[{self._visitor_id}] auto-continue cap reached "
-                f"({self._consecutive_auto_beats} beats) — returning the floor"
+                f"({self._consecutive_auto_beats}/{self._auto_beat_budget} beats) "
+                f"— returning the floor"
             )
             session.walkthrough_awaiting_answer = True
             self._consecutive_auto_beats = 0
@@ -2277,7 +2348,21 @@ class AgentRuntimeProcessor(FrameProcessor):
         # themselves and this question would be talking over them.
         if self._user_speaking or self._pending_fragment_text or self._turn_in_progress:
             return
-        await self._speak(random.choice(FLOOR_RETURN_PROMPTS), direction)
+        prompt = random.choice(FLOOR_RETURN_PROMPTS)
+        # Persisted, not merely spoken. _speak() alone puts audio on the wire
+        # and leaves no trace, so the agent had no record of having asked —
+        # which is why it asked six times in five minutes in session 5e1732cb.
+        # The prospect heard every one; the agent knew about none of them. Same
+        # shape as the false-interruption resume path, and the same rule:
+        # anything the prospect actually HEARS belongs in the history the next
+        # turn reasons over, or the agent is answering a call that didn't happen.
+        session = get_session(self._visitor_id)
+        if session.visitor_id:
+            gate_log.append_transcript_turn(session.visitor_id, "agent", prompt)
+        session.history.append(HistoryEntry(role="agent", text=prompt))
+        self._current_reply_source = "voice"
+        asyncio.create_task(self._report_reply(prompt))
+        await self._speak(prompt, direction)
 
     async def _watch_auto_continue_stall(self) -> None:
         """Self-healing safety net for the auto-continue chain.
