@@ -1865,7 +1865,9 @@ class AgentRuntimeProcessor(FrameProcessor):
             # for turns that went well would flatter every average we take.
             self._telemetry_close()
 
-    async def _advance_after_turn(self, session, direction: FrameDirection) -> None:
+    async def _advance_after_turn(
+        self, session, direction: FrameDirection, last_user_text: str = ""
+    ) -> None:
         """Called at the end of every turn — real or auto-continued — instead
         of calling _maybe_schedule_auto_continue directly. Checks for a
         stashed dropped-interruption transcript first (see queue_frame's
@@ -1934,7 +1936,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                 f"[{self._visitor_id}] holding stashed interruption for settle window: {pending!r}"
             )
             return
-        self._maybe_schedule_auto_continue(session, direction)
+        self._maybe_schedule_auto_continue(session, direction, last_user_text=last_user_text)
 
     async def _greet(self, direction: FrameDirection) -> None:
         # get_session() creates a brand-new session seeded with OPENING_GREETING
