@@ -2968,6 +2968,16 @@ class AgentRuntimeProcessor(FrameProcessor):
             self._pending_fragment_watch_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._pending_fragment_watch_task
+        # This one was missing, which is why a call that ended at 02:12 was
+        # still polling :8787 an hour later and threw ConnectionRefused all
+        # over the log the moment the REST server restarted under it. At
+        # PAUSE_POLL_INTERVAL_SECS = 0.12 that is ~8 requests a second, per
+        # finished call, until the process dies. Added with the pause feature
+        # and not added here — the same omission the pause bug itself was.
+        if self._pause_poll_task is not None:
+            self._pause_poll_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._pause_poll_task
         # Same reasoning as the hand-raise poll task above — a walkthrough
         # left mid-tour when the call ends shouldn't leave a dangling task
         # trying to speak into a torn-down pipeline.
