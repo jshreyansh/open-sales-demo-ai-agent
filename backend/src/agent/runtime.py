@@ -2005,7 +2005,34 @@ def _finalize_turn(
     # unconditionally — it describes this one turn.
     requested = session.pending_walkthrough_request
     session.pending_walkthrough_request = None
-    if requested and session.walkthrough_step is None and not end_walkthrough:
+    # "walkthrough_step is None" is not the same fact as "the model missed
+    # this" — it is ALSO true when the model considered the request and
+    # explicitly chose something else. Session 84938b9b: the prospect asked
+    # "Can someone give me walkthrough?", the model correctly read "someone"
+    # as a human and replied "let me open the booking portal... a human rep
+    # for a full walkthrough" (a real action fired, a real considered
+    # decision) — and this backstop, blind to that, silently started the
+    # full platform tour behind it anyway. The tour then sat latched at
+    # step 1, invisible, until an unrelated later turn's system prompt
+    # picked it back up and resumed narrating unprompted.
+    #
+    # Two signals of "the model already decided, don't second-guess it":
+    #   - it fired ANY real action this turn (a deliberate, considered move
+    #     in response to whatever was just said, not silence)
+    #   - its reply hands the floor back with a question (it hasn't
+    #     finished deciding yet — firing underneath a pending question is
+    #     doubly wrong, since the walkthrough would start while the model
+    #     itself is still waiting on an answer)
+    # Neither signal is walkthrough-specific text-matching — reusing the
+    # exact same trap this backstop's cousin (_promised_walkthrough) fell
+    # into is the one thing this fix must not do.
+    model_already_acted = bool(action_method) or _reply_hands_over_the_floor(result.get("reply") or "")
+    if (
+        requested
+        and session.walkthrough_step is None
+        and not end_walkthrough
+        and not model_already_acted
+    ):
         if session.walkthrough_user_stopped:
             # They stopped the tour earlier and have now asked for one out
             # loud. That's a deliberate reversal by the only party allowed
@@ -2028,6 +2055,13 @@ def _finalize_turn(
         logger.warning(
             f"[{session.visitor_id}] prospect explicitly asked for a {requested} walkthrough but "
             f"the model never started one — starting at step {session.walkthrough_step}"
+        )
+    elif requested and session.walkthrough_step is None and not end_walkthrough:
+        # Same shape as the CONSISTENCY GUARD below: logged so the decision
+        # is debuggable without re-reading the transcript, never silent.
+        logger.info(
+            f"[{session.visitor_id}] explicit {requested} walkthrough request heard, but the "
+            f"model already acted this turn (action={action_method!r}) — not overriding it"
         )
 
     # FLOOR HANDOVER — if she ended on a question, the tour waits. Always.
@@ -2090,11 +2124,42 @@ def _finalize_turn(
     # agreeing to a request they just made. That is the opposite of the
     # guard below, where she can drift into tour language unprompted and
     # must NOT be allowed to override them.
-    if session.walkthrough_user_stopped and _promised_to_continue(result.get("reply") or ""):
+    #
+    # BUT: _CONTINUE_PROMISE's own patterns have no subject requirement —
+    # "continuing the walkthrough" matches with no "I'll" in front of it —
+    # so the exact same third-party trap that broke session 84938b9b above
+    # can happen here too, just not yet caught live: the prospect asks to
+    # be connected with someone who can keep explaining, the model offers a
+    # human handoff ("I can connect you with a rep who can continue the
+    # walkthrough — want me to set that up?"), and this would read that as
+    # HER agreeing to resume the AI's own tour.
+    #
+    # Guarded the same way as the backstop above, but with only ONE of its
+    # two signals, deliberately: action-fired is NOT used here, because a
+    # genuine resume (the 79b6817e case this exists for) often fires the
+    # next beat's own action in the same turn as the confirmation — that
+    # signal would incorrectly suppress the exact case this block is for.
+    # Floor-handover doesn't have that problem: a genuine resume is
+    # declarative narration ("here's the next part..."), not a check-in
+    # question, while an offer to connect with a human is naturally phrased
+    # as one ("want me to set that up?") — so it stays a reliable
+    # discriminator here even though action-fired doesn't.
+    reply_text = result.get("reply") or ""
+    if (
+        session.walkthrough_user_stopped
+        and _promised_to_continue(reply_text)
+        and not _reply_hands_over_the_floor(reply_text)
+    ):
         session.walkthrough_user_stopped = False
         logger.warning(
             f"[{session.visitor_id}] reply promised to continue while the tour was still "
             f"stopped — lifting the stop so the promise is actually kept"
+        )
+    elif session.walkthrough_user_stopped and _promised_to_continue(reply_text):
+        logger.info(
+            f"[{session.visitor_id}] reply promised to continue, but it hands the floor back "
+            f"with a question — likely a human-handoff offer, not resuming the AI's own tour; "
+            f"not lifting the stop"
         )
 
     # CONSISTENCY GUARD — the reply promised a guided tour but no
