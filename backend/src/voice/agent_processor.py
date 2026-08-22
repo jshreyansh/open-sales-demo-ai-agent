@@ -1551,9 +1551,30 @@ class AgentRuntimeProcessor(FrameProcessor):
                         self._pending_interruption_since = None
                         pending_source = self._pending_interruption_source
                         self._pending_interruption_source = "voice"
-                        logger.info(
-                            f"[{self._visitor_id}] draining deferred interruption: {pending!r}"
-                        )
+                        if self._pending_fragment_text:
+                            # The fragment buffer holds strictly newer speech
+                            # than this deferred interruption: it was stashed
+                            # earlier and hit its own MAX_HOLD deadline while
+                            # the fragment kept accruing afterward. Answer
+                            # both as one turn, oldest first, instead of
+                            # answering the stale half alone while the newer
+                            # half still sits unanswered in the other buffer
+                            # — this is the out-of-order-reply mechanism
+                            # confirmed in session ed370d2d, where the two
+                            # buffers drained fully independently.
+                            pending = f"{pending} {self._pending_fragment_text}".strip()
+                            self._pending_fragment_text = ""
+                            self._end_floor_hold()
+                            if self._telemetry is not None:
+                                self._telemetry.released_by = "deferred_interrupt_merged_with_fragment"
+                            logger.info(
+                                f"[{self._visitor_id}] draining deferred interruption merged "
+                                f"with pending fragment: {pending!r}"
+                            )
+                        else:
+                            logger.info(
+                                f"[{self._visitor_id}] draining deferred interruption: {pending!r}"
+                            )
                         await self._handle_real_turn(
                             pending, FrameDirection.DOWNSTREAM, source=pending_source
                         )
@@ -1663,6 +1684,30 @@ class AgentRuntimeProcessor(FrameProcessor):
                     # stall flush the next turn inherited a spent flag and went
                     # un-acknowledged however long it ran.
                     self._end_floor_hold()
+                    if self._pending_interruption_text:
+                        # Mirror of the merge in the deferred-interruption
+                        # drain above: an older stashed interruption is still
+                        # waiting in the other buffer. Answer both together,
+                        # oldest first, rather than flushing this fragment
+                        # alone while older speech sits unanswered right next
+                        # to it — same ed370d2d out-of-order mechanism, hit
+                        # from the fragment side's own stall deadline instead.
+                        older = self._pending_interruption_text
+                        self._pending_interruption_text = None
+                        self._pending_interruption_since = None
+                        pending_source = self._pending_interruption_source
+                        self._pending_interruption_source = "voice"
+                        pending = f"{older} {pending}".strip()
+                        if self._telemetry is not None:
+                            self._telemetry.released_by = "fragment_stall_merged_with_interrupt"
+                        logger.warning(
+                            f"[{self._visitor_id}] pending fragment stalled, merged with deferred "
+                            f"interruption, flushing: {pending!r}"
+                        )
+                        await self._handle_real_turn(
+                            pending, FrameDirection.DOWNSTREAM, source=pending_source
+                        )
+                        continue
                     if self._telemetry is not None:
                         self._telemetry.released_by = "stall_backstop"
                     logger.warning(f"[{self._visitor_id}] pending fragment stalled, flushing: {pending!r}")
