@@ -7152,7 +7152,9 @@ body {
 .lp__figure {
   position: relative;
   margin: 0;
-  aspect-ratio: 720 / 1224;
+  /* Matches fiona-loop.mp4's real encoded dimensions exactly, so
+     object-fit: cover on .lp__video below has nothing left to crop. */
+  aspect-ratio: 448 / 614;
   height: min(70vh, 660px);
   width: auto;
   justify-self: end;

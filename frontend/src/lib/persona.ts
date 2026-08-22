@@ -7,7 +7,7 @@ import agentLoop from "../assets/fiona-loop.mp4";
 export const AGENT_NAME = "Fiona";
 export const AGENT_INITIAL = AGENT_NAME.charAt(0).toUpperCase();
 export const AGENT_PHOTO = agentPhoto;
-// A short silent portrait loop of her (720x1224, no audio track at all), used as
+// A short silent portrait loop of her (448x614, no audio track at all), used as
 // the pre-join card's fill. AGENT_PHOTO stays the canonical still — it's this
 // clip's poster frame and every small avatar (chat launcher, meeting tile) still
 // uses it, because a looping clip at 32px is noise, not identity.
