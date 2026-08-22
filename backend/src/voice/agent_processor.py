@@ -411,6 +411,20 @@ CONSOLIDATION_SETTLE_BASE_SECS = 1.5
 CONSOLIDATION_SETTLE_STEP_SECS = 0.45
 CONSOLIDATION_SETTLE_MAX_SECS = 2.6
 
+# Confidence-driven settle window (session ed370d2d, 2026-08-22). The step
+# formula above only ever saw a fragment COUNT, never how confident Smart
+# Turn actually was that the segment was finished -- so a clearly-done
+# terse answer waited the same flat floor as a borderline one, and a
+# genuinely still-rambling speaker ran out of patience at a flat 2.6s
+# ceiling regardless of how uncertain the model still was. Smart Turn's own
+# sigmoid probability (pipecat's base_smart_turn.py computes it on every
+# inference, then discards everything but the >0.5 threshold) is the
+# continuous confidence signal production systems key their wait time off
+# of instead (LiveKit's turn-detector: 0.5s at high confidence, 6.0s at
+# low, linearly interpolated). See _settle_window().
+SETTLE_MIN_SECS = 0.7
+SETTLE_MAX_SECS = 4.0
+
 
 # ---------------------------------------------------------------------------
 # PHASE 2: adaptive commit window. Built, wired, and OFF.
@@ -842,6 +856,11 @@ class AgentRuntimeProcessor(FrameProcessor):
         # for (should not normally happen, but fails open rather than fails
         # silent) behaves exactly like today, not like a stuck hold.
         self._last_turn_incomplete = False
+        # Smart Turn's own confidence that the last analyzed segment was
+        # COMPLETE (0.0-1.0) — see _settle_window(). Defaults to the binary
+        # threshold itself (0.5, "maximally uncertain") for the same
+        # fails-open reasoning as _last_turn_incomplete above.
+        self._last_turn_probability: float = 0.5
         # Text held back because the last segment judged INCOMPLETE — see
         # _maybe_handle_transcript. Concatenated onto the next segment's
         # text once one finally judges COMPLETE (or the watchdog below
@@ -1398,8 +1417,12 @@ class AgentRuntimeProcessor(FrameProcessor):
         via BaseSmartTurn's own thread executor) — called from both the
         explicit VAD-stop trigger and append_audio's own internal silence
         safety net above."""
-        state, _ = await self._smart_turn.analyze_end_of_turn()
+        state, metrics = await self._smart_turn.analyze_end_of_turn()
         self._last_turn_incomplete = state == EndOfTurnState.INCOMPLETE
+        # metrics is None only when _process_speech_segment saw an empty
+        # audio buffer (pipecat's base_smart_turn.py) — fall back to the
+        # binary threshold itself rather than assume confident either way.
+        self._last_turn_probability = metrics.probability if metrics is not None else 0.5
         if self._telemetry is not None:
             self._telemetry.mark("t_smart_turn_verdict")
             # Recorded per turn so Phase 2 can measure how often COMPLETE is
@@ -2152,13 +2175,30 @@ class AgentRuntimeProcessor(FrameProcessor):
         return FAST_COMMIT_SECS
 
     def _settle_window(self) -> float:
-        """How long the room must stay quiet before answering, given how
-        many fragments are already waiting. See the CONSOLIDATION_* block."""
-        return min(
+        """How long the room must stay quiet before answering.
+
+        Primarily driven by Smart Turn's own confidence (_last_turn_probability)
+        rather than fragment count alone — see the SETTLE_MIN/MAX block above.
+        A confident single-fragment COMPLETE settles near SETTLE_MIN_SECS,
+        genuinely faster than the old flat floor. Once a turn has already
+        shown real fragmentation (_burst_fragments > 1), the old stepped
+        formula becomes a floor underneath the probability-driven value —
+        confidence can only make an already-fragmenting turn MORE patient
+        here, never less, since fragment count is itself hard evidence the
+        old formula shouldn't be second-guessed downward.
+        """
+        prob = self._last_turn_probability if self._last_turn_probability is not None else 0.5
+        interpolated = max(
+            SETTLE_MIN_SECS, SETTLE_MAX_SECS - (SETTLE_MAX_SECS - SETTLE_MIN_SECS) * prob
+        )
+        if self._burst_fragments <= 1:
+            return interpolated
+        stepped = min(
             CONSOLIDATION_SETTLE_BASE_SECS
             + CONSOLIDATION_SETTLE_STEP_SECS * max(0, self._burst_fragments - 1),
             CONSOLIDATION_SETTLE_MAX_SECS,
         )
+        return max(stepped, interpolated)
 
     def _begin_spoken_tracking(self) -> None:
         """Resets the spoken-prefix accumulator at the start of every turn —
