@@ -499,6 +499,14 @@ FRAGMENTATION_DECAY_TURNS = 6
 # is the same breath, however VAD chose to cut it.
 FRAGMENT_PAUSE_MIN_GAP_SECS = 0.8
 
+# How recent "shortly after my own last reply" means, for the
+# low_confidence_continuation signal (see runtime.py's _continuation_note).
+# Grounded against session afe71838's real gaps: turn 4's reply was still
+# playing when the next fragment arrived (well under 1s), and the no-overlap
+# turn-4->5 gap was a handful of seconds. 10s comfortably covers both without
+# reaching into a later, genuinely separate topic. Tunable, not derived.
+CONTINUATION_WINDOW_SECS = 10.0
+
 # Hard ceiling on how long the deferred-interruption buffer may hold the
 # floor before it gets answered no matter what.
 #
@@ -861,6 +869,15 @@ class AgentRuntimeProcessor(FrameProcessor):
         # threshold itself (0.5, "maximally uncertain") for the same
         # fails-open reasoning as _last_turn_incomplete above.
         self._last_turn_probability: float = 0.5
+        # Set by _mark_continuation() immediately before each
+        # _handle_real_turn call, read and cleared at that function's own
+        # start — mirrors was_interrupted's set/read/reset shape exactly
+        # (see SessionState.low_confidence_continuation). Deliberately a
+        # plain instance attribute, not a new _handle_real_turn parameter:
+        # threading a new arg through all 6 call sites is the exact shape of
+        # change that caused this session's earlier _advance_after_turn
+        # crash bug.
+        self._pending_low_confidence_continuation = False
         # Text held back because the last segment judged INCOMPLETE — see
         # _maybe_handle_transcript. Concatenated onto the next segment's
         # text once one finally judges COMPLETE (or the watchdog below
@@ -959,6 +976,10 @@ class AgentRuntimeProcessor(FrameProcessor):
         # docstring for the exact bug that caused, and how the fix here
         # differs from the version that didn't work).
         self._last_activity = time.monotonic()
+        # When a real reply (never a filler) last finished speaking — see
+        # _handle_real_turn's own comment at the set site. 0.0 so a call's
+        # first turn can never look "recent" against a clock that never ran.
+        self._last_real_reply_finished_at: float = 0.0
         # Guards BotStartedSpeakingFrame below so a check-in/farewell's own
         # speech can't bump _last_activity — without this, "still there?"
         # would reset the very clock it exists to observe, which is exactly
@@ -1478,6 +1499,7 @@ class AgentRuntimeProcessor(FrameProcessor):
             logger.info(f"[{self._visitor_id}] fast-tracking short affirmation past INCOMPLETE: {combined!r}")
             self._pending_fragment_text = ""
             self._end_floor_hold()
+            self._mark_continuation(low_confidence=False)  # a deliberate hand-back, not a forced release
             await self._handle_real_turn(combined, direction)
             return
         # COMPLETE — but "complete sentence" is not "finished talking".
@@ -1598,6 +1620,13 @@ class AgentRuntimeProcessor(FrameProcessor):
                             logger.info(
                                 f"[{self._visitor_id}] draining deferred interruption: {pending!r}"
                             )
+                        # Both branches above: a forced release, not a clean
+                        # settle — the merge path explicitly, and the plain
+                        # drain because it only reaches here via a deadline/
+                        # quiet-enough heuristic, not Smart Turn confidence.
+                        # This exact plain-drain branch is turn 6's real
+                        # release path in session afe71838.
+                        self._mark_continuation(low_confidence=True)
                         await self._handle_real_turn(
                             pending, FrameDirection.DOWNSTREAM, source=pending_source
                         )
@@ -1666,6 +1695,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                         if self._telemetry is not None:
                             self._telemetry.released_by = "settle"
                         logger.info(f"[{self._visitor_id}] settled — answering once: {pending!r}")
+                        self._mark_continuation(low_confidence=False)  # clean settle — confident this was the whole point
                         await self._handle_real_turn(pending, FrameDirection.DOWNSTREAM)
                         continue
                     held_for = time.monotonic() - self._last_fragment_activity
@@ -1727,6 +1757,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                             f"[{self._visitor_id}] pending fragment stalled, merged with deferred "
                             f"interruption, flushing: {pending!r}"
                         )
+                        self._mark_continuation(low_confidence=True)  # forced flush, not a confident settle
                         await self._handle_real_turn(
                             pending, FrameDirection.DOWNSTREAM, source=pending_source
                         )
@@ -1734,6 +1765,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                     if self._telemetry is not None:
                         self._telemetry.released_by = "stall_backstop"
                     logger.warning(f"[{self._visitor_id}] pending fragment stalled, flushing: {pending!r}")
+                    self._mark_continuation(low_confidence=True)  # never got a COMPLETE verdict at all
                     await self._handle_real_turn(pending, FrameDirection.DOWNSTREAM)
                 except asyncio.CancelledError:
                     raise
@@ -1767,6 +1799,13 @@ class AgentRuntimeProcessor(FrameProcessor):
         self._last_activity = time.monotonic()
         self._current_reply_source = source
         session = get_session(self._visitor_id)
+        # Consumed for this turn's prompt only — see _mark_continuation and
+        # SessionState.low_confidence_continuation. Read-then-clear here,
+        # same shape as was_interrupted's own read-then-clear in runtime.py,
+        # so a low-confidence release on turn N can't leak into turn N+1's
+        # prompt if turn N+1 has nothing set for it.
+        session.low_confidence_continuation = self._pending_low_confidence_continuation
+        self._pending_low_confidence_continuation = False
         # Defensive second cancellation point — VAD-start and an STT
         # segment finalizing aren't the same frame/timing, so this isn't
         # redundant with the VADUserStartedSpeakingFrame branch; a real turn
@@ -1907,6 +1946,17 @@ class AgentRuntimeProcessor(FrameProcessor):
                         asyncio.create_task(self._report_action(action))
                     asyncio.create_task(self._report_reply(reply))
                     await self._speak_reply(reply, direction)
+
+            # Reached here whether the reply was spoken incrementally above
+            # (already_spoken) or via the fallback just above — either way,
+            # a REAL reply (never a filler/backchannel, which speak through
+            # _speak/_speak_without_activity_bump elsewhere, not this path)
+            # just finished. Deliberately NOT inferred from
+            # BotStoppedSpeakingFrame + _speaking_reply: that flag is already
+            # False by the time the streaming path's own stop-frame arrives
+            # (see the comment at its reset site), so gating on it there
+            # would silently never fire for the primary streaming path.
+            self._last_real_reply_finished_at = time.monotonic()
 
             # Correct the history entry BEFORE _advance_after_turn below: a
             # stashed interruption replays as a whole new turn from there and
@@ -2050,6 +2100,30 @@ class AgentRuntimeProcessor(FrameProcessor):
         await self.push_frame(LLMFullResponseStartFrame(), direction)
         await self.push_frame(TextFrame(text), direction)
         await self.push_frame(LLMFullResponseEndFrame(), direction)
+
+    def _mark_continuation(self, low_confidence: bool) -> None:
+        """Call immediately before _handle_real_turn at each of its 6 call
+        sites, stating whether THIS release was low-confidence-it-was-the-
+        whole-point (stall_backstop, either merge path, or a plain
+        interruption drain — never a clean settle, fast_track, or the
+        chat-idle path, which is inherently deliberate). ANDs that with
+        recency since the agent's own last real reply — see
+        CONTINUATION_WINDOW_SECS — so a low-confidence release long after
+        the last reply (nothing to tie back to) doesn't fire either.
+
+        Sets the pending flag _handle_real_turn reads at its own start.
+        Deliberately explicit at every call site rather than read from
+        self._telemetry.released_by: that field is left at its default None
+        on the plain interruption-drain path and the chat-idle path (found
+        during exploration — released_by is genuinely unset there, not just
+        an unlikely value), which would have silently never fired on
+        exactly the release shape that motivated this fix.
+        """
+        recent = (
+            time.monotonic() - self._last_real_reply_finished_at
+            < CONTINUATION_WINDOW_SECS
+        )
+        self._pending_low_confidence_continuation = low_confidence and recent
 
     def _note_fragment_gap(self) -> None:
         """Grow the settle window only when a REAL pause preceded this
@@ -3382,6 +3456,7 @@ class AgentRuntimeProcessor(FrameProcessor):
         # it directly, exactly like a transcript arriving while idle would.
         self._cancel_pending_auto_continue()
         self._cancel_prefetch()
+        self._mark_continuation(low_confidence=False)  # a typed message is deliberate, no fragment ambiguity
         await self._handle_real_turn(text, direction, source="chat")
 
     def seconds_since_activity(self) -> float:

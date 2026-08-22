@@ -55,6 +55,14 @@ class SessionState:
     # next run_turn call so the agent knows its last explanation may have
     # landed only partially, then cleared.
     was_interrupted: bool = False
+    # Set by the voice pipeline when the current turn was released with low
+    # confidence it was truly the prospect's whole point AND arrived shortly
+    # after the agent's own last reply (see CONTINUATION_WINDOW_SECS in
+    # agent_processor.py) — read once by _build_system so the agent ties the
+    # new input back to what it just said instead of restarting, then
+    # cleared. Independent of was_interrupted: this fires even when there
+    # was no literal audio overlap (session afe71838, turn 4 -> 5).
+    low_confidence_continuation: bool = False
     # Captured once the prospect introduces themselves in response to
     # OPENING_GREETING (see runtime.py's "prospect_name" tool field) — kept
     # for the rest of the session so the agent can use it naturally later

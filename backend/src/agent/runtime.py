@@ -809,7 +809,7 @@ STATIC_SYSTEM_PROMPT: str = STATIC_ROLE_INTRO.format(
 # six per-turn notes, and conversation history. Everything else lives in
 # STATIC_ROLE_INTRO above.
 _DYNAMIC_SYSTEM_TEMPLATE = """The prospect is currently on the "{current_page}" page. Right now, where you are, it's {current_time}. Use this if asked the time, date, or day — don't say you don't know, and don't guess somewhere else.
-{interruption_note}{name_note}{company_note}{qualification_note}{walkthrough_note}{farewell_note}{pacing_note}
+{interruption_note}{continuation_note}{name_note}{company_note}{qualification_note}{walkthrough_note}{farewell_note}{pacing_note}
 Full conversation so far:
 {history}"""
 
@@ -825,6 +825,7 @@ def _build_system(session: SessionState) -> "str | list[dict]":
         current_page=session.current_page,
         current_time=_current_time_note(),
         interruption_note=INTERRUPTION_NOTE if session.was_interrupted else "",
+        continuation_note=_continuation_note(session),
         name_note=_name_note(session),
         company_note=_company_note(session),
         qualification_note=_qualification_note(session),
@@ -849,6 +850,38 @@ INTERRUPTION_NOTE = (
     "you can show them, set \"action\" (and \"lead_in\") exactly as you normally would. Recovering "
     "the conversation is not a reason to skip navigating.\n"
 )
+
+
+def _continuation_note(session: SessionState) -> str:
+    """Fires when the current turn was released with low confidence it was
+    the prospect's whole point AND arrived shortly after the agent's own
+    last reply (see low_confidence_continuation's docstring, set from
+    agent_processor.py). Independent of INTERRUPTION_NOTE/was_interrupted —
+    this covers the no-overlap case too (session afe71838, turn 4 -> 5,
+    where the prior reply had already fully finished before the next
+    fragment arrived).
+
+    Deliberately does not assert this IS a continuation — only that it
+    might be, leaving the actual judgment to the model. Session afe71838's
+    turns 1-2 were fast, complete, unrelated exchanges ("Yeah. Sure. Sure.
+    Go ahead."); forcing a tie-back on every recent turn regardless of
+    content would manufacture connections that aren't there.
+    """
+    if not session.low_confidence_continuation:
+        return ""
+    last_reply = next(
+        (h.text for h in reversed(session.history) if h.role == "agent"), None
+    )
+    if not last_reply:
+        return ""
+    return (
+        "\nWhat the prospect just said may still be building on the point from your own last "
+        f"reply, not a fresh, separate question — you just said: {last_reply!r}. If what they "
+        "just added continues that same point, say so explicitly and tie it back — reference "
+        "what you already covered, then extend it — rather than opening with a generic "
+        "acknowledgment and pivoting to something new. If it's genuinely unrelated, treat it as "
+        "its own topic as normal; don't force a connection that isn't there.\n"
+    )
 
 
 def _current_time_note() -> str:
@@ -1782,6 +1815,7 @@ def _finalize_turn(
     # Consumed for this turn's prompt already — clear so it doesn't leak
     # into a later, unrelated turn.
     session.was_interrupted = False
+    session.low_confidence_continuation = False
 
     prospect_name = result.pop("prospect_name", None)
     if prospect_name and not session.prospect_name:
