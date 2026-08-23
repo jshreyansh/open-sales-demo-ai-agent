@@ -2189,6 +2189,63 @@ body {
   .meet__mic-badge--listening { animation: none; }
 }
 
+/* Agent tile's status pill — icon plus a word, so it reads as plainly as
+   the mic badge above reads visually. Wider than a fixed circle since the
+   label's length varies (Listening/Thinking/Speaking), so it sizes to its
+   content instead of clipping. */
+.meet__status-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px 3px 7px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.42);
+  color: #cfd3d7;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.meet__status-badge--live {
+  color: #8ce0a8;
+  background: rgba(20, 70, 40, 0.6);
+  box-shadow: 0 0 0 1px rgba(140, 224, 168, 0.5);
+  animation: meet-badge-live 1.1s ease-in-out infinite;
+}
+
+.meet__status-badge--listening {
+  color: #7fd7a4;
+  background: rgba(16, 60, 36, 0.65);
+  box-shadow: 0 0 0 1px rgba(127, 215, 164, 0.45);
+  animation: meet-ear-listen 2s ease-in-out infinite;
+}
+
+/* Thinking gets its own, calmer color (amber, not green) — it isn't audio
+   getting through in either direction, so borrowing the listening/speaking
+   green would misleadingly suggest one of those is still true. */
+.meet__status-badge--thinking {
+  color: #e0c17f;
+  background: rgba(70, 56, 16, 0.6);
+  box-shadow: 0 0 0 1px rgba(224, 193, 127, 0.45);
+  animation: meet-status-thinking 1.4s ease-in-out infinite;
+}
+
+@keyframes meet-status-thinking {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meet__status-badge--live,
+  .meet__status-badge--listening,
+  .meet__status-badge--thinking { animation: none; }
+}
+
 /* Unread in-call messages. Sits on the chat control's top-right, the
    position everyone already looks for. */
 .meet__unread-dot {

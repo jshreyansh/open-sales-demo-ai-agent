@@ -30,10 +30,27 @@ export function useVoiceSession(
 
   const [isUserSpeaking, setIsUserSpeaking] = useState(false);
   const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
+  // True for the gap between the visitor finishing and the agent's own
+  // audio starting — turn commit + LLM generation + TTS enqueue, all the
+  // real work that happens with nothing audible yet. Derived entirely from
+  // events already received here, no backend signal needed: starts the
+  // instant the visitor stops, ends the instant the agent actually starts
+  // (or immediately if the visitor starts talking again first, since
+  // there's nothing left to "think about" once they've moved on).
+  const [isAgentThinking, setIsAgentThinking] = useState(false);
 
-  useRTVIClientEvent(RTVIEvent.UserStartedSpeaking, useCallback(() => setIsUserSpeaking(true), []));
-  useRTVIClientEvent(RTVIEvent.UserStoppedSpeaking, useCallback(() => setIsUserSpeaking(false), []));
-  useRTVIClientEvent(RTVIEvent.BotStartedSpeaking, useCallback(() => setIsAgentSpeaking(true), []));
+  useRTVIClientEvent(RTVIEvent.UserStartedSpeaking, useCallback(() => {
+    setIsUserSpeaking(true);
+    setIsAgentThinking(false);
+  }, []));
+  useRTVIClientEvent(RTVIEvent.UserStoppedSpeaking, useCallback(() => {
+    setIsUserSpeaking(false);
+    setIsAgentThinking(true);
+  }, []));
+  useRTVIClientEvent(RTVIEvent.BotStartedSpeaking, useCallback(() => {
+    setIsAgentSpeaking(true);
+    setIsAgentThinking(false);
+  }, []));
   useRTVIClientEvent(RTVIEvent.BotStoppedSpeaking, useCallback(() => setIsAgentSpeaking(false), []));
 
   /**
@@ -95,5 +112,6 @@ export function useVoiceSession(
     mute,
     isUserSpeaking,
     isAgentSpeaking,
+    isAgentThinking,
   };
 }
