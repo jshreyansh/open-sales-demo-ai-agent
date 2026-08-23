@@ -878,6 +878,23 @@ class AgentRuntimeProcessor(FrameProcessor):
         # change that caused this session's earlier _advance_after_turn
         # crash bug.
         self._pending_low_confidence_continuation = False
+        # Same shape as _pending_low_confidence_continuation directly above,
+        # same reason, plus one more: writing straight to
+        # self._telemetry.released_by at the release-decision call site (the
+        # previous approach) silently no-ops whenever self._telemetry happens
+        # to be None at that exact moment — which is routine, not rare. A
+        # prior turn's own `finally: self._telemetry_close()` can fire at any
+        # point while THIS utterance's fragments are still accumulating
+        # (turns overlap constantly here — interruptions, regenerated
+        # replies), clearing self._telemetry out from under an unrelated,
+        # still-forming turn. Confirmed live: visitor d3f3b101, turns 7/18/20
+        # all show released_by=None because of exactly this. Setting a
+        # plain attribute here and applying it AFTER _telemetry_open() has
+        # guaranteed a live record (see _handle_real_turn) works regardless
+        # of whether that record is the one continuously open since this
+        # utterance's own VAD-start, or a brand new one _handle_real_turn
+        # just opened because the old one was closed out from under it.
+        self._pending_released_by: Optional[str] = None
         # Text held back because the last segment judged INCOMPLETE — see
         # _maybe_handle_transcript. Concatenated onto the next segment's
         # text once one finally judges COMPLETE (or the watchdog below
@@ -1042,6 +1059,25 @@ class AgentRuntimeProcessor(FrameProcessor):
         # from here, so every new fragment pushes the reply back rather than
         # triggering one of its own.
         self._last_user_speech_ended_at: float = 0.0
+        # When the CURRENT accumulating utterance's first fragment's VAD
+        # start happened — durable across telemetry's own open/close cycle,
+        # same reasoning as _last_user_speech_ended_at above but for the
+        # other end. _telemetry_open()'s old behavior (mark t_user_speech_
+        # start as "now" whenever it happens to run) was correct only by
+        # coincidence: right when self._telemetry survives continuously
+        # from this utterance's first VAD-start through to commit, "now" at
+        # open-time IS the first-fragment start. It's wrong the moment an
+        # unrelated, overlapping turn's own finally-block closes telemetry
+        # first (turns overlap constantly here) — _telemetry_open() then
+        # reopens fresh at COMMIT time, backdating nothing, which produced
+        # negative user_speech_ms on visitor d3f3b101 turns 7/18/20 (the
+        # same overlap that broke released_by, but this corrupts the
+        # timing marks themselves, not just the label). First-write-wins
+        # within a burst (set on VAD-start only if None), reset once
+        # _handle_real_turn has consumed it into a telemetry record — see
+        # there. This is what _telemetry_open() reads instead of marking
+        # "now" directly.
+        self._current_utterance_started_at: Optional[float] = None
         # When the walkthrough latch was last observed set, so
         # WALKTHROUGH_LATCH_MAX_SECS can bound it. None whenever the tour
         # isn't paused.
@@ -1254,6 +1290,13 @@ class AgentRuntimeProcessor(FrameProcessor):
             return
 
         if isinstance(frame, VADUserStartedSpeakingFrame):
+            # First-fragment-of-this-burst start, durable regardless of what
+            # happens to self._telemetry later — see its declaration for why.
+            # Set BEFORE _telemetry_open() so a fresh record (first fragment
+            # of a new burst) reads its own true start, not a stale one from
+            # whatever burst just ended.
+            if self._current_utterance_started_at is None:
+                self._current_utterance_started_at = time.monotonic()
             # Telemetry clock for the turn that's forming. Opened here rather
             # than at commit so user_speech_ms covers the whole utterance, and
             # so t_user_speech_end (the reference point for every latency we
@@ -1494,8 +1537,7 @@ class AgentRuntimeProcessor(FrameProcessor):
             # FAST_TRACK_AFFIRMATIONS for why this specific carve-out. These
             # hand the floor BACK ("yeah", "okay"), so they answer at once
             # rather than sitting out the consolidation window below.
-            if self._telemetry is not None:
-                self._telemetry.released_by = "fast_track"
+            self._pending_released_by = "fast_track"
             logger.info(f"[{self._visitor_id}] fast-tracking short affirmation past INCOMPLETE: {combined!r}")
             self._pending_fragment_text = ""
             self._end_floor_hold()
@@ -1610,15 +1652,13 @@ class AgentRuntimeProcessor(FrameProcessor):
                             pending = f"{pending} {self._pending_fragment_text}".strip()
                             self._pending_fragment_text = ""
                             self._end_floor_hold()
-                            if self._telemetry is not None:
-                                self._telemetry.released_by = "deferred_interrupt_merged_with_fragment"
+                            self._pending_released_by = "deferred_interrupt_merged_with_fragment"
                             logger.info(
                                 f"[{self._visitor_id}] draining deferred interruption merged "
                                 f"with pending fragment: {pending!r}"
                             )
                         else:
-                            if self._telemetry is not None:
-                                self._telemetry.released_by = "deferred_interrupt_drain"
+                            self._pending_released_by = "deferred_interrupt_drain"
                             logger.info(
                                 f"[{self._visitor_id}] draining deferred interruption: {pending!r}"
                             )
@@ -1694,8 +1734,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                         pending = self._pending_fragment_text
                         self._pending_fragment_text = ""
                         self._end_floor_hold()
-                        if self._telemetry is not None:
-                            self._telemetry.released_by = "settle"
+                        self._pending_released_by = "settle"
                         logger.info(f"[{self._visitor_id}] settled — answering once: {pending!r}")
                         self._mark_continuation(low_confidence=False)  # clean settle — confident this was the whole point
                         await self._handle_real_turn(pending, FrameDirection.DOWNSTREAM)
@@ -1753,8 +1792,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                         pending_source = self._pending_interruption_source
                         self._pending_interruption_source = "voice"
                         pending = f"{older} {pending}".strip()
-                        if self._telemetry is not None:
-                            self._telemetry.released_by = "fragment_stall_merged_with_interrupt"
+                        self._pending_released_by = "fragment_stall_merged_with_interrupt"
                         logger.warning(
                             f"[{self._visitor_id}] pending fragment stalled, merged with deferred "
                             f"interruption, flushing: {pending!r}"
@@ -1764,8 +1802,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                             pending, FrameDirection.DOWNSTREAM, source=pending_source
                         )
                         continue
-                    if self._telemetry is not None:
-                        self._telemetry.released_by = "stall_backstop"
+                    self._pending_released_by = "stall_backstop"
                     logger.warning(f"[{self._visitor_id}] pending fragment stalled, flushing: {pending!r}")
                     self._mark_continuation(low_confidence=True)  # never got a COMPLETE verdict at all
                     await self._handle_real_turn(pending, FrameDirection.DOWNSTREAM)
@@ -1883,6 +1920,28 @@ class AgentRuntimeProcessor(FrameProcessor):
                 self._telemetry.t_user_speech_end = self._last_user_speech_ended_at
             self._telemetry.mark("t_turn_committed")
             self._telemetry.source = source
+        # Applied here — after _telemetry_open() above has guaranteed a live
+        # record exists (fresh or continued) — rather than at the release
+        # call site itself, because self._telemetry can legitimately be None
+        # at that point (a different, unrelated turn's own finally-block
+        # close can land while this utterance's fragments are still
+        # accumulating; turns overlap here). Reading late and applying once
+        # means it's correct regardless of which object self._telemetry
+        # turned out to be by the time this runs. Read-then-clear, same
+        # shape as _pending_low_confidence_continuation just above, so a
+        # forgotten call site fails safe (released_by stays None, same as
+        # today) instead of leaking into a later, unrelated turn.
+        pending_released_by, self._pending_released_by = self._pending_released_by, None
+        if pending_released_by and self._telemetry is not None:
+            self._telemetry.released_by = pending_released_by
+        # This burst's first-fragment start has now been consumed (by
+        # _telemetry_open() above, whichever time it ran) into whatever
+        # record is live for this turn — reset so the NEXT burst's own first
+        # VAD-start gets to set it fresh, same "the burst is over" moment
+        # _burst_fragments resets at above, just necessarily later than that
+        # reset: this can't clear until after _telemetry_open() has had its
+        # chance to read it.
+        self._current_utterance_started_at = None
         self._begin_spoken_tracking()
 
         try:
@@ -2148,23 +2207,42 @@ class AgentRuntimeProcessor(FrameProcessor):
     def _telemetry_open(self) -> None:
         """Starts a telemetry record if one isn't already running. Idempotent:
         VAD can fire several times inside one forming turn (a breath, a false
-        trigger) and only the first should start the clock."""
+        trigger) and only the first should start the clock.
+
+        Copied, not marked — same reasoning as t_user_speech_end's own copy
+        from _last_user_speech_ended_at in _handle_real_turn. Marking "now"
+        here was only ever correct when this call happens to be the actual
+        first VAD-start of the burst; it's called again, later, from inside
+        _handle_real_turn for every voice turn, and if an unrelated turn's
+        own close beat this burst to the punch, THIS call is the one that
+        opens the fresh record — "now" at that point is commit time, not
+        speech time. self._current_utterance_started_at is durable across
+        that close/reopen, so it's right either way."""
         if self._telemetry is None:
             self._turn_counter += 1
             self._telemetry = TurnTelemetry(
                 visitor_id=self._visitor_id, turn_id=self._turn_counter
             )
-            self._telemetry.mark("t_user_speech_start")
+            self._telemetry.t_user_speech_start = (
+                self._current_utterance_started_at
+                if self._current_utterance_started_at is not None
+                else time.monotonic()
+            )
 
-    def _telemetry_close(self, released_by: Optional[str] = None) -> None:
+    def _telemetry_close(self) -> None:
         """Emits the record and clears it. Safe to call when nothing is open —
         turns can end down several paths (normal, interrupted, disconnect) and
-        none of them should have to know whether measuring was in progress."""
+        none of them should have to know whether measuring was in progress.
+
+        released_by is set earlier, in _handle_real_turn, from
+        self._pending_released_by — not here. This used to take a
+        released_by argument as a fallback, but nothing ever called it with
+        one; the real fix for released_by ending up unset was applying it
+        after _telemetry_open() guarantees a live record, not adding a second
+        way to set the same field at close time."""
         tel = self._telemetry
         if tel is None:
             return
-        if released_by and tel.released_by is None:
-            tel.released_by = released_by
         tel.interrupted = self._interrupted_this_turn
         tel.fragments = self._burst_fragments
         tel.consecutive_auto_beats = self._consecutive_auto_beats
