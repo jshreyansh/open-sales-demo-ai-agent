@@ -29,6 +29,7 @@ from pipecat.frames.frames import (
     VADUserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.services.cartesia.tts import CartesiaEmotion, CartesiaTTSService
 
 from ..agent.runtime import (
     CUTOFF_MARKER,
@@ -243,7 +244,16 @@ BACKCHANNEL_MIN_LEAD_SECS = 1.2
 # floor, only as evidence it's still there. Kept separate from THINKING_FILLERS
 # / FLOOR_FILLERS because those bridge to an answer that's already coming,
 # whereas these bridge to "keep going, I'm with you."
-BACKCHANNELS = ["Mm-hm.", "Right.", "Mm.", "Sure."]
+#
+# No bare single-syllable vocalization ("Mm.") — a real prospect complaint,
+# confirmed against Cartesia's own docs: emotional/prosodic inference is
+# driven by transcript context, and a one-syllable hum in total isolation
+# gives it almost nothing to anchor tone to, so rendering is inconsistent
+# (sometimes reading as flat, sometimes as an odd, exaggerated whine).
+# Replaced with "Got it." — same brevity, actual word, same reliability
+# problem THINKING_FILLERS' better entries already avoid by not being bare
+# vocalizations either. See EMOTION_TAG below for the other half of the fix.
+BACKCHANNELS = ["Mm-hm.", "Right.", "Sure.", "Got it."]
 
 # Spoken when the walkthrough hits MAX_CONSECUTIVE_AUTO_BEATS. Each is a real
 # question handing back a real choice — "carry on, or go somewhere else" —
@@ -688,21 +698,55 @@ IDLE_CHECKIN_MESSAGES = {
 # Elongation is kept to three letters. Cartesia renders "Hmmm" as a sound;
 # six or more risks being spelled out letter by letter, which would be worse
 # than no filler at all. NOT yet confirmed by ear — worth one listen.
+#
+# "Mmm —" is gone (was in FLOOR_FILLERS) — a real prospect complaint, twice,
+# about specifically that word's tone (described as reading as pained/
+# whiny rather than neutral). This matches Cartesia's own guidance: prosody
+# is inferred from transcript context, and an isolated one-syllable hum has
+# almost none, so rendering is inconsistent in a way a slightly longer
+# elongation ("Hmmm", "Ummm") apparently isn't — those weren't the
+# complaint. The remaining hesitations are kept (not replaced with more
+# real words like "Right —") on purpose: they assert no interpretation of
+# what was just said, so — unlike a real word — they can't be wrong about
+# it (see the block above). What actually fixes the acoustic side is
+# EMOTION_TAG below, applied to every filler and backchannel; the wording
+# change here only removes the one word actually named as sounding off.
 THINKING_FILLERS = [
     "Great question —",
-    "Hmmm —",
     "Good question —",
+    "That's a fair question —",
+    "Hmmm —",
     "Ummm, let me think —",
     "Hmmm, let's see —",
 ]
 FLOOR_FILLERS = [
     "Hmmm —",
     "Ummm —",
-    "Mmm —",
     "Right —",
     "Okay —",
     "Got it —",
+    "Alright —",
 ]
+
+# Applied to every filler/backchannel utterance — see the emotion-control
+# investigation this fixes: none of these short, out-of-context words had
+# any explicit emotional steering before (CartesiaTTSService in bot.py only
+# ever set `speed`), so Cartesia was free to infer tone from nothing, which
+# is exactly the failure mode its own docs describe as unreliable. "neutral"
+# specifically, not something warmer like "content": the goal here is
+# removing an accidental wrong emotion, not adding a deliberate one — see
+# runtime.py's per-reply tone proposal for where a deliberate one belongs.
+_CALM_FILLER_EMOTION_TAG = CartesiaTTSService.EMOTION_TAG(CartesiaEmotion.NEUTRAL)
+
+# Minimum gap between two short bridging utterances (a backchannel, then a
+# filler, or either order) — both draw from the same small, mostly-
+# hesitation vocabulary, so two landing close together reads as stammering
+# rather than as two separate, deliberate acknowledgments. Confirmed live:
+# a real call had a backchannel fire, then a filler fire again moments
+# later for the very next turn. Skipping the second one here is safe in a
+# way skipping ALWAYS would not be (see the "always bridge" note above) —
+# the room isn't silent, something audible just happened a moment ago.
+FILLER_BACKCHANNEL_COOLDOWN_SECS = 2.5
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
@@ -935,6 +979,11 @@ class AgentRuntimeProcessor(FrameProcessor):
         self._pending_fragment_watch_task: Optional[asyncio.Task] = None
         self._bot_speaking = False
         self._last_filler = None
+        # Shared between fillers and backchannels — see
+        # FILLER_BACKCHANNEL_COOLDOWN_SECS. Durable across both mechanisms
+        # on purpose: the stacking risk is "two short bridging sounds close
+        # together," regardless of which kind either one is.
+        self._last_short_utterance_at: float = 0.0
         self._greeted = False
         self._audio_out_sample_rate = 24000  # StartFrame's own default; overwritten once it arrives
         # Mirrors the backend's current hand-raise state (see server.py's
@@ -1776,8 +1825,19 @@ class AgentRuntimeProcessor(FrameProcessor):
                         not self._fragment_backchannel_sent
                         and floor_held >= BACKCHANNEL_MIN_FLOOR_HOLD_SECS
                         and lead >= BACKCHANNEL_MIN_LEAD_SECS
+                        # See FILLER_BACKCHANNEL_COOLDOWN_SECS — if a filler
+                        # just fired (e.g. for a fast-tracked turn right
+                        # before this fragment started stalling), don't stack
+                        # a second short bridging sound on top of it.
+                        # Deliberately does NOT mark _fragment_backchannel_sent
+                        # when skipped this way — this hold may still be
+                        # going once the cooldown clears, and it's still
+                        # worth one nod then, just not right now.
+                        and time.monotonic() - self._last_short_utterance_at
+                        >= FILLER_BACKCHANNEL_COOLDOWN_SECS
                     ):
                         self._fragment_backchannel_sent = True
+                        self._last_short_utterance_at = time.monotonic()
                         if self._telemetry is not None:
                             self._telemetry.backchannel_count += 1
                         backchannel = self._pick_backchannel()
@@ -1785,7 +1845,9 @@ class AgentRuntimeProcessor(FrameProcessor):
                             f"[{self._visitor_id}] floor held {floor_held:.1f}s (lead {lead:.1f}s) "
                             f"— backchanneling {backchannel!r}"
                         )
-                        await self._speak_without_activity_bump(backchannel)
+                        await self._speak_without_activity_bump(
+                            f"{_CALM_FILLER_EMOTION_TAG} {backchannel}"
+                        )
                         continue
                     if held_for < self._stall_backstop_grace():
                         continue
@@ -1962,9 +2024,6 @@ class AgentRuntimeProcessor(FrameProcessor):
         self._begin_spoken_tracking()
 
         try:
-            # Rationed: at most one filler, then a turn without. Two or
-            # three in a row is what turns "thinking" into a stammer. The
-            # backchannel path emits sounds too, so unrationed they stack.
             if self._paused:
                 # Paused means the visitor holds the floor. Anything picked up
                 # here is them talking to someone else in the room, or thinking
@@ -1972,16 +2031,21 @@ class AgentRuntimeProcessor(FrameProcessor):
                 # they pressed the button to stop.
                 logger.info(f"[{self._visitor_id}] dropping turn while paused: {text[:60]!r}")
                 return
-            # Always bridge. An earlier version rationed these — one turn on,
-            # one turn off — to stop her sounding repetitive, and measurement
-            # showed exactly what that bought: on session 4c23f875 the turns
-            # WITH a filler reached audio in 1.2-1.5s and the turns without it
-            # sat in 3.5-4.3s of complete silence, which reads as the thing
-            # having crashed. Repetition was the wrong problem to solve by
-            # subtraction; it is solved above, by pools that actually differ
-            # from each other.
-            filler = self._pick_filler(text)
-            await self._speak(filler, direction)
+            # Always bridge, EXCEPT when a backchannel or another filler just
+            # fired — see FILLER_BACKCHANNEL_COOLDOWN_SECS. An earlier version
+            # rationed these outright (one turn on, one off) to stop her
+            # sounding repetitive, and measurement showed exactly what that
+            # cost: on session 4c23f875 the turns WITHOUT a filler sat in
+            # 3.5-4.3s of complete silence, reading as the thing having
+            # crashed. So this stays on by default for every turn. What's
+            # actually gated now is narrower and safe by construction: skip
+            # ONLY when something audible just happened a moment ago, which
+            # is the one case where two short bridging sounds back to back
+            # read as stammering rather than silence reading as a crash.
+            if time.monotonic() - self._last_short_utterance_at >= FILLER_BACKCHANNEL_COOLDOWN_SECS:
+                filler = self._pick_filler(text)
+                self._last_short_utterance_at = time.monotonic()
+                await self._speak(f"{_CALM_FILLER_EMOTION_TAG} {filler}", direction)
 
             try:
                 if self._telemetry is not None:
