@@ -2817,7 +2817,34 @@ async def _stream_with_claude(message: str, session: SessionState, user_content:
     # exactly with the authoritative text -- see the module note above on
     # why a mismatch here means "don't trust it," not "patch the
     # difference."
-    reply_fully_streamed = reply_extractor.closed and reply_extractor.value == result.get("reply")
+    authoritative_reply = result.get("reply") or ""
+    reply_fully_streamed = reply_extractor.closed and reply_extractor.value == authoritative_reply
+    if not reply_fully_streamed:
+        # Diagnostic only, logged here specifically because this is the one
+        # place both the fast decoder's value and the authoritative parse
+        # are simultaneously in scope -- the caller (agent_processor.py)
+        # only ever sees the boolean and can't tell what actually diverged.
+        # Two genuinely different failure shapes, told apart explicitly
+        # rather than left to guesswork from one ambiguous log line:
+        #   truncated  -- the decoder never saw a closing quote at all, so
+        #                  whatever it has is a raw prefix of the real reply
+        #   mismatched -- it DID close, but the decoded text isn't what the
+        #                  authoritative parse says -- a real decoding bug,
+        #                  not just "didn't finish in time"
+        decoded = reply_extractor.value
+        common_prefix_len = 0
+        for a, b in zip(decoded, authoritative_reply):
+            if a != b:
+                break
+            common_prefix_len += 1
+        logger.warning(
+            "reply stream mismatch for visitor "
+            f"{session.visitor_id!r}: closed={reply_extractor.closed} "
+            f"decoded_len={len(decoded)} authoritative_len={len(authoritative_reply)} "
+            f"common_prefix_len={common_prefix_len} "
+            f"decoded_tail={decoded[max(0, common_prefix_len - 20):common_prefix_len + 40]!r} "
+            f"authoritative_tail={authoritative_reply[max(0, common_prefix_len - 20):common_prefix_len + 40]!r}"
+        )
     yield ("_reply_fully_streamed", reply_fully_streamed)
     yield ("result", result)
 

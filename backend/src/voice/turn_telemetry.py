@@ -101,6 +101,19 @@ class TurnTelemetry:
     fragmentation_events: int = 0
     # What the adaptive window actually resolved to for this turn.
     commit_window_ms: Optional[int] = None
+    # None: the full reply was spoken. "interrupted": a real barge-in (or,
+    # for an auto-continue beat, a fresher stash) legitimately cut it off —
+    # not a bug, just conversation. "stream_mismatch": the fast incremental
+    # decoder's text disagreed with the authoritative parse partway through
+    # generation, so whatever had already been spoken live from the
+    # incremental stream just stops — nothing left is spoken, since a fresh
+    # independent reply could contradict what was already said. This is the
+    # one that's actually worth investigating; "interrupted" almost always
+    # isn't. Before this field existed, both cases shared one unstructured
+    # log line with no way to tell them apart after the fact — confirmed a
+    # real call hit "stream_mismatch" 12 times in nine minutes with nothing
+    # in telemetry showing it.
+    reply_cutoff_reason: Optional[str] = None
 
     _emitted: bool = field(default=False, repr=False)
 

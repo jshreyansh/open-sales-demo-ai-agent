@@ -2749,8 +2749,23 @@ class AgentRuntimeProcessor(FrameProcessor):
             return None, False
 
         if stopped_speaking_early or (any_speech_started and not reply_fully_spoken_live):
+            # Two different things used to share one unstructured log line
+            # with no way to tell them apart afterward. "interrupted" is a
+            # real barge-in (or a fresher stash superseding an auto-continue
+            # beat) — normal conversation, not a bug. The other case —
+            # speech started, streaming never confirmed it matched the
+            # authoritative reply, and nothing cut it off — means the fast
+            # incremental decoder disagreed with the real parse partway
+            # through, so whatever was already spoken just stops with
+            # nothing more said. That one is the actual bug worth chasing;
+            # see _stream_with_claude in runtime.py for the diagnostic log
+            # with the actual diverging text, logged where both values are
+            # already in scope.
+            cutoff_reason = "interrupted" if stopped_speaking_early else "stream_mismatch"
+            if self._telemetry is not None:
+                self._telemetry.reply_cutoff_reason = cutoff_reason
             logger.warning(
-                f"[{self._visitor_id}] streaming turn spoke something before falling back — "
+                f"[{self._visitor_id}] streaming turn cut short ({cutoff_reason}) — "
                 "not re-speaking the independently-regenerated fallback reply"
             )
             return result, True
