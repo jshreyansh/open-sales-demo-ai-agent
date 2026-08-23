@@ -1617,6 +1617,8 @@ class AgentRuntimeProcessor(FrameProcessor):
                                 f"with pending fragment: {pending!r}"
                             )
                         else:
+                            if self._telemetry is not None:
+                                self._telemetry.released_by = "deferred_interrupt_drain"
                             logger.info(
                                 f"[{self._visitor_id}] draining deferred interruption: {pending!r}"
                             )
@@ -2113,11 +2115,10 @@ class AgentRuntimeProcessor(FrameProcessor):
 
         Sets the pending flag _handle_real_turn reads at its own start.
         Deliberately explicit at every call site rather than read from
-        self._telemetry.released_by: that field is left at its default None
-        on the plain interruption-drain path and the chat-idle path (found
-        during exploration — released_by is genuinely unset there, not just
-        an unlikely value), which would have silently never fired on
-        exactly the release shape that motivated this fix.
+        self._telemetry.released_by: telemetry is a reporting concern (and
+        is opened for voice turns only — chat never has a record to read in
+        the first place), while this flag has to be correct on every path
+        regardless of whether telemetry happens to be tracking it.
         """
         recent = (
             time.monotonic() - self._last_real_reply_finished_at

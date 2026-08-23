@@ -16,6 +16,7 @@ noticeable.
 """
 
 import asyncio
+import json
 import os
 import random
 
@@ -34,6 +35,7 @@ load_dotenv()
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.audio.vad_processor import VADProcessor
@@ -87,6 +89,49 @@ transport_params = {
         serializer=ProtobufFrameSerializer(),
     ),
 }
+
+
+def log_latency_breakdown(visitor_id: str, breakdown) -> None:
+    """Logs UserBotLatencyObserver's on_latency_breakdown event. Module-level
+    (not a closure in run_bot) so it's independently testable without
+    standing up a pipeline. Pipecat's event-handler dispatch already runs
+    this as its own asyncio task rather than inline in the frame path (see
+    BaseObject._call_event_handler) — still kept to a single json.dumps and
+    one logger.info call so it stays negligible either way."""
+    logger.info(
+        "PIPELINE_LATENCY "
+        + json.dumps(
+            {
+                "visitor_id": visitor_id,
+                "user_turn_secs": breakdown.user_turn_secs,
+                "ttfb": [t.model_dump() for t in breakdown.ttfb],
+                "text_aggregation": (
+                    breakdown.text_aggregation.model_dump()
+                    if breakdown.text_aggregation
+                    else None
+                ),
+                "function_calls": [f.model_dump() for f in breakdown.function_calls],
+            },
+            separators=(",", ":"),
+            default=str,
+        )
+    )
+
+
+def log_first_bot_speech_latency(visitor_id: str, latency_seconds: float) -> None:
+    logger.info(
+        f"PIPELINE_FIRST_SPEECH_LATENCY visitor_id={visitor_id} "
+        f"latency_s={latency_seconds:.3f}"
+    )
+
+
+def log_pipeline_turn_ended(
+    visitor_id: str, turn_count: int, duration: float, was_interrupted: bool
+) -> None:
+    logger.info(
+        f"PIPELINE_TURN_ENDED visitor_id={visitor_id} turn={turn_count} "
+        f"duration_s={duration:.3f} interrupted={was_interrupted}"
+    )
 
 
 async def _save_call_summary(visitor_id: str) -> None:
@@ -451,11 +496,41 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         ]
     )
 
+    # Pipeline-level latency, independent of our own turn-taking telemetry
+    # (turn_telemetry.py) — that module knows WHY our logic released a turn;
+    # this observer knows the raw wall-clock cost of each service in between
+    # (STT/LLM/TTS TTFB, text aggregation) from MetricsFrames the pipeline
+    # already emits (enable_metrics=True below). Kept as two separate log
+    # streams rather than merged into one record: correlating by visitor_id
+    # and rough timestamp is enough to reconstruct a call, and forcing a
+    # shared turn id between a Pipecat-native observer and our own turn
+    # counter would require threading state neither side otherwise needs.
+    latency_observer = UserBotLatencyObserver()
+    latency_observer.event_handler("on_latency_breakdown")(
+        lambda _observer, breakdown: log_latency_breakdown(visitor_id, breakdown)
+    )
+    latency_observer.event_handler("on_first_bot_speech_latency")(
+        lambda _observer, latency_seconds: log_first_bot_speech_latency(visitor_id, latency_seconds)
+    )
+
     worker = PipelineWorker(
         pipeline,
         params=PipelineParams(enable_metrics=True),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
+        observers=[latency_observer],
     )
+
+    # TurnTrackingObserver is already created internally (enable_turn_tracking
+    # defaults to True) but nothing was consuming it — this just attaches
+    # logging to pipeline-native turn boundaries, a cross-check independent
+    # of our own settle/stall-backstop/fast-track release logic.
+    if worker.turn_tracking_observer is not None:
+        worker.turn_tracking_observer.event_handler("on_turn_ended")(
+            lambda _observer, turn_count, duration, was_interrupted: log_pipeline_turn_ended(
+                visitor_id, turn_count, duration, was_interrupted
+            )
+        )
+
     idle_watch_task = asyncio.create_task(_watch_idle(agent, worker, visitor_id))
 
     @transport.event_handler("on_client_connected")

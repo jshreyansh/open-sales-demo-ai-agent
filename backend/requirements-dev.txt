@@ -1,0 +1,5 @@
+# Test-only dependencies. Not installed in production (deploy.yml only
+# installs requirements.txt) — keep it that way, a test runner has no
+# business on the production box.
+-r requirements.txt
+pytest>=8.0.0
