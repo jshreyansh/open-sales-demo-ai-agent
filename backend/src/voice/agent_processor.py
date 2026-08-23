@@ -183,7 +183,24 @@ PENDING_FRAGMENT_WATCHDOG_INTERVAL_SECS = 0.25
 # so far. Comfortably above Silero VAD's own stop_secs (1.0) and Smart
 # Turn's own internal silence safety net (3s, see SmartTurnParams.stop_secs)
 # so it only ever kicks in as a true last resort, not a competing timer.
+#
+# This is the value for an unfragmented turn (_burst_fragments <= 1) —
+# see _stall_backstop_grace() for the adaptive case. Kept as its own named
+# constant, unchanged, rather than folded into the method, because most
+# backstop firings ARE single-fragment (Smart Turn simply never resolving
+# to COMPLETE, unrelated to fragment count — see the production-readiness
+# review, 2026-08-23: 62% of firings never even reach a multi-fragment
+# state) and that majority case must measure identically to before this
+# constant had any adaptive behavior layered on top of it.
 PENDING_FRAGMENT_STALL_GRACE_SECS = 4.0
+# Additional grace per fragment beyond the first, once a turn has already
+# shown it's still being built (_burst_fragments > 1) — turn-local
+# evidence only, never session history (see _stall_backstop_grace).
+PENDING_FRAGMENT_STALL_GRACE_STEP_SECS = 1.0
+# Hard ceiling regardless of fragment count — no amount of fragmentation
+# earns unlimited patience. Silence this long is a bad experience even for
+# a speaker who's clearly still forming a thought.
+PENDING_FRAGMENT_STALL_GRACE_MAX_SECS = 7.0
 
 # How long a fragment may sit held in silence before the agent audibly
 # acknowledges it's still listening. Measured on a real demo: 8 of 20 turns
@@ -232,9 +249,9 @@ BACKCHANNELS = ["Mm-hm.", "Right.", "Mm.", "Sure."]
 # question handing back a real choice — "carry on, or go somewhere else" —
 # rather than the empty "does that make sense?" that only invites "yes".
 FLOOR_RETURN_PROMPTS = [
-    "Want me to keep going, or is there something you'd rather jump to?",
-    "I can carry on from here — or is there somewhere more useful to go?",
-    "Should I keep moving through this, or would you rather steer for a bit?",
+    "Want me to keep going, or do you want to pause on anything here?",
+    "Should I continue, or is there anything you want to dig into first?",
+    "Want me to carry on, or is there something here you'd like to explore a bit more?",
 ]
 
 # How long to wait, after a barge-in cut the agent off, for the transcript
@@ -1770,7 +1787,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                         )
                         await self._speak_without_activity_bump(backchannel)
                         continue
-                    if held_for < PENDING_FRAGMENT_STALL_GRACE_SECS:
+                    if held_for < self._stall_backstop_grace():
                         continue
                     pending = self._pending_fragment_text
                     self._pending_fragment_text = ""
@@ -2367,6 +2384,43 @@ class AgentRuntimeProcessor(FrameProcessor):
             CONSOLIDATION_SETTLE_MAX_SECS,
         )
         return max(stepped, interpolated)
+
+    def _stall_backstop_grace(self) -> float:
+        """How long a stalled fragment must sit silent before the pure
+        timeout safety net (_watch_pending_fragment_stall's stall_backstop
+        and fragment_stall_merged_with_interrupt branches) gives up on
+        Smart Turn ever calling it COMPLETE and flushes it.
+
+        Adaptive by THIS turn's own _burst_fragments only — never session
+        history (see _fragmentation_protection, which is the session-level
+        mechanism, scoped to the separate and currently-dormant FAST_COMMIT
+        path; deliberately not reused here, per the production-readiness
+        review's explicit instruction not to mix the two). A turn that has
+        already produced multiple fragments before the backstop even starts
+        counting is real, turn-local evidence of a still-forming thought;
+        a single fragment sitting past the base grace is not.
+
+        _burst_fragments <= 1 returns EXACTLY PENDING_FRAGMENT_STALL_GRACE_SECS
+        — today's unchanged flat value. This matters because most backstop
+        firings never reach a multi-fragment state at all: the review found
+        62% of firings are Smart Turn simply never resolving to COMPLETE,
+        unrelated to fragment count, and that majority must not regress by
+        so much as a millisecond. This method only ever helps the other
+        38% — a turn that's already shown fragments and is still building.
+
+        Deliberately NOT touching Smart Turn's own calibration or
+        _settle_window() — the 62% majority is a classifier-threshold
+        question that affects every turn in the system, a structurally
+        different and riskier fix than adjusting how long ONE specific
+        safety-net timer waits.
+        """
+        if self._burst_fragments <= 1:
+            return PENDING_FRAGMENT_STALL_GRACE_SECS
+        extra = PENDING_FRAGMENT_STALL_GRACE_STEP_SECS * (self._burst_fragments - 1)
+        return min(
+            PENDING_FRAGMENT_STALL_GRACE_SECS + extra,
+            PENDING_FRAGMENT_STALL_GRACE_MAX_SECS,
+        )
 
     def _begin_spoken_tracking(self) -> None:
         """Resets the spoken-prefix accumulator at the start of every turn —
