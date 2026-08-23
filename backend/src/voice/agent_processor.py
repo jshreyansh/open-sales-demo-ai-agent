@@ -1971,15 +1971,30 @@ class AgentRuntimeProcessor(FrameProcessor):
                     self._telemetry.mark("t_llm_request")
                 result, already_spoken = await self._consume_turn_stream(run_turn_stream(text, session), direction)
             except Exception:
+                # Logged HERE, inside the except block, so sys.exc_info()
+                # is still live and the real traceback lands in the log —
+                # logging this after the except block exits (the previous
+                # code) finds no exception in scope and writes "NoneType:
+                # None" instead, every time, regardless of what actually
+                # went wrong.
+                logger.exception(f"run_turn_stream raised for visitor {self._visitor_id}")
                 result, already_spoken = None, False
 
             if result is None:
-                # Real turn, so unlike auto-continue this must always
-                # say something — either the try above raised, or
-                # run_turn_stream() somehow ended without a terminal
-                # event (shouldn't happen, but never leave a real
-                # prospect met with silence over it).
-                logger.exception(f"run_turn_stream failed for visitor {self._visitor_id}")
+                # Real turn, so unlike auto-continue this must always say
+                # something. Reached with NO exception whenever the try
+                # above didn't raise but run_turn_stream() still ended
+                # without ever yielding a terminal event (shouldn't happen,
+                # but never leave a real prospect met with silence over
+                # it) — logger.error, not .exception: there is no exception
+                # here, and .exception would just print "NoneType: None"
+                # again, the same bug this whole change exists to remove,
+                # only for a different one of the two cases that used to
+                # share this one log line.
+                logger.error(
+                    f"run_turn_stream for visitor {self._visitor_id} ended with no "
+                    "result and no exception"
+                )
                 result = {"reply": "Sorry, I lost my train of thought — could you say that again?"}
                 already_spoken = False
 
