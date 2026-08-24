@@ -86,7 +86,9 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
       <div className="lp__glow" aria-hidden="true" />
 
       <header className="lp__nav">
-        <img src={swishxLightLogo} alt="SwishX" className="lp__logo" />
+        <a href="https://www.swishx.com/" target="_blank" rel="noopener noreferrer" aria-label="SwishX — swishx.com">
+          <img src={swishxLightLogo} alt="SwishX" className="lp__logo" />
+        </a>
         {/* The two other ways into the product. Demoted to nav on purpose:
             they are real destinations, but this page has one job. */}
         <nav className="lp__nav-links">
@@ -136,7 +138,13 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
               instinct on seeing "live demo" is to assume it means "book a
               slot," so the payoff line has to say otherwise immediately. */}
           <h1 className="lp__title">
-            <span className="lp__title-soft">Experience SwishX Live,</span>
+            <span className="lp__title-soft">
+              Experience{" "}
+              <a href="https://www.swishx.com/" target="_blank" rel="noopener noreferrer" className="lp__title-link">
+                SwishX
+              </a>{" "}
+              Live,
+            </span>
             <br />
             Right Now.
           </h1>
@@ -176,7 +184,13 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
             live and interactive rather than a static image. */}
         <div className="lp__widget-section">
           <div className="lp__widget-card">
-            <swishx-widget max-width="1180" />
+            {/* 1475, not 1180: the widget's own composition logic never
+                upscales past 1.25x its 1180px logical design width (see
+                MAX_SCALE in swishx-widget.js) — 1180 was capping it at
+                exactly native size with zero room to grow on a big
+                monitor. 1475 is the highest value that actually changes
+                anything; anything above it hits the same internal ceiling. */}
+            <swishx-widget max-width="1475" />
           </div>
         </div>
       </main>

@@ -7811,6 +7811,11 @@ body {
 
 /* The dark-surface SwishXLockup (white wordmark) doesn't work here — this
    page's own light-themed logo file, dark-on-transparent. */
+.lp__nav > a:first-child {
+  display: inline-block;
+  line-height: 0;
+}
+
 .lp__logo {
   height: 24px;
   width: auto;
@@ -7895,9 +7900,11 @@ body {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  /* Wider than before specifically so "The demo starts" clears onto one
-     line at the new, smaller title size — see .lp__title. */
-  max-width: 760px;
+  /* Wide enough that "Experience SwishX Live," clears onto one line at
+     .lp__title's own max font size on a large monitor — 760px was tuned
+     for the shorter old copy and started wrapping to a 3rd line once the
+     heading text got longer. */
+  max-width: 960px;
   width: 100%;
   margin: 0 auto;
   /* Kept deliberately short — everything about this hero (badge row,
@@ -8073,12 +8080,10 @@ body {
 
 .lp__title {
   margin: 0;
-  /* Sized (together with .lp__hero's wider 760px max-width) so "The demo
-     starts" clears in one line and "when you do." on the next — exactly
-     two lines, not three. The original 76px max forced a third wrap; a
-     first pass down to 52px overcorrected and read as too small for a
-     hero headline — this splits the difference. */
-  font-size: clamp(36px, 4.8vw, 62px);
+  /* Sized (together with .lp__hero's 960px max-width) so "Experience
+     SwishX Live," clears in one line and "Right Now." on the next —
+     exactly two lines, not three, even on a large monitor. */
+  font-size: clamp(36px, 5vw, 66px);
   line-height: 1.08;
   font-weight: 600;
   /* Tight tracking is what separates a display setting of Inter from a
@@ -8092,6 +8097,77 @@ body {
 .lp__title-soft {
   font-weight: 300;
   color: var(--lp-muted);
+}
+
+/* A real highlighter mark, not a text-selection-style rectangle: an
+   irregular ink-stroke SVG (uneven top/bottom edge, tapered ends) sitting
+   behind the lower half of the letters, rotated a degree off-axis and
+   blended with mix-blend-mode so it reads as translucent ink laid over
+   paper rather than a flat color chip. ::before instead of a background-
+   image on the link itself so it can freely overflow the text's own box
+   (highlighter strokes never end exactly at the letter edges) without
+   fighting the anchor's own layout. */
+.lp__title-link {
+  position: relative;
+  z-index: 0;
+  display: inline-block;
+  color: var(--lp-text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.lp__title-link::before {
+  content: "";
+  position: absolute;
+  left: -10%;
+  right: -9%;
+  bottom: -8%;
+  height: 62%;
+  z-index: -1;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 90' preserveAspectRatio='none'%3E%3Cpath d='M7,50 C46,30 118,61 205,45 C285,30 345,58 393,40 C398,55 397,74 389,77 C303,89 132,84 45,75 C17,72 3,64 7,50 Z' fill='%23ff8a3d'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  mix-blend-mode: multiply;
+  opacity: 0.6;
+  transform: rotate(-1.4deg);
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+/* A second, shorter stroke offset slightly up-left so the ink reads as two
+   overlapping passes of a marker rather than one uniform sticker. */
+.lp__title-link::after {
+  content: "";
+  position: absolute;
+  left: -6%;
+  right: 28%;
+  bottom: 2%;
+  height: 40%;
+  z-index: -1;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 90' preserveAspectRatio='none'%3E%3Cpath d='M7,50 C46,30 118,61 205,45 C285,30 345,58 393,40 C398,55 397,74 389,77 C303,89 132,84 45,75 C17,72 3,64 7,50 Z' fill='%23ff8a3d'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  mix-blend-mode: multiply;
+  opacity: 0.45;
+  transform: rotate(1.1deg);
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.lp__title-link:hover::before {
+  transform: rotate(-0.6deg) scaleX(1.03);
+  opacity: 0.72;
+}
+
+.lp__title-link:hover::after {
+  transform: rotate(0.4deg) scaleX(1.03);
+  opacity: 0.55;
+}
+
+.lp__title-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
 }
 
 .lp__sub {
@@ -8130,7 +8206,12 @@ body {
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 1280px;
+  /* 1560, not just "as wide as possible": the widget's own MAX_SCALE (1.25x
+     its 1180px logical design width, see swishx-widget.js) caps it at
+     ~1475px rendered regardless of how much room this container gives it —
+     this leaves a bit of breathing room around that ceiling rather than
+     an oversized empty container on very wide monitors. */
+  max-width: 1560px;
   margin: 0 auto;
   padding: 0 clamp(20px, 5vw, 64px) clamp(48px, 8vh, 96px);
   display: flex;
@@ -8323,6 +8404,15 @@ body {
   text-underline-offset: 3px;
 }
 
+/* The "known" step's own name/company display — centered to match the rest
+   of this page's centered composition, unlike the real input fields (email,
+   new-visitor name/company) which stay left-aligned like any typed field.
+   :has() scopes this to just the known-identity variant of .prejoin__name,
+   not the "new" step's actual <input> fields sharing the same class. */
+.lp .prejoin__name:has(.prejoin__known-identity) {
+  align-items: center;
+}
+
 .lp .prejoin__known-identity {
   padding: 13px 16px;
   border-radius: 12px;
@@ -8330,11 +8420,9 @@ body {
   background: var(--lp-raise);
   font-size: 15px;
   /* The shared base rule (.prejoin__known-identity, for the dark meeting
-     skin) sets white text, centered — invisible on this page's white
-     background, and centered instead of matching every other left-aligned
-     field in this form. Both needed an explicit override here. */
+     skin) sets white text — invisible on this page's white background. */
   color: var(--lp-text);
-  text-align: left;
+  text-align: center;
 }
 
 .lp .prejoin__field-error {
