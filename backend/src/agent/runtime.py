@@ -2166,6 +2166,60 @@ def _finalize_turn(
             f"model already acted this turn (action={action_method!r}) — not overriding it"
         )
 
+    # LATCH RELEASE ON PROVEN PROGRESS — an ordinary reply ending in "?"
+    # (any question at all, not just the auto-continue cap's own "should I
+    # continue?") sets walkthrough_awaiting_answer via FLOOR HANDOVER below,
+    # but the only things wired to release that latch are a bare
+    # continuation phrase or the cap's own specific confirmation (see
+    # agent_processor.py's _is_permission_to_continue and its `asked` gate).
+    # A short affirmative answering an ORDINARY question satisfies neither,
+    # so the latch can get stuck even after the model's OWN current turn
+    # proves the pause is over. Confirmed live TWICE, two different ways:
+    #   - call 535e606c, ~10:22 UTC: a narration reply ended on "Does that
+    #     map to where you're at?" (step 8), the prospect answered "Yes.",
+    #     and the very next turn fired a genuinely new step-generate
+    #     sub-action — objective proof forward progress resumed — while the
+    #     latch stayed stuck for 16s until the prospect asked why nothing
+    #     was happening.
+    #   - call 66da2724, ~02:47-02:48 UTC: same shape at the MACRO-step
+    #     level instead of a sub-action — a reply about MagicAvatar ended
+    #     on a question, "keep going" was confirmed, but the very next real
+    #     turn moved the tour from step 10 to step 11 (a genuine advance)
+    #     while the latch remained stuck until the 45s watchdog force-
+    #     cleared it.
+    #
+    # The model's own current-turn result is a fact, not a guess about
+    # wording, so it's the more reliable signal to trust: either this turn
+    # fires a step 8/9 sub-action that hasn't already fired this run, or it
+    # advances session.walkthrough_step to a genuinely later value (already
+    # fully resolved by this point in the function — see the end_walkthrough/
+    # start_walkthrough/start_module_walkthrough/new_step precedence chain
+    # above, which this is deliberately placed after) — either one is
+    # proof the pause is over regardless of how the prospect phrased their
+    # answer.
+    #
+    # Runs before FLOOR HANDOVER so a turn that both advances AND ends on a
+    # genuinely fresh question still correctly re-latches afterward.
+    if session.walkthrough_awaiting_answer:
+        made_new_sub_action_progress = (
+            prev_walkthrough_step in (8, 9)
+            and action_method in STEP_SUB_ACTIONS.get(prev_walkthrough_step, [])
+            and action_method not in session.walkthrough_fired_actions
+        )
+        made_step_progress = (
+            prev_walkthrough_step is not None
+            and session.walkthrough_step is not None
+            and session.walkthrough_step > prev_walkthrough_step
+        )
+        if made_new_sub_action_progress or made_step_progress:
+            session.walkthrough_awaiting_answer = False
+            logger.info(
+                f"[{session.visitor_id}] this turn proved real forward progress "
+                f"(action={action_method!r}, step {prev_walkthrough_step} -> "
+                f"{session.walkthrough_step}) — clearing the stuck awaiting-answer latch "
+                "instead of waiting on the prospect's exact wording"
+            )
+
     # FLOOR HANDOVER — if she ended on a question, the tour waits. Always.
     #
     # walkthrough_awaiting_answer was model-elected, and prod session
