@@ -26,6 +26,8 @@ session.walkthrough_step to a genuinely later value.
 """
 from __future__ import annotations
 
+import asyncio
+
 from src.agent.runtime import _finalize_turn
 from src.context.store import SessionState
 
@@ -44,7 +46,7 @@ def test_stuck_latch_clears_when_this_turn_fires_a_new_sub_action():
         "action": {"page": "magicreel-studio", "component": "wizard", "method": "step-generate"},
     }
 
-    _finalize_turn(session, result, persist=False)
+    asyncio.run(_finalize_turn(session, result, persist=False))
 
     assert session.walkthrough_awaiting_answer is False
 
@@ -56,7 +58,7 @@ def test_latch_stays_set_when_no_new_action_fires_this_turn():
     session.walkthrough_fired_actions = {"step-source"}
     result = {"reply": "Sure, happy to explain that further.", "action": None}
 
-    _finalize_turn(session, result, persist=False)
+    asyncio.run(_finalize_turn(session, result, persist=False))
 
     assert session.walkthrough_awaiting_answer is True
 
@@ -71,7 +73,7 @@ def test_does_not_clear_for_a_revisit_of_an_already_fired_action():
         "action": {"page": "magicreel-studio", "component": "wizard", "method": "select-source-dossier"},
     }
 
-    _finalize_turn(session, result, persist=False)
+    asyncio.run(_finalize_turn(session, result, persist=False))
 
     assert session.walkthrough_awaiting_answer is True
 
@@ -89,7 +91,7 @@ def test_relatches_if_the_same_turn_also_ends_on_a_fresh_question():
         "action": {"page": "magicreel-studio", "component": "wizard", "method": "select-source-dossier"},
     }
 
-    _finalize_turn(session, result, persist=False)
+    asyncio.run(_finalize_turn(session, result, persist=False))
 
     assert session.walkthrough_awaiting_answer is True
 
@@ -103,7 +105,7 @@ def test_action_alone_outside_steps_eight_and_nine_does_not_clear_the_latch():
     session.walkthrough_awaiting_answer = True
     result = {"reply": "Sure.", "action": {"page": "home", "component": "hero", "method": "highlight"}}
 
-    _finalize_turn(session, result, persist=False)
+    asyncio.run(_finalize_turn(session, result, persist=False))
 
     assert session.walkthrough_awaiting_answer is True
     assert session.walkthrough_step == 3
@@ -121,7 +123,7 @@ def test_stuck_latch_clears_when_this_turn_advances_the_macro_step():
         "walkthrough_step": 11,
     }
 
-    _finalize_turn(session, result, persist=False)
+    asyncio.run(_finalize_turn(session, result, persist=False))
 
     assert session.walkthrough_step == 11
     assert session.walkthrough_awaiting_answer is False
@@ -133,7 +135,7 @@ def test_latch_stays_set_when_the_macro_step_does_not_advance():
     session.walkthrough_awaiting_answer = True
     result = {"reply": "Sure, let me explain that further.", "action": None}
 
-    _finalize_turn(session, result, persist=False)
+    asyncio.run(_finalize_turn(session, result, persist=False))
 
     assert session.walkthrough_step == 10
     assert session.walkthrough_awaiting_answer is True
@@ -153,7 +155,7 @@ def test_relatches_if_macro_step_advance_also_ends_on_a_fresh_question():
         "walkthrough_step": 11,
     }
 
-    _finalize_turn(session, result, persist=False)
+    asyncio.run(_finalize_turn(session, result, persist=False))
 
     assert session.walkthrough_step == 11
     assert session.walkthrough_awaiting_answer is True
@@ -171,6 +173,6 @@ def test_does_not_clear_when_the_latch_was_not_actually_set():
         "action": {"page": "magicreel-studio", "component": "wizard", "method": "select-source-dossier"},
     }
 
-    _finalize_turn(session, result, persist=False)
+    asyncio.run(_finalize_turn(session, result, persist=False))
 
     assert session.walkthrough_awaiting_answer is False

@@ -18,6 +18,8 @@ somewhere else always wins).
 """
 from __future__ import annotations
 
+import asyncio
+
 from src.agent.runtime import _PRICING_INTENT, _begin_turn, _pricing_backstop_action
 from src.context.store import SessionState
 
@@ -85,12 +87,12 @@ def test_does_not_re_navigate_when_already_on_the_plans_page():
 
 def test_begin_turn_sets_pending_pricing_request_from_the_raw_message():
     session = SessionState()
-    _begin_turn(session, "what's the pricing and how much would it be")
+    asyncio.run(_begin_turn(session, "what's the pricing and how much would it be"))
     assert session.pending_pricing_request is True
 
 
 def test_begin_turn_clears_pending_pricing_request_for_an_unrelated_message():
     session = SessionState()
     session.pending_pricing_request = True  # leftover from a previous turn
-    _begin_turn(session, "can you show me the MLR approval queue")
+    asyncio.run(_begin_turn(session, "can you show me the MLR approval queue"))
     assert session.pending_pricing_request is False

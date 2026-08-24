@@ -9,3 +9,7 @@ requests>=2.32.0
 pydantic>=2.10.6
 pipecat-ai[groq,cartesia,webrtc,silero,runner]>=1.4.0
 deepgram-sdk==7.7.0
+# CPU-load admission check for the concurrent-calls cap (see server.py's
+# _active_call/claim_voice_lock) — psutil.cpu_percent() is what actually
+# measures whether the box has headroom for another call.
+psutil>=6.0.0

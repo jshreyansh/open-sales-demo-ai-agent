@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import psutil
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -85,19 +86,40 @@ _hand_raise_state: Dict[str, bool] = {}
 # until I say" — the visitor is taking the floor rather than queuing for it.
 _paused_state: Dict[str, bool] = {}
 
-# Whole-app single-call gate: the voicebot (bot.py) is one process running
-# every concurrent call's VAD/STT/TTS on one event loop, with no worker pool
-# and no autoscaling behind it — a second simultaneous caller doesn't get a
-# clean "no capacity" error, they just silently degrade the first caller's
-# call too. This makes that real limit explicit instead of letting it
-# happen invisibly. None means the line is free.
-_active_call: Optional[Dict[str, Any]] = None
+# Admission gate for the voicebot (bot.py): one process running every
+# concurrent call's VAD/STT/TTS on one event loop, with no worker pool and
+# no autoscaling behind it. Two independent limits, both enforced in
+# claim_voice_lock below, mirroring how real voice-agent platforms admit
+# work (see the concurrent-calls plan): a hard ceiling on simultaneous
+# calls, and an adaptive CPU-load check (LiveKit's own load_fnc/
+# load_threshold pattern) that refuses a new call above a safe load even
+# if the ceiling hasn't been hit yet — because a flat number picked in the
+# abstract has no relationship to what this box can actually sustain.
+# Keyed by visitorId (same per-visitor-dict shape as _hand_raise_state/
+# _paused_state above) rather than a single slot, so more than one call
+# can be admitted at once.
+_active_calls: Dict[str, Dict[str, Any]] = {}
+# Kept at 1 until Phase 3's synthetic load test + staged real-call
+# verification (see the plan) validates a higher number on THIS box —
+# raising this is the actual "go live" switch for concurrent calls, not
+# the code change itself.
+_MAX_CONCURRENT_CALLS = 1
+# Matches LiveKit's own default load_threshold — refuse new work once the
+# box is already this loaded, tune from real Phase 3 measurements.
+_CPU_LOAD_THRESHOLD_PCT = 70.0
 # Safety net only, not the normal release path — the normal path is bot.py
 # calling /api/voice-lock/release from on_client_disconnected the moment a
 # call actually ends. This just self-heals a lock that got stuck because
 # that never fired (e.g. the voice process crashed outright), without ever
 # interrupting a call that's realistically still going.
 _CALL_LOCK_TTL_SECS = 30 * 60
+
+# cpu_percent(interval=None) is non-blocking but returns 0.0 (meaningless)
+# on its very first call in a process — it measures the delta since the
+# last call. Priming it once here at import time means the first real
+# claim_voice_lock() call already gets a real reading instead of a
+# spurious 0.0 that would never refuse anything.
+psutil.cpu_percent(interval=None)
 
 
 class ChatRequest(BaseModel):
@@ -374,17 +396,31 @@ class VoiceLockRequest(BaseModel):
 def claim_voice_lock(body: VoiceLockRequest):
     """Called right before connecting voice — both Meeting Mode's pre-join
     screen and Product Mode's Talk button go through useVoiceSession.connect(),
-    which calls this first. Only one real call is supported at a time on
-    this box today (see the module-level comment on _active_call); this is
-    what actually enforces that instead of just hoping it doesn't happen."""
-    global _active_call
+    which calls this first. Admission is gated two ways (see the module-level
+    comment on _active_calls): a hard ceiling on simultaneous calls, and a
+    CPU-load check so a new call isn't admitted onto a box that's already
+    struggling, even under the ceiling. A visitor reclaiming a slot they
+    already hold (a retry, a reconnect) always succeeds regardless of either
+    check — this must behave identically to today's single-slot lock for
+    that case, not get caught by a CPU spike."""
+    global _active_calls
     now = time.monotonic()
-    if _active_call is not None:
-        stale = (now - _active_call["claimed_at"]) > _CALL_LOCK_TTL_SECS
-        same_visitor = _active_call["visitorId"] == body.visitorId
-        if not stale and not same_visitor:
-            return {"ok": False}
-    _active_call = {"visitorId": body.visitorId, "claimed_at": now}
+    stale_cutoff = now - _CALL_LOCK_TTL_SECS
+    _active_calls = {
+        vid: call for vid, call in _active_calls.items() if call["claimed_at"] > stale_cutoff
+    }
+
+    if body.visitorId in _active_calls:
+        _active_calls[body.visitorId] = {"claimed_at": now}
+        return {"ok": True}
+
+    if len(_active_calls) >= _MAX_CONCURRENT_CALLS:
+        return {"ok": False}
+
+    if psutil.cpu_percent(interval=None) > _CPU_LOAD_THRESHOLD_PCT:
+        return {"ok": False}
+
+    _active_calls[body.visitorId] = {"claimed_at": now}
     return {"ok": True}
 
 
@@ -396,9 +432,7 @@ def release_voice_lock(body: VoiceLockRequest):
     holds the lock, so a stale/late release from a call that already lost
     the lock (e.g. to the TTL) can't accidentally kick out whoever's on it
     now."""
-    global _active_call
-    if _active_call is not None and _active_call["visitorId"] == body.visitorId:
-        _active_call = None
+    _active_calls.pop(body.visitorId, None)
     # Per-call scratch state dies with the call. _hand_raise_state is keyed
     # by visitor_id, and a visitor_id is STABLE across calls — so a hand left
     # raised when a call ended was still raised when the same person dialled

@@ -14,6 +14,8 @@ exist so a missed occurrence fails loudly here instead of in a live call.
 """
 from __future__ import annotations
 
+import asyncio
+
 from src.agent.walkthrough import (
     STEP_SUB_ACTIONS,
     WALKTHROUGH_STEPS,
@@ -65,7 +67,7 @@ def test_new_tour_steps_only_highlight_never_open_granular_actions():
 def test_start_module_walkthrough_magicreel_enters_at_step_eight():
     session = SessionState()
     result = {"start_module_walkthrough": "magicreel", "reply": "Let's build a MagicReel."}
-    _finalize_turn(session, result, persist=False)
+    asyncio.run(_finalize_turn(session, result, persist=False))
     assert session.walkthrough_step == 8
     assert session.walkthrough_scope_end == 8
 
@@ -73,7 +75,7 @@ def test_start_module_walkthrough_magicreel_enters_at_step_eight():
 def test_start_module_walkthrough_magicavatar_enters_at_step_nine():
     session = SessionState()
     result = {"start_module_walkthrough": "magicavatar", "reply": "Let's build a MagicAvatar."}
-    _finalize_turn(session, result, persist=False)
+    asyncio.run(_finalize_turn(session, result, persist=False))
     assert session.walkthrough_step == 9
     assert session.walkthrough_scope_end == 9
 
@@ -86,14 +88,14 @@ def test_module_scoped_magicreel_walkthrough_ends_at_its_own_boundary():
     session = SessionState()
     session.walkthrough_step = 8
     session.walkthrough_scope_end = 8
-    _finalize_turn(session, {"walkthrough_step": 9, "reply": "Wrapping up MagicReel."}, persist=False)
+    asyncio.run(_finalize_turn(session, {"walkthrough_step": 9, "reply": "Wrapping up MagicReel."}, persist=False))
     assert session.walkthrough_step is None
     assert session.walkthrough_scope_end is None
 
 
 def test_full_tour_start_walkthrough_begins_at_step_one():
     session = SessionState()
-    _finalize_turn(session, {"start_walkthrough": True, "reply": "Here's a quick tour."}, persist=False)
+    asyncio.run(_finalize_turn(session, {"start_walkthrough": True, "reply": "Here's a quick tour."}, persist=False))
     assert session.walkthrough_step == 1
     assert session.walkthrough_scope_end is None
 

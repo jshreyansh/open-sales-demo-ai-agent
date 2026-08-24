@@ -51,7 +51,7 @@ def test_user_speech_start_survives_telemetry_closed_by_an_unrelated_turn_first(
         agent._speak_reply = AsyncMock()
         agent._speak = AsyncMock()
         agent._advance_after_turn = AsyncMock()
-        agent._amend_interrupted_turn = MagicMock()
+        agent._amend_interrupted_turn = AsyncMock()
         agent._report_reply = AsyncMock()
         agent._report_action = AsyncMock()
 

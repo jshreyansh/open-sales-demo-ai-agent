@@ -1,3 +1,4 @@
+import asyncio
 import glob
 import json
 import os
@@ -1365,8 +1366,15 @@ def _pacing_note(session: SessionState) -> str:
     )
 
 
-def _select_with_claude(message: str, session: SessionState, user_content: Optional[str] = None) -> AgentResult:
-    if _client is None:
+async def _select_with_claude(message: str, session: SessionState, user_content: Optional[str] = None) -> AgentResult:
+    # async, and using _async_client rather than the sync _client, purely
+    # so this doesn't block the shared event loop for the length of a full
+    # LLM round trip (1-3+ seconds) — this is the exception-fallback path
+    # (run_turn/run_turn_stream/run_walkthrough_continuation all try
+    # streaming first), so it fires rarely, but "rarely" still isn't
+    # "never" on a call sharing that loop with others (see the concurrent-
+    # calls plan). Everything else about this function is unchanged.
+    if _async_client is None:
         raise RuntimeError("no client")
 
     # No truncation — session persistence should hold up like a real voice
@@ -1381,7 +1389,7 @@ def _select_with_claude(message: str, session: SessionState, user_content: Optio
     # nothing was actually said. `message` itself is only used to build the
     # default framing below; run_walkthrough_continuation passes "" for it
     # since user_content always overrides it there.
-    msg = _client.messages.create(
+    msg = await _async_client.messages.create(
         model=_model,
         # 300 was too tight: instruction 6 explicitly tells the model to write
         # longer replies when the prospect asks to elaborate, but the tool-call
@@ -1508,16 +1516,24 @@ async def _maybe_backfill_reply(result: AgentResult, session: SessionState) -> A
     return result
 
 
-def _begin_turn(session: SessionState, message: str) -> None:
+async def _begin_turn(session: SessionState, message: str) -> None:
     """Shared start-of-turn bookkeeping — logging the prospect's own message
     onto session history/gate_log before any reply is generated. Called
     exactly once per turn by whichever strategy run_turn() ends up using
     (run_turn itself, or run_turn_stream's streaming-with-fallback path) —
     never twice for the same turn, which is why run_turn_stream's own
-    fallback-to-non-streaming branch does NOT call this again."""
+    fallback-to-non-streaming branch does NOT call this again.
+
+    async solely so the gate_log write below can go through
+    asyncio.to_thread — this function does no other awaiting. On the voice
+    path (run_turn_stream, already async) that's a plain await; run_turn's
+    own sync-only text-chat path bridges in with asyncio.run() instead of
+    becoming async itself (see run_turn's docstring for why it stays sync),
+    which is safe specifically because that call always happens from a
+    plain worker thread with no event loop already running in it."""
     session.history.append(HistoryEntry(role="user", text=message))
     if session.visitor_id:
-        gate_log.append_transcript_turn(session.visitor_id, "user", message)
+        await asyncio.to_thread(gate_log.append_transcript_turn, session.visitor_id, "user", message)
 
     # Backstop for walkthrough activation being model-elected (see
     # _explicit_walkthrough_request). Recorded here, applied in
@@ -1854,7 +1870,7 @@ def _promised_walkthrough(text: str) -> Optional[str]:
     return "full"
 
 
-def _finalize_turn(
+async def _finalize_turn(
     session: SessionState,
     result: AgentResult,
     persist: bool = True,
@@ -1900,7 +1916,7 @@ def _finalize_turn(
         if value and not getattr(session, field_name):
             setattr(session, field_name, value)
             if persist and session.visitor_id:
-                gate_log.save_qualification_field(session.visitor_id, field_name, value)
+                await asyncio.to_thread(gate_log.save_qualification_field, session.visitor_id, field_name, value)
             # len(history)//2 here equals the turn currently being
             # finalized (the agent's reply for it hasn't been appended
             # yet) — see _qualification_note's turn-count escalation,
@@ -2517,7 +2533,7 @@ def _finalize_turn(
         session.current_page = result["action"]["page"]
     session.history.append(HistoryEntry(role="agent", text=result["reply"]))
     if persist and session.visitor_id:
-        gate_log.append_transcript_turn(session.visitor_id, "agent", result["reply"])
+        await asyncio.to_thread(gate_log.append_transcript_turn, session.visitor_id, "agent", result["reply"])
     return result
 
 
@@ -2529,7 +2545,7 @@ CUTOFF_MARKER = " …[cut off here — the prospect interrupted]"
 NOTHING_SPOKEN_MARKER = "[interrupted before any of this reply was spoken aloud]"
 
 
-def amend_last_agent_turn(
+async def amend_last_agent_turn(
     session: SessionState,
     spoken_text: str,
     expected_full_text: str,
@@ -2572,11 +2588,11 @@ def amend_last_agent_turn(
         return False
     last.text = spoken_text
     if persist and session.visitor_id:
-        gate_log.amend_last_agent_turn(session.visitor_id, expected_full_text, spoken_text)
+        await asyncio.to_thread(gate_log.amend_last_agent_turn, session.visitor_id, expected_full_text, spoken_text)
     return True
 
 
-def commit_prefetched_turn(session: SessionState, computed: SessionState, result: AgentResult) -> None:
+async def commit_prefetched_turn(session: SessionState, computed: SessionState, result: AgentResult) -> None:
     """Called by agent_processor.py's _take_ready_prefetch the moment a
     prefetch (see _drain_prefetch, run_walkthrough_continuation's
     persist=False mode) is confirmed to actually be spoken — replays
@@ -2594,34 +2610,48 @@ def commit_prefetched_turn(session: SessionState, computed: SessionState, result
         new_value = getattr(computed, field_name)
         if new_value and new_value != getattr(session, field_name):
             if session.visitor_id:
-                gate_log.save_qualification_field(session.visitor_id, field_name, new_value)
+                await asyncio.to_thread(gate_log.save_qualification_field, session.visitor_id, field_name, new_value)
     session.__dict__.update(computed.__dict__)
     if session.visitor_id:
-        gate_log.append_transcript_turn(session.visitor_id, "agent", result["reply"])
+        await asyncio.to_thread(gate_log.append_transcript_turn, session.visitor_id, "agent", result["reply"])
 
 
 def run_turn(message: str, session: SessionState) -> AgentResult:
-    _begin_turn(session, message)
-    if _client is not None:
-        try:
-            result = _select_with_claude(message, session)
-            # Same invariant as the streaming path — see _enforce_step_order
-            # and _stream_with_claude. No live-speech risk here at all (this
-            # is the text-chat path; nothing is ever spoken), so this is
-            # just the action correction plus the existing backfill, no
-            # streaming-suppression needed.
-            result["action"], corrected = _enforce_step_order(session, result.get("action"))
-            if corrected:
-                result["_reply_needs_backfill"] = True
-            if not result.get("action"):
-                result["action"] = _pricing_backstop_action(session)
-            result = _maybe_backfill_reply_sync(result, session)
-        except Exception:
-            logger.exception("LLM call failed, falling back to keyword matcher")
+    # run_turn itself stays a plain sync function on purpose — it's the
+    # text-chat REST endpoint's path (server.py's /chat), which FastAPI
+    # already runs in its own worker thread, so there's no shared event
+    # loop here to protect the way there is on the voice pipeline (see the
+    # concurrent-calls plan). _begin_turn/_select_with_claude/_finalize_turn
+    # are async purely so THEIR OWN callers on that voice path can await
+    # them without blocking it — run_turn bridges in with one asyncio.run()
+    # around the whole turn (not one per call, which would spin up and
+    # tear down three separate event loops for what's one logical turn).
+    # Safe specifically because run_turn only ever runs from a plain worker
+    # thread with no event loop already running in it.
+    async def _run() -> AgentResult:
+        await _begin_turn(session, message)
+        if _client is not None:
+            try:
+                result = await _select_with_claude(message, session)
+                # Same invariant as the streaming path — see _enforce_step_order
+                # and _stream_with_claude. No live-speech risk here at all (this
+                # is the text-chat path; nothing is ever spoken), so this is
+                # just the action correction plus the existing backfill, no
+                # streaming-suppression needed.
+                result["action"], corrected = _enforce_step_order(session, result.get("action"))
+                if corrected:
+                    result["_reply_needs_backfill"] = True
+                if not result.get("action"):
+                    result["action"] = _pricing_backstop_action(session)
+                result = _maybe_backfill_reply_sync(result, session)
+            except Exception:
+                logger.exception("LLM call failed, falling back to keyword matcher")
+                result = _fallback_reply(_keyword_match(message))
+        else:
             result = _fallback_reply(_keyword_match(message))
-    else:
-        result = _fallback_reply(_keyword_match(message))
-    return _finalize_turn(session, result)
+        return await _finalize_turn(session, result)
+
+    return asyncio.run(_run())
 
 
 # ---------------------------------------------------------------------------
@@ -3018,7 +3048,7 @@ async def run_turn_stream(message: str, session: SessionState) -> AsyncIterator[
     Exactly one of done_streamed/done_fallback is always the final event.
     _begin_turn() runs exactly once regardless of which path is taken, so
     the user's message is never double-logged."""
-    _begin_turn(session, message)
+    await _begin_turn(session, message)
 
     if _async_client is not None:
         try:
@@ -3032,7 +3062,7 @@ async def run_turn_stream(message: str, session: SessionState) -> AsyncIterator[
                 else:
                     yield event
             if result is not None:
-                final = _finalize_turn(session, result)
+                final = await _finalize_turn(session, result)
                 if reply_fully_streamed:
                     yield ("done_streamed", final)
                 else:
@@ -3046,14 +3076,14 @@ async def run_turn_stream(message: str, session: SessionState) -> AsyncIterator[
     # second time for this same message.
     if _client is not None:
         try:
-            result = _select_with_claude(message, session)
+            result = await _select_with_claude(message, session)
             result = await _maybe_backfill_reply(result, session)
         except Exception:
             logger.exception("LLM call failed, falling back to keyword matcher")
             result = _fallback_reply(_keyword_match(message))
     else:
         result = _fallback_reply(_keyword_match(message))
-    yield ("done_fallback", _finalize_turn(session, result))
+    yield ("done_fallback", await _finalize_turn(session, result))
 
 
 # Sent as the API call's own user-turn content for an auto-continue cycle —
@@ -3111,7 +3141,7 @@ async def run_walkthrough_continuation(session: SessionState, persist: bool = Tr
                 else:
                     yield event
             if result is not None:
-                final = _finalize_turn(session, result, persist=persist, auto_continue=True)
+                final = await _finalize_turn(session, result, persist=persist, auto_continue=True)
                 if reply_fully_streamed:
                     yield ("done_streamed", final)
                 else:
@@ -3122,9 +3152,9 @@ async def run_walkthrough_continuation(session: SessionState, persist: bool = Tr
 
     if _client is not None:
         try:
-            result = _select_with_claude("", session, user_content=_WALKTHROUGH_CONTINUE_DIRECTIVE)
+            result = await _select_with_claude("", session, user_content=_WALKTHROUGH_CONTINUE_DIRECTIVE)
             result = await _maybe_backfill_reply(result, session)
-            yield ("done_fallback", _finalize_turn(session, result, persist=persist, auto_continue=True))
+            yield ("done_fallback", await _finalize_turn(session, result, persist=persist, auto_continue=True))
             return
         except Exception:
             logger.exception("Walkthrough auto-continue LLM call failed entirely — skipping this continuation cycle")

@@ -14,22 +14,53 @@ consistent across two writes.
 
 import os
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Iterator, List, Optional, TypedDict
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "app.db")
 
+# WAL instead of the default rollback journal: readers no longer block
+# writers (or each other) at all, and writers only block other writers —
+# the busy_timeout below covers that remaining case. Matters once more than
+# a couple of calls are writing transcript turns concurrently (see the
+# concurrent-calls plan) — under the old default, a write from one call
+# could make sqlite3.OperationalError: database is locked visible to
+# another call's turn almost immediately, since the default busy timeout is
+# 0. Both pragmas are connection-level, so every _connect() call sets them;
+# WAL mode itself persists in the database file after the first time.
+_BUSY_TIMEOUT_MS = 5000
+
 
 @contextmanager
 def _connect() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
     try:
         yield conn
         conn.commit()
     finally:
         conn.close()
+
+
+# Retries a write a couple of times on the rare lock contention that
+# outlasts even the busy_timeout above (a burst of concurrent writers all
+# landing at once) — busy_timeout already makes SQLite itself wait and
+# retry internally, this is the outer, application-level backstop for the
+# tail case where that still isn't enough. Read-only functions don't need
+# this: a lock only ever blocks a writer, so every read function in this
+# file is already safe.
+def _write_with_retry(fn, *args, attempts: int = 3, **kwargs):
+    for attempt in range(attempts):
+        try:
+            return fn(*args, **kwargs)
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() or attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def init_db() -> None:
@@ -269,12 +300,29 @@ def get_visitor_detail(email: str) -> Optional[dict]:
     }
 
 
-def append_transcript_turn(visitor_id: str, role: str, text: str) -> None:
+def _append_transcript_turn_once(visitor_id: str, role: str, text: str) -> None:
     with _connect() as conn:
         conn.execute(
             "INSERT INTO transcript_turns (visitor_id, role, text, created_at) VALUES (?, ?, ?, ?)",
             (visitor_id, role, text, datetime.now(timezone.utc).isoformat()),
         )
+
+
+def append_transcript_turn(visitor_id: str, role: str, text: str) -> None:
+    _write_with_retry(_append_transcript_turn_once, visitor_id, role, text)
+
+
+def _amend_last_agent_turn_once(visitor_id: str, expected_text: str, new_text: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, text FROM transcript_turns WHERE visitor_id = ? AND role = 'agent' "
+            "ORDER BY id DESC LIMIT 1",
+            (visitor_id,),
+        ).fetchone()
+        if row is None or row["text"] != expected_text:
+            return False
+        conn.execute("UPDATE transcript_turns SET text = ? WHERE id = ?", (new_text, row["id"]))
+    return True
 
 
 def amend_last_agent_turn(visitor_id: str, expected_text: str, new_text: str) -> bool:
@@ -288,16 +336,7 @@ def amend_last_agent_turn(visitor_id: str, expected_text: str, new_text: str) ->
     the row was written in full at finalize time, before anyone could know
     how much would actually be heard, so it gets corrected down to the
     spoken prefix afterward. See agent_processor's _amend_interrupted_turn."""
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT id, text FROM transcript_turns WHERE visitor_id = ? AND role = 'agent' "
-            "ORDER BY id DESC LIMIT 1",
-            (visitor_id,),
-        ).fetchone()
-        if row is None or row["text"] != expected_text:
-            return False
-        conn.execute("UPDATE transcript_turns SET text = ? WHERE id = ?", (new_text, row["id"]))
-    return True
+    return _write_with_retry(_amend_last_agent_turn_once, visitor_id, expected_text, new_text)
 
 
 def list_transcript(visitor_id: str) -> List[dict]:
@@ -311,12 +350,16 @@ def list_transcript(visitor_id: str) -> List[dict]:
     return [dict(r) for r in rows]
 
 
-def save_qualification_field(visitor_id: str, field_name: str, value: str) -> None:
+def _save_qualification_field_once(visitor_id: str, field_name: str, value: str) -> None:
     with _connect() as conn:
         conn.execute(
             "INSERT INTO qualification_fields (visitor_id, field_name, field_value, created_at) VALUES (?, ?, ?, ?)",
             (visitor_id, field_name, value, datetime.now(timezone.utc).isoformat()),
         )
+
+
+def save_qualification_field(visitor_id: str, field_name: str, value: str) -> None:
+    _write_with_retry(_save_qualification_field_once, visitor_id, field_name, value)
 
 
 def get_qualification_fields(visitor_id: str) -> dict:
@@ -332,7 +375,7 @@ def get_qualification_fields(visitor_id: str) -> dict:
     return {r["field_name"]: r["field_value"] for r in rows}
 
 
-def save_call_summary(visitor_id: str, summary: str) -> None:
+def _save_call_summary_once(visitor_id: str, summary: str) -> None:
     with _connect() as conn:
         conn.execute(
             """
@@ -341,6 +384,10 @@ def save_call_summary(visitor_id: str, summary: str) -> None:
             """,
             (visitor_id, summary, datetime.now(timezone.utc).isoformat()),
         )
+
+
+def save_call_summary(visitor_id: str, summary: str) -> None:
+    _write_with_retry(_save_call_summary_once, visitor_id, summary)
 
 
 def get_call_summary(visitor_id: str) -> Optional[str]:

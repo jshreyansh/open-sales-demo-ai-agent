@@ -1832,7 +1832,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                         resumed = f"{prefix} {remainder}"
                         session = get_session(self._visitor_id)
                         if session.visitor_id:
-                            gate_log.append_transcript_turn(session.visitor_id, "agent", resumed)
+                            await asyncio.to_thread(gate_log.append_transcript_turn, session.visitor_id, "agent", resumed)
                         self._current_reply_source = "voice"
                         asyncio.create_task(self._report_reply(resumed))
                         await self._speak(resumed, FrameDirection.DOWNSTREAM)
@@ -2195,7 +2195,7 @@ class AgentRuntimeProcessor(FrameProcessor):
             # appends its own entries, at which point the entry this needs to
             # fix is no longer the last one and the guard would (correctly)
             # refuse to touch it.
-            self._amend_interrupted_turn(session, result)
+            await self._amend_interrupted_turn(session, result)
 
             if self._hand_raised and not self._hand_ack_sent:
                 # Either a raise landed right as the last sentence
@@ -2596,7 +2596,7 @@ class AgentRuntimeProcessor(FrameProcessor):
             parts.append(self._cut_off_part.rstrip() + CUTOFF_MARKER)
         return " ".join(p.strip() for p in parts if p.strip())
 
-    def _amend_interrupted_turn(self, session, result: Optional[dict]) -> None:
+    async def _amend_interrupted_turn(self, session, result: Optional[dict]) -> None:
         """Corrects this turn's history entry down to the spoken prefix when
         a barge-in cut the reply short. No-op unless the turn was actually
         interrupted AND something is genuinely missing.
@@ -2629,7 +2629,7 @@ class AgentRuntimeProcessor(FrameProcessor):
             if sent.strip() and sent.strip() not in heard
         ).strip()
         self._unspoken_remainder = remainder or None
-        if amend_last_agent_turn(session, spoken, full):
+        if await amend_last_agent_turn(session, spoken, full):
             logger.info(
                 f"[{self._visitor_id}] interrupted mid-reply — history corrected to what was heard "
                 f"({len(spoken)}/{len(full)} chars): {spoken[:90]!r}"
@@ -3098,7 +3098,7 @@ class AgentRuntimeProcessor(FrameProcessor):
             # prefetch's own run_walkthrough_continuation() failed (already
             # logged there) — nothing to commit.
             return None
-        commit_prefetched_turn(session, clone, result)
+        await commit_prefetched_turn(session, clone, result)
         return result
 
     def _maybe_schedule_auto_continue(
@@ -3201,7 +3201,7 @@ class AgentRuntimeProcessor(FrameProcessor):
         # turn reasons over, or the agent is answering a call that didn't happen.
         session = get_session(self._visitor_id)
         if session.visitor_id:
-            gate_log.append_transcript_turn(session.visitor_id, "agent", prompt)
+            await asyncio.to_thread(gate_log.append_transcript_turn, session.visitor_id, "agent", prompt)
         session.history.append(HistoryEntry(role="agent", text=prompt))
         self._current_reply_source = "voice"
         asyncio.create_task(self._report_reply(prompt))
@@ -3478,7 +3478,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                     asyncio.create_task(self._report_reply(reply))
                     await self._speak_reply(reply, direction)
 
-            self._amend_interrupted_turn(session, result)
+            await self._amend_interrupted_turn(session, result)
 
             if self._hand_raised and not self._hand_ack_sent:
                 await self._speak_hand_raise_handoff(direction)
@@ -3591,7 +3591,7 @@ class AgentRuntimeProcessor(FrameProcessor):
         # read the raw pipeline log to see hand-raise activity a transcript
         # pull didn't show at all.
         if session.visitor_id:
-            gate_log.append_transcript_turn(session.visitor_id, "agent", handoff)
+            await asyncio.to_thread(gate_log.append_transcript_turn, session.visitor_id, "agent", handoff)
         asyncio.create_task(self._report_reply(handoff))
         await self._speak(handoff, direction)
 
@@ -3946,7 +3946,7 @@ class AgentRuntimeProcessor(FrameProcessor):
         # impossible to answer from the transcript alone.
         session = get_session(self._visitor_id)
         if session.visitor_id:
-            gate_log.append_transcript_turn(session.visitor_id, "agent", message)
+            await asyncio.to_thread(gate_log.append_transcript_turn, session.visitor_id, "agent", message)
         asyncio.create_task(self._report_reply(message))
         await self._speak_without_activity_bump(message)
 
@@ -3965,7 +3965,7 @@ class AgentRuntimeProcessor(FrameProcessor):
         # this goodbye should show it in the transcript, not just stop.
         session = get_session(self._visitor_id)
         if session.visitor_id:
-            gate_log.append_transcript_turn(session.visitor_id, "agent", farewell)
+            await asyncio.to_thread(gate_log.append_transcript_turn, session.visitor_id, "agent", farewell)
         asyncio.create_task(self._report_reply(farewell))
         await self._speak_without_activity_bump(farewell)
 

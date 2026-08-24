@@ -146,7 +146,7 @@ async def _save_call_summary(visitor_id: str) -> None:
     try:
         summary = await asyncio.to_thread(generate_call_summary, visitor_id)
         if summary:
-            gate_log.save_call_summary(visitor_id, summary)
+            await asyncio.to_thread(gate_log.save_call_summary, visitor_id, summary)
             # to_thread because Postmark goes out over blocking `requests`,
             # same reasoning as generate_call_summary above. The send never
             # raises (it swallows and returns None) and is idempotent against
@@ -159,8 +159,8 @@ async def _save_call_summary(visitor_id: str) -> None:
 
 
 async def _release_voice_lock(visitor_id: str) -> None:
-    # Frees the single-call gate (see server.py's _active_call) the moment
-    # a call actually ends, rather than leaving the next caller to wait out
+    # Frees this visitor's admission slot (see server.py's _active_calls)
+    # the moment a call actually ends, rather than leaving the next caller to wait out
     # its TTL safety net. Best-effort: if this fails, the TTL still
     # recovers it eventually. Shared by on_client_disconnected and
     # _watch_idle so both teardown paths release it the same way.
