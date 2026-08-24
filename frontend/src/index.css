@@ -2934,43 +2934,13 @@ body {
    tint right on the edge. useAudioLevelRing overrides this same box-shadow
    property inline once real audio comes through; this is just what shows
    before that (or if a track never arrives). */
+/* Bumped up from 76px — the circle read as small/distant relative to the
+   tile around it, on both the You and Fiona tiles. */
 .meet__avatar--tile {
-  width: 76px;
-  height: 76px;
-  font-size: 27px;
+  width: 140px;
+  height: 140px;
+  font-size: 48px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35), 0 0 0 2px rgba(138, 180, 248, 0.3);
-}
-
-/* The agent's own tile: her photo fills the whole tile instead of sitting
-   in a small circle in the middle — everyone already knows she's an agent,
-   so a face that's actually visible does more for the call feeling like
-   talking to someone than a name badge floating in empty space does.
-   useReportedAudioLevelRing's box-shadow lands directly on this element
-   (see MeetingShell.tsx) — box-shadow paints outside an element's own
-   border box regardless of ITS OWN overflow, so it still traces cleanly
-   along the tile's rounded corner instead of being clipped by
-   .meet__tile's overflow: hidden the way it would if this had any inset. */
-.meet__agent-photo {
-  position: absolute;
-  inset: 0;
-  background-size: cover;
-  background-position: center 20%;
-}
-
-/* Bottom-up scrim so the name label (and, on some photos, the status badge
-   up top) stay legible over a real photo instead of only a flat gradient —
-   a photo has bright/busy regions a plain text-shadow doesn't reliably
-   beat the way it did against the old solid-color tile background. */
-.meet__tile-scrim {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    to top,
-    rgba(0, 0, 0, 0.55) 0%,
-    rgba(0, 0, 0, 0.15) 35%,
-    rgba(0, 0, 0, 0) 60%
-  );
-  pointer-events: none;
 }
 
 /* ---- Meeting Mode: in-call chat panel ---- */
@@ -6247,6 +6217,30 @@ body {
   border-radius: 12px;
 }
 
+/* Locked (wizard result screens only, not the Showcase modal — see
+   AssetVideoPlayer.tsx): no controls attribute means nothing to click, but
+   pointer-events: none removes even the raw click-to-toggle-play behavior
+   every <video> has by default, so it reads as inert rather than just
+   missing a scrubber. */
+.asset-video-player--locked .asset-video-player__video {
+  pointer-events: none;
+}
+
+.asset-video-player__lock {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  backdrop-filter: blur(4px);
+}
+
 .scene-inspector__caption {
   font-size: 11px;
   margin-top: 8px;
@@ -7952,6 +7946,48 @@ body {
   border-radius: 4px;
 }
 
+/* "Talk to the team" / "Explore the platform" live down here now, not in
+   the header — centered under the widget, the natural place to land once
+   someone's scrolled all the way through the page. Reuses .lp__nav-links'
+   own pill treatment for the plain link so the two footer items still
+   match the surviving header pill's visual language. */
+.lp__footer {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 0 clamp(20px, 5vw, 64px) clamp(32px, 6vh, 56px);
+}
+
+.lp__footer a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--lp-muted);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  transition: color 0.16s, background 0.16s, border-color 0.16s;
+}
+
+.lp__footer a:hover {
+  background: rgba(20, 24, 22, 0.05);
+  border-color: var(--lp-line);
+  color: var(--lp-text);
+}
+
+.lp__footer a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
 /* ---- stage: centered hero + peeking widget section ---- */
 .lp__stage--centered {
   position: relative;
@@ -8597,7 +8633,6 @@ body {
 }
 
 @media (max-width: 560px) {
-  .lp__nav-links a:first-child { display: none; }
   /* Phone has the least room and the most stacked content, so the portrait
      gives up the most here. Everything below it is a control the visitor
      needs to reach without scrolling. */

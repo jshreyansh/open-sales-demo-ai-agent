@@ -436,15 +436,14 @@ UI_REGISTRY: List[RegistryPage] = [
                 description=(
                     "Every video generated on the platform so far — today that's exactly two real "
                     "showcase pieces (a MagicReel oncology piece, a MagicAvatar patient-adherence "
-                    "piece), not a padded-out fake library."
+                    "piece), not a padded-out fake library. There is a real, human-clickable preview "
+                    "modal on this page too (a visitor can click a card directly), but it has no "
+                    "action here on purpose — a request to see/play a video is always the Best "
+                    "Content Showcase's job (example-gallery/open below), never this page's own "
+                    "modal, so removing the option here is what makes that the only one you can "
+                    "ever pick, not something to remember."
                 ),
                 actions=[RegistryAction(id="highlight", description="Draw attention to the content library grid")],
-            ),
-            RegistryComponent(
-                id="preview",
-                label="Preview modal",
-                description="The video preview modal — plays the piece with its script alongside it.",
-                actions=[RegistryAction(id="open", description="Open the preview modal for the first library item")],
             ),
             _scroll_component(),
         ],

@@ -53,6 +53,7 @@ const PATHS: Record<string, string> = {
   globe: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM2 12h20M12 2c2.5 2.7 4 6.4 4 10s-1.5 7.3-4 10c-2.5-2.7-4-6.4-4-10s1.5-7.3 4-10z",
   waveform: "M2 12h1M5 8v8M8.5 5v14M12 9v6M15.5 5v14M19 8v8M22 12h0",
   link: "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
+  lock: "M6 11V7a6 6 0 0 1 12 0v4M5 11h14v10H5z",
 };
 
 export default function Icon({ name, size = 16, className }: IconProps) {

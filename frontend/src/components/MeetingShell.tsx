@@ -14,7 +14,7 @@ import ShowcaseMedal from "./ShowcaseMedal";
 import PreJoinScreen from "./PreJoinScreen";
 import MeetingChatPanel, { type MeetingChatMessage } from "./MeetingChatPanel";
 import ExampleGalleryPanel from "./ExampleGalleryPanel";
-import { AGENT_NAME, AGENT_PHOTO } from "../lib/persona";
+import { AGENT_NAME, AGENT_INITIAL, AGENT_PHOTO } from "../lib/persona";
 import { playJoinSound, playMessageSound, primeSounds } from "../lib/sounds";
 
 const visitorId = getVisitorId();
@@ -554,21 +554,7 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
                     <MeetIcon name="ear" size={13} /> Listening
                   </span>
                 ) : null}
-                {/* Full-bleed, not a small circle in the middle of the tile —
-                    everyone already knows this is an agent; a face that's
-                    actually visible does more for making the call feel like
-                    talking to someone than a name badge does. The audio-level
-                    ring (agentRingRef) moves from the old circular avatar
-                    onto this element directly — its box-shadow glow paints
-                    OUTSIDE the border box regardless of this element's own
-                    overflow, so it still traces cleanly along the tile's
-                    rounded edge instead of being clipped. */}
-                <div
-                  className="meet__agent-photo"
-                  ref={agentRingRef}
-                  style={{ backgroundImage: `url(${AGENT_PHOTO})` }}
-                />
-                <div className="meet__tile-scrim" aria-hidden="true" />
+                <TileAvatar ringRef={agentRingRef} photo={AGENT_PHOTO} letter={AGENT_INITIAL} avatarClassName="meet__avatar--tile meet__avatar--agent" />
                 <div className="meet__tile-label">{AGENT_NAME}</div>
             </div>
           </div>

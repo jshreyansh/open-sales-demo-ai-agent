@@ -38,7 +38,7 @@ export default function ReelResult({
 
       <div className="reel-result__body">
         <div className="reel-result__preview">
-          <AssetVideoPlayer ref={playerRef} src={DEFAULT_REEL_VIDEO_URL} />
+          <AssetVideoPlayer ref={playerRef} src={DEFAULT_REEL_VIDEO_URL} locked />
         </div>
 
         <dl className="reel-details">

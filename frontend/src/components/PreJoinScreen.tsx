@@ -89,31 +89,19 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
         <a href="https://www.swishx.com/" target="_blank" rel="noopener noreferrer" aria-label="SwishX — swishx.com">
           <img src={swishxLightLogo} alt="SwishX" className="lp__logo" />
         </a>
-        {/* The two other ways into the product. Demoted to nav on purpose:
-            they are real destinations, but this page has one job. */}
+        {/* Best Content Showcase is the one nav destination left up here —
+            "Talk to the team" and "Explore the platform" moved down to the
+            footer (see .lp__footer below the widget), so the header stays
+            to just the logo and the one link that's actually about this
+            exact page (proving the output before asking anyone to commit
+            to a live call). */}
         <nav className="lp__nav-links">
-          {/* Leads the nav: someone who wants a human is the visitor most
-              easily lost, and down in the form area this competed with the
-              join flow instead of quietly existing beside it. */}
-          <a
-            className="lp__nav-talk"
-            href="https://www.swishx.com/calendar"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <MeetIcon name="calendar" size={14} />
-            Talk to the team
-          </a>
-          <a href="/demo/dashboard">
-            <MeetIcon name="grid" size={14} />
-            Explore the platform
-          </a>
           {/* Demoted from a big glowing hero badge to a plain nav pill —
               next to the quiet "Fiona is live now" badge it read as two
               different products' styling stitched together, and it was
               eating hero height the widget section needed. Still opens the
-              same gallery, just as a secondary nav destination like its
-              three neighbours rather than the loudest thing on the page. */}
+              same gallery, just as a secondary nav destination rather than
+              the loudest thing on the page. */}
           <button onClick={() => setGalleryOpen(true)} title="See the best content SwishX has generated">
             <ShowcaseMedal size={14} />
             Best Content Showcase
@@ -194,6 +182,26 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
           </div>
         </div>
       </main>
+
+      {/* "Talk to the team" and "Explore the platform" moved down here from
+          the header nav — centered under the widget, the natural place to
+          land once someone's scrolled all the way through the page rather
+          than competing with the logo up top. */}
+      <footer className="lp__footer">
+        <a
+          className="lp__nav-talk"
+          href="https://www.swishx.com/calendar"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <MeetIcon name="calendar" size={14} />
+          Talk to the team
+        </a>
+        <a href="/demo/dashboard">
+          <MeetIcon name="grid" size={14} />
+          Explore the platform
+        </a>
+      </footer>
 
       {galleryOpen && <ExampleGalleryPanel onClose={() => setGalleryOpen(false)} />}
     </div>
