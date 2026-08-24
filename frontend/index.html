@@ -7,6 +7,11 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Vanilla custom element (defines <swishx-widget>) -- registering it
+         here means it's a no-op until a <swishx-widget> tag actually
+         mounts somewhere (see PreJoinScreen.tsx), so loading it globally
+         costs nothing on pages that never use it. -->
+    <script src="/swishx-widget.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -1,13 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { PERSONAS } from "../lib/personas";
 import { getVisitorId, getVisitorProfile } from "../lib/session";
 import type { VisitorProfile } from "../lib/session";
 import MeetIcon from "./MeetIcons";
-import Icon from "./Icon";
 import ShowcaseMedal from "./ShowcaseMedal";
 import ExampleGalleryPanel from "./ExampleGalleryPanel";
-import SwishXLockup from "./SwishXLockup";
 import VisitorGateForm from "./VisitorGateForm";
+import swishxLightLogo from "../assets/swishx-lockup-light.svg";
 
 interface PreJoinScreenProps {
   // Returns false when someone else is already on the call (see
@@ -23,45 +22,28 @@ interface PreJoinScreenProps {
 // one persona is real, at which point this goes back to a picker.
 const AVAILABLE_PERSONAS = PERSONAS.filter((p) => p.available);
 
-// The hero card's looping clip is decoration — it exists to make a static
-// waiting screen feel like a person is on the other end of it, and it carries
-// no information the still doesn't. So for anyone who's told the OS they don't
-// want motion, we don't play it at all (not "play it slower"): they get the
-// same photo the card showed before, which is a complete fallback rather than a
-// degraded one. Read live via a listener because macOS/iOS let this flip
-// mid-session from Settings, and a card frozen on the old answer looks broken.
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(
-    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-  );
-
-  useEffect(() => {
-    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const sync = () => setReduced(query.matches);
-    query.addEventListener("change", sync);
-    return () => query.removeEventListener("change", sync);
-  }, []);
-
-  return reduced;
-}
-
 // Meeting Mode's first screen — before the join countdown, not instead of
 // it. Identity capture (email → name/company, or straight through for a
 // returning email) is delegated to VisitorGateForm, shared with the
-// dashboard gate — this component just supplies the video-call chrome
-// around it and what happens once someone's actually gated (claim the
-// voice lock, or show the busy screen).
+// dashboard gate — this component just supplies the chrome around it and
+// what happens once someone's actually gated (claim the voice lock, or
+// show the busy screen).
 //
-// Side-by-side layout (persona card left, form right) rather than an
-// earlier stacked one: with a single persona to show, a whole horizontal
-// scroll lane above the form was doing a lot of layout work for one card.
-// Still designed to fit one viewport with no page scroll.
+// Centered layout, page scrolls: the hero (badge/heading/join form) sits in
+// roughly the first viewport, and the SwishX guided widget lives in a
+// second section right below it, deliberately tall enough that only its top
+// edge shows without scrolling — the same "there's more, keep going"
+// invitation a product screenshot peeking up from the fold gives on other
+// SaaS landing pages. The persona's own big looping video card is gone
+// (see the live badge below instead) — a whole side-by-side column doesn't
+// fit a centered composition, and the widget itself is now the thing that
+// makes the page feel alive.
 
 // The seconds-ticking clock that used to live here is gone. It was meant as
 // proof that "now" was real, but a running counter beside a face reads as a
 // stopwatch on the visitor rather than as an open line — the opposite of
-// relaxed and available. The pulsing LIVE chip carries the same claim
-// without implying anyone is being timed.
+// relaxed and available. The pulsing LIVE dot on the badge carries the same
+// claim without implying anyone is being timed.
 
 export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
   const persona = AVAILABLE_PERSONAS[0];
@@ -71,24 +53,6 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
   // and until now that proof only existed on the far side of the thing they
   // were hesitating about.
   const [galleryOpen, setGalleryOpen] = useState(false);
-  const reducedMotion = usePrefersReducedMotion();
-  const loopRef = useRef<HTMLVideoElement>(null);
-  const showLoop = Boolean(persona.video) && !reducedMotion;
-
-  // The `autoPlay` attribute alone isn't enough to trust. Safari and iOS only
-  // honour it when the element is *already* muted and inline at the moment they
-  // evaluate it, and React assigns `muted` as a DOM property after the element
-  // is created — so we re-assert it here and start playback ourselves. If the
-  // browser still says no (some do, in a background tab or under stricter
-  // autoplay settings), the rejected promise is swallowed on purpose: the
-  // poster is her photo, so refusing to play leaves exactly the static card
-  // that shipped before this, with nothing to report and nothing to retry.
-  useEffect(() => {
-    const video = loopRef.current;
-    if (!video) return;
-    video.muted = true;
-    void video.play().catch(() => {});
-  }, [showLoop]);
 
   async function handleGated(profile: VisitorProfile) {
     const ok = await onJoin(profile.name, profile.company, profile.email);
@@ -122,7 +86,7 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
       <div className="lp__glow" aria-hidden="true" />
 
       <header className="lp__nav">
-        <SwishXLockup height={22} />
+        <img src={swishxLightLogo} alt="SwishX" className="lp__logo" />
         {/* The two other ways into the product. Demoted to nav on purpose:
             they are real destinations, but this page has one job. */}
         <nav className="lp__nav-links">
@@ -142,78 +106,31 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
             <MeetIcon name="grid" size={14} />
             Explore the platform
           </a>
-          <a href="/docs">
-            <MeetIcon name="book" size={14} />
-            Docs
-          </a>
+          {/* Demoted from a big glowing hero badge to a plain nav pill —
+              next to the quiet "Fiona is live now" badge it read as two
+              different products' styling stitched together, and it was
+              eating hero height the widget section needed. Still opens the
+              same gallery, just as a secondary nav destination like its
+              three neighbours rather than the loudest thing on the page. */}
+          <button onClick={() => setGalleryOpen(true)} title="See the best content SwishX has generated">
+            <ShowcaseMedal size={14} />
+            Best Content Showcase
+          </button>
         </nav>
       </header>
 
-      <main className="lp__stage">
-        <figure className="lp__figure">
-          {showLoop ? (
-            <video
-              ref={loopRef}
-              src={persona.video}
-              poster={persona.photo}
-              className="lp__video"
-              autoPlay
-              loop
-              muted
-              playsInline
-              preload="auto"
-              aria-hidden="true"
-            />
-          ) : persona.photo ? (
-            <img src={persona.photo} alt="" className="lp__video" />
-          ) : null}
-
-          {/* Broadcast lower-third. Borrowed deliberately from live TV, which
-              is the one visual language everybody already reads as "this is
-              happening right now, not a recording." */}
-          {/* One word, solid ground, high contrast. The old version stacked
-              a clock and a place name into a translucent pill sitting on a
-              bright photo — three pieces of information competing at 10px,
-              none of which read. Where she is belongs with who she is, so it
-              moved down to the name plate. */}
-          <div className="lp__onair">
-            <span className="lp__dot" aria-hidden="true" />
-            Live
+      <main className="lp__stage lp__stage--centered">
+        <div className="lp__hero">
+          {/* Replaces the old full-size looping video card — same "she's
+              live right now" claim, at a scale that fits a centered hero
+              instead of owning half the page. */}
+          <div className="lp__live-badge">
+            {persona.photo && <img src={persona.photo} alt="" className="lp__live-badge-photo" />}
+            <span className="lp__live-badge-text">
+              <span className="lp__dot" aria-hidden="true" />
+              {persona.name} is live now
+            </span>
           </div>
-
-          <figcaption className="lp__plate">
-            <span className="lp__plate-name">{persona.name}</span>
-            <span className="lp__plate-role">{persona.position}</span>
-            <span className="lp__plate-place">
-              <MeetIcon name="location" size={13} />
-              {persona.location.replace("United States", "USA")}
-            </span>
-          </figcaption>
-        </figure>
-
-        <div className="lp__copy">
-          {/* The badge sits ABOVE the headline, where badges go. It spent one
-              version at the foot of the column and was wrong there twice
-              over: nothing else on the page announces itself from the
-              bottom, and it sat directly under a form that grows by two
-              fields, so every visitor who typed an email watched the shiniest
-              thing on the page get shoved down the screen.
-              Up here it never moves, whatever the form does below it. */}
-          <button
-            className="meet__showcase-btn lp__showcase"
-            onClick={() => setGalleryOpen(true)}
-            title="See the best content SwishX has generated"
-          >
-            <span className="meet__showcase-btn-inner">
-              <span className="meet__showcase-btn-medal">
-                <ShowcaseMedal size={14} />
-              </span>
-              <span className="meet__showcase-btn-text">
-                <span className="meet__showcase-btn-kicker">Hall of fame</span>
-                <span className="meet__showcase-btn-label">Best Content Showcase</span>
-              </span>
-            </span>
-          </button>
           {/* The build lands on the second line: the whole proposition is that
               nothing has to be arranged first. */}
           <h1 className="lp__title">
@@ -221,33 +138,22 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
             <br />
             when you do.
           </h1>
-          {/* Written for a stranger at a booth who has never heard the name:
-              first sentence is what the company does, second is what this page
-              offers. No persona name and no pronoun — the persona is swappable
-              (see persona.ts) and a name means nothing to someone three
-              seconds in.
-
-              "Shows you around", NOT "builds it live". The rep walks you
-              through the platform and can play finished examples; it does not
-              generate a video while you watch. An earlier version claimed it
-              did, which is the one promise on this page a visitor can falsify
-              inside two minutes — and it would falsify it at a booth, in front
-              of the person who just walked up. "Any hour you turn up" carries
-              the thing that IS true and is genuinely the draw: there is always
-              someone to walk you through it. */}
+          {/* Names Fiona explicitly now that the live badge above already
+              does — the earlier "no persona name" rule made sense when
+              nothing else on the page said who she was; it no longer holds
+              once the badge is the first thing anyone reads. Also states
+              "video call" outright, since that's the actual format the join
+              button starts, not just an abstract "demo." */}
           <p className="lp__sub">
-            On-label video, avatars and infographics for pharma marketing. An
-            AI rep sits with you and shows you around — any hour you turn up.
+            Pharma-ready video, avatars and infographics — join a live video
+            call with Fiona and watch it get built in real time.
           </p>
 
-          {/* The join row is the signature: it starts inside the portrait's
-              frame and reaches out to you, so the one thing between arriving
-              and talking is physically connected to the person on the call. */}
           <div className="lp__join">
             <VisitorGateForm
               visitorId={getVisitorId()}
               path="meet"
-              submitLabel="Join the call"
+              submitLabel="Join the video call"
               submittingLabel="Connecting…"
               onGated={handleGated}
               initialProfile={getVisitorProfile() ?? undefined}
@@ -259,7 +165,17 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
               "Coming soon" title. A dead control earns no space — and with
               the booking link promoted into the nav, the person it was aimed
               at is already served. Bring it back when scheduling is real. */}
+        </div>
 
+        {/* The widget section: deliberately positioned so only its top edge
+            is visible without scrolling (see .lp__hero's min-height) — the
+            same "there's more below" invitation a peeking product
+            screenshot gives on other SaaS landing pages, except this one is
+            live and interactive rather than a static image. */}
+        <div className="lp__widget-section">
+          <div className="lp__widget-card">
+            <swishx-widget max-width="1180" />
+          </div>
         </div>
       </main>
 

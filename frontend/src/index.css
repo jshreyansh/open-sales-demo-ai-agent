@@ -7759,14 +7759,18 @@ body {
    bold move; everything around it stays quiet. */
 
 .lp {
-  --lp-ink: #09090b;
-  --lp-raise: #131316;
-  --lp-line: rgba(255, 255, 255, 0.09);
-  --lp-text: #f5f3f0;
+  /* Light theme, to match the SwishX guided widget's own light palette
+     (see swishx-widget.js's --bg/--surface/--ink tokens) — this page used
+     to be dark, but a dark hero sitting directly above a white, shadowed
+     widget card read as two different products stitched together. */
+  --lp-ink: #fbfaf8;
+  --lp-raise: #ffffff;
+  --lp-line: rgba(20, 24, 22, 0.10);
+  --lp-text: #17140f;
   /* Warm-biased grey. A pure neutral here reads as un-chosen; leaning it a
      few degrees toward the accent ties the whole surface together. */
-  --lp-muted: #8a837b;
-  --lp-live: #45c08a;
+  --lp-muted: #6b6560;
+  --lp-live: #1c7c54;
 
   position: relative;
   min-height: 100vh;
@@ -7802,41 +7806,52 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 26px clamp(20px, 5vw, 64px) 0;
+  padding: 26px clamp(20px, 5vw, 64px) 16px;
 }
 
-/* The lockup carries its own colour and spacing (see SwishXLockup) — nothing
-   for the page to say about it, which is the point. */
+/* The dark-surface SwishXLockup (white wordmark) doesn't work here — this
+   page's own light-themed logo file, dark-on-transparent. */
+.lp__logo {
+  height: 24px;
+  width: auto;
+  display: block;
+}
 
 .lp__nav-links {
   display: flex;
   align-items: center;
-  gap: 28px;
+  /* Tightened from 28px now that a fourth item (the showcase button) lives
+     here too — four items at the old gap crowded the header. */
+  gap: 18px;
 }
 
-.lp__nav-links a {
+.lp__nav-links a,
+.lp__nav-links button {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  font-size: 13.5px;
+  gap: 6px;
+  /* A touch smaller than before, again to make room for the fourth item
+     without the row feeling cramped. */
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--lp-muted);
   text-decoration: none;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
   /* Same padding and radius as the pill below, so all three items share one
      shape and only their emphasis differs. Two bare labels next to one
      bordered pill read as an oversight. */
-  padding: 7px 13px;
+  padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid transparent;
   transition: color 0.16s, background 0.16s, border-color 0.16s;
 }
 
-.lp__nav-links a:hover {
-  background: rgba(255, 255, 255, 0.06);
+.lp__nav-links a:hover,
+.lp__nav-links button:hover {
+  background: rgba(20, 24, 22, 0.05);
   border-color: var(--lp-line);
-}
-
-.lp__nav-links a:hover {
   color: var(--lp-text);
 }
 
@@ -7850,13 +7865,13 @@ body {
   padding: 7px 13px;
   border-radius: 999px;
   border: 1px solid var(--lp-line);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(20, 24, 22, 0.03);
   transition: background 0.15s, border-color 0.15s;
 }
 
 .lp__nav-talk:hover {
-  background: rgba(255, 255, 255, 0.09);
-  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(20, 24, 22, 0.07);
+  border-color: rgba(20, 24, 22, 0.22);
 }
 
 .lp__nav-links a:focus-visible,
@@ -7866,25 +7881,64 @@ body {
   border-radius: 4px;
 }
 
-/* ---- stage: the overlap composition ---- */
-.lp__stage {
+/* ---- stage: centered hero + peeking widget section ---- */
+.lp__stage--centered {
   position: relative;
   z-index: 1;
-  flex: 1;
-  display: grid;
-  /* The columns intentionally overlap in the gutter: the figure ends inside
-     column 2, and the join row begins inside column 1. */
-  grid-template-columns: minmax(240px, 400px) minmax(300px, 600px);
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  align-content: center;
+}
+
+.lp__hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  /* Wider than before specifically so "The demo starts" clears onto one
+     line at the new, smaller title size — see .lp__title. */
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+  /* Kept deliberately short — everything about this hero (badge row,
+     title, sub, form) was tuned to fit well under 60vh together, so the
+     widget section always shows well over a quarter of the viewport
+     without scrolling, not just a sliver. */
+  min-height: 54vh;
   justify-content: center;
-  gap: clamp(28px, 5vw, 76px);
-  padding: clamp(20px, 4vh, 48px) clamp(20px, 5vw, 64px);
-  /* The stage is now the last thing on the page — the meta strip that used to
-     close it is gone. Its ~39px of height is added back here rather than left
-     as free space, so the composition keeps sitting where it did between the
-     nav above and the bottom edge, instead of drifting down the screen. */
-  padding-bottom: calc(clamp(20px, 4vh, 48px) + 39px);
+  /* More top padding than before — the badge sat right under the nav row
+     with nothing between them, which read as one merged block instead of
+     two separate sections of the page. */
+  padding: clamp(32px, 6vh, 56px) clamp(20px, 5vw, 64px) 24px;
+}
+
+.lp__live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 20px;
+  padding: 6px 14px 6px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--lp-line);
+  background: var(--lp-raise);
+  box-shadow: 0 1px 2px rgba(23, 20, 15, 0.04);
+}
+
+.lp__live-badge-photo {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+.lp__live-badge-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--lp-text);
 }
 
 .lp__figure {
@@ -8019,8 +8073,13 @@ body {
 
 .lp__title {
   margin: 0;
-  font-size: clamp(40px, 5.8vw, 76px);
-  line-height: 0.98;
+  /* Sized (together with .lp__hero's wider 760px max-width) so "The demo
+     starts" clears in one line and "when you do." on the next — exactly
+     two lines, not three. The original 76px max forced a third wrap; a
+     first pass down to 52px overcorrected and read as too small for a
+     hero headline — this splits the difference. */
+  font-size: clamp(36px, 4.8vw, 62px);
+  line-height: 1.08;
   font-weight: 600;
   /* Tight tracking is what separates a display setting of Inter from a
      scaled-up UI label. */
@@ -8036,19 +8095,19 @@ body {
 }
 
 .lp__sub {
-  margin: 20px 0 0;
-  max-width: 42ch;
-  font-size: clamp(14.5px, 1.15vw, 16.5px);
-  line-height: 1.55;
+  margin: 14px auto 0;
+  max-width: 46ch;
+  font-size: clamp(13.5px, 1vw, 15px);
+  line-height: 1.5;
   color: var(--lp-muted);
 }
 
-/* The signature: this row starts left of the copy column, reaching back
-   across the gutter into her frame. */
 .lp__join {
   position: relative;
   z-index: 2;
-  margin-top: 32px;
+  width: 100%;
+  max-width: 380px;
+  margin: 22px auto 0;
 }
 /* An earlier pass had this block reach left across the gutter and sit on the
    card, to physically tie "the thing that starts the call" to the person it
@@ -8064,6 +8123,37 @@ body {
   font-size: 11px;
   letter-spacing: 0.02em;
   color: rgba(138, 131, 123, 0.85);
+}
+
+/* ---- widget section: full-width slot, peeking above the fold ---- */
+.lp__widget-section {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 clamp(20px, 5vw, 64px) clamp(48px, 8vh, 96px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.lp__widget-kicker {
+  margin: 0 0 20px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--lp-muted);
+}
+
+.lp__widget-card {
+  width: 100%;
+  border-radius: 28px;
+  /* The "elevated card floating on the page" look — well past the widget's
+     own internal shell shadow, which only reads at the widget's own scale. */
+  box-shadow: 0 30px 80px -24px rgba(23, 20, 15, 0.28), 0 8px 24px -8px rgba(23, 20, 15, 0.12);
 }
 
 .lp__secondary {
@@ -8179,7 +8269,7 @@ body {
 .lp .prejoin__name input:focus {
   outline: none;
   border-color: rgba(255, 79, 0, 0.55);
-  background: #16161a;
+  background: #ffffff;
 }
 
 .lp .prejoin__name input:disabled {
@@ -8209,14 +8299,14 @@ body {
 }
 
 .lp .prejoin__join:disabled {
-  background: #26262b;
+  background: #e7e3df;
   color: var(--lp-muted);
   box-shadow: none;
   cursor: default;
 }
 
 .lp .prejoin__join:focus-visible {
-  outline: 2px solid #fff;
+  outline: 2px solid var(--lp-text);
   outline-offset: 2px;
 }
 
@@ -8243,7 +8333,7 @@ body {
 
 .lp .prejoin__field-error {
   font-size: 12.5px;
-  color: #ff7a54;
+  color: #d6431f;
 }
 
 /* The landing skin's take on the same code field. Left-aligned like every
@@ -8389,9 +8479,9 @@ body {
    in normal flow here. */
 .lp__showcase {
   position: static;
-  /* Sits above the headline now, in the eyebrow's old slot — so it holds
-     still no matter how many fields the form grows below it. */
-  margin: 0 0 20px;
+  /* Sits beside the live badge now (see .lp__badges-row), above the
+     headline — holds still no matter how many fields the form grows below. */
+  margin: 0;
   transform: none;
 }
 
@@ -8563,13 +8653,6 @@ body {
 
 .lp__showcase:active {
   transform: translateY(0) scale(0.995);
-}
-
-/* Top-aligned with the video card, which is the only other object at this
-   height. They were a few pixels out, which is exactly the kind of gap that
-   reads as sloppy without being obviously wrong. */
-.lp__showcase {
-  margin-top: 2px;
 }
 
 /* ============================================================
