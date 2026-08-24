@@ -3663,12 +3663,40 @@ class AgentRuntimeProcessor(FrameProcessor):
 
         remainder = self._paused_remainder
         self._paused_remainder = None
+
+        # Confirmed live (call 535e606c, 2026-08-24): the auto-continue cap
+        # asked "want me to carry on?" (walkthrough_awaiting_answer=True),
+        # the visitor paused before answering it, then resumed — this line
+        # spoke "picking up where we left off" and then genuinely nothing
+        # picked up, because that pending question was still latched and
+        # nothing here ever answered it. Pressing resume IS the answer: a
+        # person doesn't un-mute a call to keep sitting in silence. Same
+        # resolution _watch_auto_continue_stall already applies after 45s
+        # of nobody answering, just triggered immediately by the one signal
+        # that's actually available here (a deliberate resume) instead of a
+        # timeout.
+        session = get_session(self._visitor_id)
+        if session.walkthrough_step is not None and session.walkthrough_awaiting_answer:
+            session.walkthrough_awaiting_answer = False
+            self._consecutive_auto_beats = 0
+            logger.info(
+                f"[{self._visitor_id}] resume lifted the walkthrough's pending "
+                "floor-return latch — treating it as permission to keep going"
+            )
+
         # A short marker that the floor is coming back — the spoken
         # equivalent of looking up. Without it, audio simply reappearing
         # mid-thought is jarring.
         await self._speak("Okay — picking up where we left off.", FrameDirection.DOWNSTREAM)
         if remainder:
             await self._speak(remainder, FrameDirection.DOWNSTREAM)
+
+        # No-ops harmlessly whenever there's nothing to resume (no active
+        # walkthrough, or the latch above turned out to still be blocked for
+        # some other reason) — see _maybe_schedule_auto_continue's own
+        # guards. Only actually schedules a beat when the clear above just
+        # unblocked one.
+        self._maybe_schedule_auto_continue(session, FrameDirection.DOWNSTREAM)
 
     async def _poll_hand_raise(self) -> None:
         # This process (the voice pipeline, :7860) and the REST API (:8787)

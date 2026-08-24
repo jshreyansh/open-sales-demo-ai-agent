@@ -1239,7 +1239,12 @@ def _walkthrough_note(session: SessionState) -> str:
             + (
                 f"The exact next sub-part/stage to move into (once you're done with whatever you're "
                 f"currently on) is action \"{next_sub_action}\" — use that exact value, not one you've "
-                "already fired above.\n"
+                "already fired above. Note this list runs across two levels at once — outer stages "
+                "(Source/Brief/Script/Scenes/Generate) and, inside Source and Brief specifically, that "
+                "stage's own inner sub-parts — but you don't need to work out which level you're on: "
+                "the value above already accounts for both, so \"continue\"/\"next\" always means exactly "
+                "that value, whether it keeps you inside the current stage or moves you into the next "
+                "one. Don't second-guess it against your own sense of where you are.\n"
                 if next_sub_action
                 else ""
             )
@@ -1525,6 +1530,10 @@ def _begin_turn(session: SessionState, message: str) -> None:
             f"{session.pending_walkthrough_request} walkthrough request heard: {message[:60]!r}"
         )
 
+    # Same backstop shape, for pricing (see SessionState.pending_pricing_request
+    # and _pricing_backstop_action).
+    session.pending_pricing_request = bool(_PRICING_INTENT.search(message or ""))
+
     # Deterministic escape from a user-requested stop.
     #
     # Done HERE rather than in _finalize_turn on purpose: this function runs
@@ -1636,6 +1645,47 @@ def _explicit_walkthrough_request(text: str) -> Optional[str]:
     if named_module and _MODULE_ONLY_REQUEST.search(text):
         return named_module
     return None
+
+
+# Pricing/cost intent, for _pricing_backstop_action below. "plan"/"plans" is
+# the one risky word on the prospect's own list (requested keywords: pricing,
+# commercials, plans, subscription, money, cost) — "content plan", "plan to
+# migrate", "plan for Q3" are all common and have nothing to do with cost, so
+# a bare "plan(s)" only counts here when it ISN'T immediately followed by a
+# verb-ish word that means "intend to" (to/for/on). Every other word in the
+# list is unambiguous enough to match on its own.
+_PRICING_INTENT = re.compile(
+    r"\b(?:pricing|commercials?|subscriptions?|costs?|prices?|money)\b"
+    r"|\bplans?\b(?!\s+(?:to|for|on)\b)",
+    re.IGNORECASE,
+)
+
+
+def _pricing_backstop_action(session: SessionState) -> Optional[dict]:
+    """Forces the Plans page open when the prospect's own words matched
+    pricing intent this turn (SessionState.pending_pricing_request, set by
+    _begin_turn from _PRICING_INTENT) and the model chose not to navigate
+    anywhere at all.
+
+    Confirmed live (call 535e606c, 2026-08-24): a specific, detailed pricing
+    question ("what's the pricing... 15 licenses... discount for tenure")
+    got action: None — a purely verbal answer — while a vaguer later ask
+    ("what are the pricing plans") happened to trigger navigation to the
+    same Plans page. Same intent, inconsistent result, entirely at the
+    model's discretion; nothing in the system prompt actually tells it
+    pricing words should also open the page (existing instructions treat
+    cost follow-ups as "explain from knowledge," navigation never enters
+    it). Same shape as _explicit_walkthrough_request's backstop: the
+    model's own choice to navigate somewhere else always wins — this only
+    fills the gap when it chose nothing, and only once (skipped if they're
+    already looking at the Plans page from a prior turn, so a multi-turn
+    pricing conversation doesn't re-fire the same navigation every turn).
+    """
+    if not session.pending_pricing_request:
+        return None
+    if session.current_page == "settings-plans":
+        return None
+    return {"page": "settings-plans", "component": "plans", "method": "highlight"}
 
 
 # Narration that commits to CARRYING ON — the tour resuming, not starting.
@@ -2509,6 +2559,8 @@ def run_turn(message: str, session: SessionState) -> AgentResult:
             result["action"], corrected = _enforce_step_order(session, result.get("action"))
             if corrected:
                 result["_reply_needs_backfill"] = True
+            if not result.get("action"):
+                result["action"] = _pricing_backstop_action(session)
             result = _maybe_backfill_reply_sync(result, session)
         except Exception:
             logger.exception("LLM call failed, falling back to keyword matcher")
@@ -2784,6 +2836,7 @@ async def _stream_with_claude(message: str, session: SessionState, user_content:
                 not action_extractor.key_seen or action_extractor.closed
             ):
                 lead_in_and_action_handled = True
+                action_fired = False
                 if action_extractor.value:
                     try:
                         action_dict = json.loads(action_extractor.value)
@@ -2795,12 +2848,25 @@ async def _stream_with_claude(message: str, session: SessionState, user_content:
                         action_dict, order_corrected_this_turn = _enforce_step_order(session, action_dict)
                         yield ("lead_in", lead_in_extractor.value)
                         yield ("action", action_dict)
+                        action_fired = True
                     # An action span that parsed but failed validation (even
                     # after _repair_action's best-effort recovery), or didn't
                     # parse at all, is treated as "no action" for streaming
                     # purposes too -- _parse_tool_result applies the exact
                     # same repair to the authoritative result, so the two can
                     # never disagree on whether (or how) an action fires.
+                if not action_fired:
+                    # Only reachable once "no action this turn" is a
+                    # confirmed fact (lead_in closed AND action either never
+                    # appeared or is fully parsed above) -- never fires while
+                    # the model might still produce one later in the stream.
+                    # No matching lead_in: this fires silently alongside
+                    # whatever reply the model already streams, the same
+                    # way the walkthrough-activation backstop doesn't touch
+                    # the reply either.
+                    backstop_action = _pricing_backstop_action(session)
+                    if backstop_action:
+                        yield ("action", backstop_action)
 
             # Safe to start streaming reply's own text only once we know
             # for certain nothing needs to be said before it: either there's
@@ -2828,6 +2894,14 @@ async def _stream_with_claude(message: str, session: SessionState, user_content:
     result["action"], order_corrected_this_turn = _enforce_step_order(session, result.get("action"))
     if order_corrected_this_turn:
         result["_reply_needs_backfill"] = True
+    if not result.get("action"):
+        # Covers the done_fallback path (nothing streamed live, so this is
+        # the one copy of `action` that ever gets reported) -- the
+        # incremental yield above already covers the streamed-live path, and
+        # the two can't double-fire: any reply text streaming live already
+        # marks this turn "already spoken," which is what skips the fallback
+        # branch that would otherwise re-report this same action again.
+        result["action"] = _pricing_backstop_action(session)
     result = await _maybe_backfill_reply(result, session)
 
     # Only trust that reply's incremental text was genuinely fully spoken

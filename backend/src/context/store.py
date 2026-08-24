@@ -159,6 +159,15 @@ class SessionState:
     # backstop for the model failing to set start_walkthrough itself. Never
     # persisted — it describes one turn, not the session.
     pending_walkthrough_request: Optional[str] = None
+    # Same "backstop, cleared every turn" shape as pending_walkthrough_request
+    # above, for a different gap: a prospect's own words plainly asking about
+    # pricing/cost/commercials/subscription/money don't reliably get the
+    # Plans page opened (see runtime.py's _PRICING_INTENT / _begin_turn /
+    # _pricing_backstop_action) — confirmed live (call 535e606c) with the
+    # SAME wording pattern getting navigation on one ask and not the next.
+    # Set by _begin_turn from the raw message, consumed in _stream_with_claude
+    # / _select_with_claude only if the model chose no action itself.
+    pending_pricing_request: bool = False
     # None means the active walkthrough (if any) runs the full 10-step
     # platform tour, ending naturally at step 10 — today's original
     # behavior, unchanged. A concrete step number means this is a
