@@ -7,6 +7,11 @@ import { connectVoice } from "./pipecatClient";
 
 const visitorId = getVisitorId();
 
+// How long isAgentNavigating stays true with no BotStartedSpeaking to clear
+// it early — a defensive ceiling for the rare action-with-no-lead-in case,
+// not the normal path (see isAgentNavigating's own comment below).
+const NAVIGATING_HOLD_MS = 2500;
+
 /**
  * The one place that drives the shared PipecatClient — used independently by
  * ChatWidget (Product Mode's on-demand Talk toggle) and MeetingShell
@@ -38,6 +43,17 @@ export function useVoiceSession(
   // (or immediately if the visitor starts talking again first, since
   // there's nothing left to "think about" once they've moved on).
   const [isAgentThinking, setIsAgentThinking] = useState(false);
+  // True right when a UI action (a page navigation/highlight) arrives from
+  // the poll below, until she actually starts speaking about it (or, as a
+  // safety net, NAVIGATING_HOLD_MS passes with no speech at all — an action
+  // with no accompanying lead-in is rare but not impossible). Actions and
+  // their lead-in almost always land within the same beat, so this is
+  // usually a brief flash before Speaking (which outranks it — see
+  // MeetingShell's status-badge priority) takes over, but it's exactly the
+  // beat where "she just went quiet" would otherwise read as her doing
+  // nothing rather than actually driving the screen.
+  const [isAgentNavigating, setIsAgentNavigating] = useState(false);
+  const navigatingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useRTVIClientEvent(RTVIEvent.UserStartedSpeaking, useCallback(() => {
     setIsUserSpeaking(true);
@@ -50,8 +66,15 @@ export function useVoiceSession(
   useRTVIClientEvent(RTVIEvent.BotStartedSpeaking, useCallback(() => {
     setIsAgentSpeaking(true);
     setIsAgentThinking(false);
+    setIsAgentNavigating(false);
   }, []));
   useRTVIClientEvent(RTVIEvent.BotStoppedSpeaking, useCallback(() => setIsAgentSpeaking(false), []));
+
+  useEffect(() => {
+    return () => {
+      if (navigatingTimeoutRef.current) clearTimeout(navigatingTimeoutRef.current);
+    };
+  }, []);
 
   /**
    * Returns false if someone else is already on the line (see
@@ -96,7 +119,12 @@ export function useVoiceSession(
         onReplyRef.current ? getVoiceReply(visitorId).catch(() => null) : Promise.resolve(null),
       ]);
       if (reply) onReplyRef.current?.(reply.text, reply.source);
-      if (action) onActionRef.current(action);
+      if (action) {
+        setIsAgentNavigating(true);
+        if (navigatingTimeoutRef.current) clearTimeout(navigatingTimeoutRef.current);
+        navigatingTimeoutRef.current = setTimeout(() => setIsAgentNavigating(false), NAVIGATING_HOLD_MS);
+        onActionRef.current(action);
+      }
     }, 800);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -113,5 +141,6 @@ export function useVoiceSession(
     isUserSpeaking,
     isAgentSpeaking,
     isAgentThinking,
+    isAgentNavigating,
   };
 }

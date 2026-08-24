@@ -2782,10 +2782,22 @@ body {
   50%      { opacity: 1; }
 }
 
+/* A fourth, distinct family (blue, not green or amber) — this is neither
+   audio flowing nor idle composition, it's her actively driving the shared
+   screen, and it needs its own color so it doesn't read as a variant of
+   either of those. */
+.meet__status-badge--navigating {
+  color: #8ab4f8;
+  background: rgba(20, 40, 70, 0.6);
+  box-shadow: 0 0 0 1px rgba(138, 180, 248, 0.45);
+  animation: meet-status-thinking 1.4s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .meet__status-badge--live,
   .meet__status-badge--listening,
-  .meet__status-badge--thinking { animation: none; }
+  .meet__status-badge--thinking,
+  .meet__status-badge--navigating { animation: none; }
 }
 
 /* Unread in-call messages. Sits on the chat control's top-right, the
@@ -2905,6 +2917,38 @@ body {
   height: 76px;
   font-size: 27px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35), 0 0 0 2px rgba(138, 180, 248, 0.3);
+}
+
+/* The agent's own tile: her photo fills the whole tile instead of sitting
+   in a small circle in the middle — everyone already knows she's an agent,
+   so a face that's actually visible does more for the call feeling like
+   talking to someone than a name badge floating in empty space does.
+   useReportedAudioLevelRing's box-shadow lands directly on this element
+   (see MeetingShell.tsx) — box-shadow paints outside an element's own
+   border box regardless of ITS OWN overflow, so it still traces cleanly
+   along the tile's rounded corner instead of being clipped by
+   .meet__tile's overflow: hidden the way it would if this had any inset. */
+.meet__agent-photo {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center 20%;
+}
+
+/* Bottom-up scrim so the name label (and, on some photos, the status badge
+   up top) stay legible over a real photo instead of only a flat gradient —
+   a photo has bright/busy regions a plain text-shadow doesn't reliably
+   beat the way it did against the old solid-color tile background. */
+.meet__tile-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.55) 0%,
+    rgba(0, 0, 0, 0.15) 35%,
+    rgba(0, 0, 0, 0) 60%
+  );
+  pointer-events: none;
 }
 
 /* ---- Meeting Mode: in-call chat panel ---- */

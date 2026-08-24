@@ -14,7 +14,7 @@ import ShowcaseMedal from "./ShowcaseMedal";
 import PreJoinScreen from "./PreJoinScreen";
 import MeetingChatPanel, { type MeetingChatMessage } from "./MeetingChatPanel";
 import ExampleGalleryPanel from "./ExampleGalleryPanel";
-import { AGENT_NAME, AGENT_INITIAL, AGENT_PHOTO } from "../lib/persona";
+import { AGENT_NAME, AGENT_PHOTO } from "../lib/persona";
 import { playJoinSound, playMessageSound, primeSounds } from "../lib/sounds";
 
 const visitorId = getVisitorId();
@@ -238,7 +238,7 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
     // would keep counting even with the panel open.
     if (!chatOpenRef.current) setUnreadChat((n) => n + 1);
   }, []);
-  const { voiceConnected, isMicEnabled, enableMic, connect, mute, isUserSpeaking, isAgentSpeaking, isAgentThinking } = useVoiceSession(handleAgentAction, handleChatReply);
+  const { voiceConnected, isMicEnabled, enableMic, connect, mute, isUserSpeaking, isAgentSpeaking, isAgentThinking, isAgentNavigating } = useVoiceSession(handleAgentAction, handleChatReply);
 
   function handleSendChat(text: string) {
     setChatMessages((prev) => [...prev, { id: nextChatMsgId(), role: "user", text }]);
@@ -522,29 +522,53 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
                 open from zero width when she arrives, and a mount would snap
                 instead. aria-hidden while she isn't in the room yet. */}
             <div className="meet__tile meet__tile--agent" data-flip-id="agent" aria-hidden={!agentJoined}>
-                {/* Three mutually-exclusive states, icon plus a word — "is it
-                    hearing me right now?" is the question people actually
-                    ask of a voice agent, and the icon alone (a static ear or
-                    mic) never answered it as plainly as a label next to it
-                    does. Speaking takes priority (it's the most certain
-                    signal), then thinking (the gap between the visitor
-                    finishing and her own audio starting — turn commit +
-                    generation, real work with nothing audible yet), then
-                    listening as the resting state whenever the mic is live. */}
+                {/* Four mutually-exclusive states, icon plus a word — "is it
+                    hearing me right now, or doing something else?" is the
+                    question people actually ask of a voice agent, and the
+                    icon alone never answered it as plainly as a label next
+                    to it does. Priority order is deliberate: Speaking is the
+                    most certain signal, so it always wins even if an action
+                    just fired in the same beat (Navigating would otherwise
+                    flash and immediately get replaced, reading as a glitch).
+                    Navigating (a page/highlight action just arrived — see
+                    isAgentNavigating) outranks Thinking because it's a more
+                    specific, more useful answer to "why isn't she talking"
+                    for that exact beat. Listening requires real detected
+                    speech now (isUserSpeaking, VAD-driven), not just "mic is
+                    on" — the old condition showed Listening through actual
+                    silence, which is the thing this was built to fix. */}
                 {isAgentSpeaking ? (
                   <span className="meet__status-badge meet__status-badge--live" title={`${AGENT_NAME} is speaking`}>
                     <MeetIcon name="mic" size={13} /> Speaking
+                  </span>
+                ) : isAgentNavigating ? (
+                  <span className="meet__status-badge meet__status-badge--navigating" title={`${AGENT_NAME} is pulling that up`}>
+                    <MeetIcon name="screen-share" size={13} /> Navigating
                   </span>
                 ) : isAgentThinking ? (
                   <span className="meet__status-badge meet__status-badge--thinking" title={`${AGENT_NAME} is thinking`}>
                     <MeetIcon name="dots" size={13} /> Thinking
                   </span>
-                ) : isMicEnabled ? (
+                ) : isUserSpeaking ? (
                   <span className="meet__status-badge meet__status-badge--listening" title={`${AGENT_NAME} is listening`}>
                     <MeetIcon name="ear" size={13} /> Listening
                   </span>
                 ) : null}
-                <TileAvatar ringRef={agentRingRef} photo={AGENT_PHOTO} letter={AGENT_INITIAL} avatarClassName="meet__avatar--tile meet__avatar--agent" />
+                {/* Full-bleed, not a small circle in the middle of the tile —
+                    everyone already knows this is an agent; a face that's
+                    actually visible does more for making the call feel like
+                    talking to someone than a name badge does. The audio-level
+                    ring (agentRingRef) moves from the old circular avatar
+                    onto this element directly — its box-shadow glow paints
+                    OUTSIDE the border box regardless of this element's own
+                    overflow, so it still traces cleanly along the tile's
+                    rounded edge instead of being clipped. */}
+                <div
+                  className="meet__agent-photo"
+                  ref={agentRingRef}
+                  style={{ backgroundImage: `url(${AGENT_PHOTO})` }}
+                />
+                <div className="meet__tile-scrim" aria-hidden="true" />
                 <div className="meet__tile-label">{AGENT_NAME}</div>
             </div>
           </div>
