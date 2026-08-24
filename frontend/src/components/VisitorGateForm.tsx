@@ -8,6 +8,12 @@ interface VisitorGateFormProps {
   path: "dashboard" | "meet";
   submitLabel: string;
   submittingLabel?: string;
+  // The email step's own button — separate from submitLabel (the FINAL
+  // step's button) since the two consumers of this form want different
+  // wording here: the dashboard gate's plain "Continue" default stays
+  // untouched, Meeting Mode overrides it to match its own "join a live
+  // call" framing.
+  continueLabel?: string;
   onGated: (profile: VisitorProfile) => void;
   // Already known this tab (see session.ts's getVisitorProfile) — e.g. the
   // visitor gated on /demo/dashboard earlier and is now reaching /demo/meet
@@ -57,7 +63,7 @@ const CODE_LENGTH = 6;
 // /api/visitor/lookup) never has to retype their name/company, matching what
 // was asked for; a new visitor sees those fields only once their email has
 // actually cleared validation.
-export default function VisitorGateForm({ visitorId, path, submitLabel, submittingLabel, onGated, initialProfile }: VisitorGateFormProps) {
+export default function VisitorGateForm({ visitorId, path, submitLabel, submittingLabel, continueLabel = "Continue", onGated, initialProfile }: VisitorGateFormProps) {
   const [step, setStep] = useState<Step>(initialProfile ? "known" : "email");
   const [email, setEmail] = useState(initialProfile?.email ?? "");
   const [emailError, setEmailError] = useState<string | null>(null);
@@ -214,9 +220,13 @@ export default function VisitorGateForm({ visitorId, path, submitLabel, submitti
     return (
       <div className="prejoin__fields">
         <div className="prejoin__name">
-          <label htmlFor="gate-email">Work email</label>
+          {/* Placeholder already says "you@company.com" — a visible label
+              saying the same thing ("Work email") right above it was pure
+              duplication. Kept accessible via aria-label instead of just
+              deleting the association outright. */}
           <input
             id="gate-email"
+            aria-label="Work email"
             type="email"
             placeholder="you@company.com"
             value={email}
@@ -232,7 +242,7 @@ export default function VisitorGateForm({ visitorId, path, submitLabel, submitti
           {emailError && <div className="prejoin__field-error">{emailError}</div>}
         </div>
         <button type="button" className="prejoin__join" disabled={!email.trim() || checking} onClick={() => void handleEmailSubmit()}>
-          {checking ? "Sending code…" : "Continue"}
+          {checking ? "Sending code…" : continueLabel}
         </button>
       </div>
     );

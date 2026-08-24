@@ -131,29 +131,30 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
               {persona.name} is live now
             </span>
           </div>
-          {/* The build lands on the second line: the whole proposition is that
-              nothing has to be arranged first. */}
+          {/* "Right now" lands bold on its own line — that's the actual
+              claim being made, not just a tagline; a visitor's first
+              instinct on seeing "live demo" is to assume it means "book a
+              slot," so the payoff line has to say otherwise immediately. */}
           <h1 className="lp__title">
-            <span className="lp__title-soft">The demo starts</span>
+            <span className="lp__title-soft">Experience SwishX Live,</span>
             <br />
-            when you do.
+            Right Now.
           </h1>
-          {/* Names Fiona explicitly now that the live badge above already
-              does — the earlier "no persona name" rule made sense when
-              nothing else on the page said who she was; it no longer holds
-              once the badge is the first thing anyone reads. Also states
-              "video call" outright, since that's the actual format the join
-              button starts, not just an abstract "demo." */}
+          {/* Directly answers the doubt this copy is built to kill: that
+              clicking through doesn't actually connect you to a live AI
+              agent instantly, any hour — "skip the scheduling cycle" and
+              "24/7" say that outright instead of leaving it implied by the
+              live badge alone. */}
           <p className="lp__sub">
-            Pharma-ready video, avatars and infographics.
-            <br />
-            Join a live video call with Fiona and watch it get built in real time.
+            Skip the scheduling cycle. Join an instant, 24/7 interactive demo
+            with our AI agent to watch pharma-ready content get built in real time.
           </p>
 
           <div className="lp__join">
             <VisitorGateForm
               visitorId={getVisitorId()}
               path="meet"
+              continueLabel="Join Live Demo"
               submitLabel="Join the video call"
               submittingLabel="Connecting…"
               onGated={handleGated}
