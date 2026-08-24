@@ -262,15 +262,17 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
     ),
     WalkthroughStep(
         index=12,
-        title="Settings — Integrations",
+        title="Settings — Integrations & Plug-ins",
         action={"page": "settings-integrations", "component": "integrations", "method": "highlight"},
         guidance=(
-            "A quick beat — land on Settings > Integrations and mention it connects into what "
-            "they're already running (Veeva Vault PromoMats for MLR routing, Indegene Cortex for "
-            "content supply chain). Just this one tab — don't tour Account, Billing, or Plans here; "
-            "if pricing comes up they can ask and you'll pull up Plans separately."
+            "A quick beat — land on Settings > Integrations & Plug-ins and mention it connects into "
+            "what they're already running (Veeva Vault PromoMats for MLR routing, Indegene Cortex for "
+            "content supply chain) plus Microsoft Teams for approval notifications and Microsoft "
+            "Suite for pulling in OneDrive/Office files. Just this one tab — don't tour Account, "
+            "Billing, or Plans here; if pricing comes up they can ask and you'll pull up Plans "
+            "separately."
         ),
-        max_words=28,
+        max_words=32,
     ),
     WalkthroughStep(
         index=13,

@@ -463,16 +463,19 @@ UI_REGISTRY: List[RegistryPage] = [
     ),
     RegistryPage(
         id="settings-integrations",
-        label="Settings — Integrations",
+        label="Settings — Integrations & Plug-ins",
         components=[
             RegistryComponent(
                 id="integrations",
-                label="Integrations tab",
+                label="Integrations & Plug-ins tab",
                 description=(
-                    "Connected systems — Veeva Vault PromoMats (MLR routing) and Indegene Cortex "
-                    "(content supply chain / medical writing) — with decorative connect/disconnect toggles."
+                    "Connected systems — Veeva Vault PromoMats (MLR routing), Indegene Cortex "
+                    "(content supply chain / medical writing), Microsoft Teams (sends a message to "
+                    "the right channel/chat the moment an MLR approval, review, or other content "
+                    "activity happens), and Microsoft Suite (brings OneDrive, PowerPoint, Word, and "
+                    "Excel files in as source material) — with decorative connect/disconnect toggles."
                 ),
-                actions=[RegistryAction(id="highlight", description="Switch Settings to the Integrations tab")],
+                actions=[RegistryAction(id="highlight", description="Switch Settings to the Integrations & Plug-ins tab")],
             ),
         ],
     ),

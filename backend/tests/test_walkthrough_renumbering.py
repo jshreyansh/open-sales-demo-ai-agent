@@ -38,7 +38,7 @@ def test_expected_titles_at_expected_positions():
         9: "MagicAvatar flow",
         10: "MLR tab",
         11: "Content Library",
-        12: "Settings — Integrations",
+        12: "Settings — Integrations & Plug-ins",
         13: "Home wrap-up",
     }
     for index, title in expected.items():

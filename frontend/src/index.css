@@ -658,6 +658,20 @@ body {
   margin-top: 4px;
 }
 
+/* Grid items default to min-width: auto, which lets a long unbroken value
+   (e.g. "amlodipine + telmisartan") force its column wider than its 1fr
+   share instead of wrapping — the column then overflows the card, and
+   .dossier-document's own overflow: hidden clips it mid-word instead of
+   the text ever reaching a second line. min-width: 0 lets the column
+   actually shrink to its 1fr share so the text wraps inside it instead. */
+.dossier-document__fields > div {
+  min-width: 0;
+}
+
+.dossier-document__fields p {
+  overflow-wrap: break-word;
+}
+
 .dossier-document__section {
   padding: 20px 28px;
   border-bottom: 1px solid var(--border);
@@ -864,9 +878,17 @@ body {
 
 /* ---- Settings: integrations ---- */
 
+/* Was a fixed 44x44 square — fine for the square Microsoft icon marks, but
+   Veeva's and Indegene's real logos are wide wordmarks (2.5:1 and 3.3:1),
+   so object-fit: contain inside a square shrank them down to an
+   unreadable sliver with mostly empty space around it. Fixed height +
+   flexible width (capped) lets each logo size to its own natural aspect
+   ratio instead of being forced into a shape it was never designed for. */
 .integration-card__logo {
-  width: 44px;
-  height: 44px;
+  height: 40px;
+  min-width: 40px;
+  max-width: 108px;
+  padding: 0 8px;
   border-radius: 8px;
   border: 1px solid var(--border);
   display: flex;
@@ -878,10 +900,10 @@ body {
 }
 
 .integration-card__logo img {
-  width: 100%;
   height: 100%;
+  width: auto;
+  max-width: 100%;
   object-fit: contain;
-  padding: 4px;
 }
 
 .integration-card__footer {

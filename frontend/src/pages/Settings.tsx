@@ -5,7 +5,7 @@ type SettingsTab = "account" | "integrations" | "billing" | "plans";
 
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: "account", label: "Account" },
-  { id: "integrations", label: "Integrations" },
+  { id: "integrations", label: "Integrations & Plug-ins" },
   { id: "billing", label: "Billing & credits" },
   { id: "plans", label: "Plans" },
 ];
@@ -90,6 +90,20 @@ const INTEGRATIONS: Integration[] = [
     description: "Indegene's enterprise generative-AI platform for life sciences — content supply chain, MLR acceleration, and medical writing workflows.",
     logo: "/logos/indegene.jpg",
     connected: true,
+  },
+  {
+    id: "microsoft-teams",
+    name: "Microsoft Teams",
+    description: "Sends a message to the right channel or chat the moment an MLR approval, review, or other content activity happens — so reviewers hear about it where they already work.",
+    logo: "/logos/microsoft-teams.svg",
+    connected: true,
+  },
+  {
+    id: "microsoft-suite",
+    name: "Microsoft Suite",
+    description: "Brings your OneDrive files, PowerPoint decks, Word docs, and Excel sheets straight into the platform as source material — no exporting and re-uploading.",
+    logo: "/logos/microsoft-365.svg",
+    connected: false,
   },
 ];
 
