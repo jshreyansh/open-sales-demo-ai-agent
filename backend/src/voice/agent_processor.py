@@ -2019,6 +2019,24 @@ class AgentRuntimeProcessor(FrameProcessor):
                     f"{self._auto_beat_budget} -> {grown}"
                 )
             self._auto_beat_budget = grown
+            # Deterministic mirror of _begin_turn's walkthrough_user_stopped/
+            # _is_explicit_resume backstop in runtime.py, for the OTHER latch:
+            # walkthrough_awaiting_answer is "resume_walkthrough"-only by
+            # design (runtime.py's _finalize_turn), and the model doesn't
+            # reliably re-emit that field on the same turn it correctly
+            # answers "keep going" with real content — confirmed live: it
+            # answered the cap's own "should I continue?" checkpoint,
+            # narrated the next stage's content, and still never re-sent
+            # "resume_walkthrough", so _maybe_schedule_auto_continue stayed
+            # blocked for the next 16s of dead air until the 45s watchdog
+            # eventually force-cleared it. This code already computed the
+            # one signal that's ground truth for "they just told the ASKED
+            # question yes" (`asked` above came from the exact "should I
+            # continue?" prompt this latch exists to answer) — clearing it
+            # here removes the dependency on the model re-stating something
+            # the code itself already knows.
+            if session.walkthrough_awaiting_answer:
+                session.walkthrough_awaiting_answer = False
         elif _is_acknowledgement(text):
             # HOLD. A nod is neither permission nor a bid for the floor, and
             # resetting on it is what made the growth above useless: the budget
@@ -2995,7 +3013,30 @@ class AgentRuntimeProcessor(FrameProcessor):
         # then poisoned every later turn's context. `history=list(...)`
         # gives the clone its own list object so appends to it never touch
         # the real session's history.
-        session_clone = dataclasses.replace(session, history=list(session.history))
+        #
+        # walkthrough_fired_actions needs the exact same treatment and,
+        # until now, wasn't getting it: dataclasses.replace() only
+        # shallow-copies fields it isn't told to override, so the clone's
+        # `walkthrough_fired_actions` was literally the same set object as
+        # session's. _finalize_turn (run via run_walkthrough_continuation
+        # below) adds the sub-action it just computed to that set the
+        # instant it's decided — before the beat is ever spoken — so a
+        # prefetched-but-never-consumed beat (the auto-continue cap hits
+        # first, or a barge-in lands) permanently marked its sub-action as
+        # "fired" on the REAL session. Confirmed live: select-source-custom
+        # got prefetched right as select-source-news finished, the beat cap
+        # hit before it was consumed, and the tour later skipped straight
+        # from select-source-news to step-brief with no order-violation
+        # warning, because _enforce_step_order's own remaining-actions check
+        # correctly (from its view) saw select-source-custom as already
+        # done. Every mutable-container field SessionState gains needs its
+        # own copy here, the same way history already does — a plain
+        # dataclasses.replace() is only safe for the scalar fields.
+        session_clone = dataclasses.replace(
+            session,
+            history=list(session.history),
+            walkthrough_fired_actions=set(session.walkthrough_fired_actions),
+        )
         self._prefetch_session_clone = session_clone
         self._prefetch_task = asyncio.create_task(self._drain_prefetch(session_clone))
 
