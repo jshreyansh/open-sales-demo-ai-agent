@@ -35,7 +35,7 @@ class WalkthroughStep:
 class SubBeat:
     """One sub-stage inside the MagicReel/MagicAvatar studio flows.
 
-    Steps 6 and 7 each cover a whole wizard (13 and 6 sub-actions), and their
+    Steps 8 and 9 each cover a whole wizard (13 and 6 sub-actions), and their
     step.guidance used to be a single 434-word / 192-word block describing
     ALL of them — re-sent to the model on EVERY turn of that step. Having the
     entire flow in front of it on turn one is why it narrated the entire flow
@@ -100,7 +100,11 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
             "stop either (no \"let's start on the home page\" or \"I'll walk you through the "
             "home page first\") since nothing here actually gets toured or explained beyond this "
             "overview; Home's own explicit, deliberate visit is step 13's wrap-up, not "
-            "this one. Just give the overview and move straight into the tour."
+            "this one. If you preview where the tour is headed, the real next stop is Brand "
+            "Dossiers (step 2), NOT Content Studio — Content Studio is real but it's step 4, "
+            "several stops later; don't say \"I'll start with Content Studio\" or similar, "
+            "that's the OLD tour order and is wrong now. Safest is to not name a specific "
+            "destination at all here and just move straight into the tour."
         ),
     ),
     WalkthroughStep(
@@ -320,6 +324,22 @@ STEP_SUB_ACTIONS = {
         "step-generate",
         "start-generation",
     ],
+}
+
+# The (page, component) every sub-action in STEP_SUB_ACTIONS actually lives
+# on — NOT the same as WALKTHROUGH_STEPS_BY_INDEX[step].action, which is
+# only the step's own LANDING action (step 9's is
+# {"page": "magicavatar-studio", "component": "launchpad", ...}; its
+# sub-actions target component "wizard" instead, same page). Read by
+# runtime.py's _enforce_step_order so a corrected sub-action always lands on
+# the right page too, not just the right method — see that function's own
+# comment for the real call this was missing on (session 66da2724): the
+# model proposed a MagicAvatar (step 9) sub-action while still naming
+# "magicreel-studio" as the page, and the correction only fixed the method,
+# producing a page+method combination that pointed at nothing real.
+WIZARD_PAGE_BY_STEP: dict[int, tuple[str, str]] = {
+    8: ("magicreel-studio", "wizard"),
+    9: ("magicavatar-studio", "wizard"),
 }
 
 

@@ -112,3 +112,14 @@ def test_sub_beat_for_known_and_unknown_actions():
     assert sub_beat_for("select-source-dossier") is not None
     assert sub_beat_for("not-a-real-action") is None
     assert sub_beat_for(None) is None
+
+
+def test_overview_guidance_names_brand_dossiers_not_content_studio():
+    """Regression for session 66da2724: the model said "I'll start with the
+    Content Studio" in its overview reply — true under the OLD 9-step order
+    (Content Studio was step 2) but wrong now that Brand Dossiers goes
+    first. The overview guidance must say so explicitly rather than let the
+    model infer it from PRODUCT_OVERVIEW's own emphasis on Content Studio."""
+    overview = WALKTHROUGH_STEPS_BY_INDEX[1].guidance
+    assert "Brand Dossiers" in overview
+    assert "Content Studio" in overview  # named specifically as NOT first

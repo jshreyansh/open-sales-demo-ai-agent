@@ -14,7 +14,12 @@ from ..context.store import SessionState, HistoryEntry
 from ..data import gate_log
 from ..persona import AGENT_LOCATION, AGENT_NAME, AGENT_TIMEZONE
 from .registry import PRODUCT_OVERVIEW, UI_REGISTRY, flatten_registry, FlatAction
-from .walkthrough import STEP_SUB_ACTIONS, WALKTHROUGH_STEPS_BY_INDEX, sub_beat_for
+from .walkthrough import (
+    STEP_SUB_ACTIONS,
+    WALKTHROUGH_STEPS_BY_INDEX,
+    WIZARD_PAGE_BY_STEP,
+    sub_beat_for,
+)
 
 
 def _load_knowledge() -> str:
@@ -1243,7 +1248,7 @@ def _walkthrough_note(session: SessionState) -> str:
         else ""
     )
     # Only the beat actually being performed is shown, not the whole flow.
-    # Steps 6 and 7 each cover an entire wizard, and sending all of it every
+    # Steps 8 and 9 each cover an entire wizard, and sending all of it every
     # turn is what produced the monologues: the model narrated everything it
     # could see, which was everything. See walkthrough.py's SubBeat docstring
     # for the measured before/after.
@@ -1675,7 +1680,7 @@ def _reply_hands_over_the_floor(text: str) -> bool:
 def _sub_actions_remaining(session: SessionState, step) -> list:
     """Sub-actions of `step` that haven't fired yet this run.
 
-    Steps 6 and 7 hold one walkthrough_step value while their internal
+    Steps 8 and 9 hold one walkthrough_step value while their internal
     wizard walks a scripted list (STEP_SUB_ACTIONS); walkthrough_fired_actions
     is the ground truth for which of those have actually happened. Every
     other step has no sub-list, so nothing is ever outstanding for it.
@@ -1699,12 +1704,17 @@ def _enforce_step_order(session: SessionState, action: Optional[dict]) -> tuple[
     enforcement — a model could (and, live, did) skip step-brief entirely
     for MagicAvatar and fire step-generate before step-options.
 
-    Returns (possibly-corrected action, was_corrected). Only ever touches
-    the "method" field, and only when session.walkthrough_step is 6 or 7
-    AND the proposed method is actually one of that step's own sub-actions
-    — an action for something else entirely (a different page, a top-level
-    registry action) is out of scope for this invariant and passes through
-    untouched. When corrected, the caller is responsible for suppressing
+    Returns (possibly-corrected action, was_corrected). Corrects "method",
+    and — since session 66da2724 — "page"/"component" too: the model can
+    propose a sub-action name that's legal for the CURRENT step while still
+    naming the OTHER wizard's page (MagicReel/MagicAvatar share the same
+    sub-action vocabulary shape — step-brief, step-generate, etc. — which is
+    exactly the confusion this closes). Only applies when
+    session.walkthrough_step is 8 or 9 AND the proposed method is actually
+    one of that step's own sub-actions — an action for something else
+    entirely (a different registry action with no sub-action name overlap)
+    is out of scope for this invariant and passes through untouched. When
+    corrected, the caller is responsible for suppressing
     whatever reply text the model composed against the wrong action and
     regenerating it against the corrected one (see _stream_with_claude and
     run_turn) — this function only ever decides the action, never the
@@ -1742,6 +1752,14 @@ def _enforce_step_order(session: SessionState, action: Optional[dict]) -> tuple[
     )
     corrected = dict(action)
     corrected["method"] = legal_next
+    wizard_page = WIZARD_PAGE_BY_STEP.get(step_idx)
+    if wizard_page and (corrected.get("page"), corrected.get("component")) != wizard_page:
+        logger.warning(
+            f"[{session.visitor_id}] walkthrough order violation ALSO named the wrong "
+            f"page/component ({corrected.get('page')!r}/{corrected.get('component')!r}) for "
+            f"step {step_idx} — correcting to {wizard_page!r} too"
+        )
+        corrected["page"], corrected["component"] = wizard_page
     return corrected, True
 
 
@@ -1870,7 +1888,7 @@ def _finalize_turn(
     # guidance's own "move into step 9 on the turn AFTER that, not the same
     # one"). Confirmed live TWICE, two different ways the model expressed
     # "done" in the same breath as firing the render: once via
-    # walkthrough_step advancing past 6/7 (full platform tour), once via
+    # walkthrough_step advancing past 8/9 (full platform tour), once via
     # end_walkthrough=True (a module-scoped tour, where "done with this
     # step" correctly means "done with the whole scoped run" instead of a
     # numbered next step — but still happened before the result was ever
@@ -1914,7 +1932,7 @@ def _finalize_turn(
     # would silently SKIP steps. That failure is worse than the one being
     # fixed, and invisible.
     #
-    # Steps 6 and 7 are excluded: they hold one walkthrough_step value for
+    # Steps 8 and 9 are excluded: they hold one walkthrough_step value for
     # 10+ turns while their internal wizard walks its own sub-actions (see
     # STEP_SUB_ACTIONS / walkthrough_fired_actions). Advancing them per turn
     # would blow straight through the wizard.
@@ -2249,7 +2267,7 @@ def _finalize_turn(
 
     # Ground truth for "has start-generation already fired for the CURRENT
     # step 8/9 wizard run" — see SessionState.walkthrough_generate_fired.
-    # Any real step change (advancing off 6/7, ending the tour, a fresh
+    # Any real step change (advancing off 8/9, ending the tour, a fresh
     # module/full walkthrough start) means whatever "already generated"
     # state applied to the PREVIOUS run no longer applies — each wizard run
     # needs its own fresh signal, which is why this is checked against
@@ -2259,7 +2277,7 @@ def _finalize_turn(
     if session.walkthrough_step != prev_walkthrough_step:
         session.walkthrough_generate_fired = False
         already_fired = False
-        # A fresh run through 6/7 (or leaving it) starts with a clean slate —
+        # A fresh run through 8/9 (or leaving it) starts with a clean slate —
         # see SessionState.walkthrough_fired_actions.
         session.walkthrough_fired_actions = set()
     # Ground truth for "which step 8/9 sub-actions have already fired in the

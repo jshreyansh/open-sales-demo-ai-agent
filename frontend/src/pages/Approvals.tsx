@@ -67,6 +67,13 @@ export default function Approvals() {
 
   const openRow = data?.rows.find((r) => r.id === openRowId) ?? null;
 
+  // Same "canDecide first, else the first row" rule the registered "open"
+  // action itself uses (see above) — kept in sync so the row that actually
+  // gets opened is the one that gets the highlight ring, instead of
+  // dispatchWithHighlight falling all the way back to pulsing the sidebar
+  // nav item because no row carries data-hl="submission-detail:open".
+  const openTargetId = data?.rows.find((r) => r.canDecide)?.id ?? data?.rows[0]?.id;
+
   const tabCounts = useMemo(() => {
     const counts: Record<Tab, number> = { pending: 0, approved: 0, rejected: 0, withdrawn: 0, all: data?.rows.length ?? 0 };
     for (const r of data?.rows ?? []) counts[r.state]++;
@@ -150,7 +157,12 @@ export default function Approvals() {
             {filteredRows.map((r) => {
               const s = STATE_STYLES[r.state];
               return (
-                <tr key={r.id} className="approvals-row--clickable" onClick={() => setOpenRowId(r.id)}>
+                <tr
+                  key={r.id}
+                  className="approvals-row--clickable"
+                  onClick={() => setOpenRowId(r.id)}
+                  data-hl={r.id === openTargetId ? "submission-detail:open" : undefined}
+                >
                   <td>
                     <div className="approvals-table__primary">{r.entity.name}</div>
                     <div className="approvals-table__meta">
