@@ -8329,6 +8329,12 @@ body {
   border: 1px solid var(--lp-line);
   background: var(--lp-raise);
   font-size: 15px;
+  /* The shared base rule (.prejoin__known-identity, for the dark meeting
+     skin) sets white text, centered — invisible on this page's white
+     background, and centered instead of matching every other left-aligned
+     field in this form. Both needed an explicit override here. */
+  color: var(--lp-text);
+  text-align: left;
 }
 
 .lp .prejoin__field-error {

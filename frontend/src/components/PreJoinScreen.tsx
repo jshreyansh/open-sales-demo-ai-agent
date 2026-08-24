@@ -145,8 +145,9 @@ export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
               "video call" outright, since that's the actual format the join
               button starts, not just an abstract "demo." */}
           <p className="lp__sub">
-            Pharma-ready video, avatars and infographics — join a live video
-            call with Fiona and watch it get built in real time.
+            Pharma-ready video, avatars and infographics.
+            <br />
+            Join a live video call with Fiona and watch it get built in real time.
           </p>
 
           <div className="lp__join">
