@@ -24,12 +24,14 @@ from src.server import VoiceLockRequest, claim_voice_lock, release_voice_lock
 def _isolate_voice_lock_state():
     """_active_calls and _MAX_CONCURRENT_CALLS are module-level globals
     shared with the real app — reset before each test and restore the
-    production default (ceiling of 1) after, so mutations here can't leak
-    into other test files sharing this process."""
+    production default (ceiling of 5, validated by the Phase 3 load test
+    on 2026-08-24 — see server.py's own comment on _MAX_CONCURRENT_CALLS)
+    after, so mutations here can't leak into other test files sharing
+    this process."""
     server._active_calls = {}
     yield
     server._active_calls = {}
-    server._MAX_CONCURRENT_CALLS = 1
+    server._MAX_CONCURRENT_CALLS = 5
 
 
 def test_first_claim_succeeds_like_today():
@@ -41,9 +43,9 @@ def test_first_claim_succeeds_like_today():
 
 
 def test_second_different_visitor_refused_under_ceiling_of_one():
-    """Ceiling of 1 (today's production setting) must behave exactly like
-    the old single-slot lock: a second, different visitor is refused
-    outright, not conditioned on CPU."""
+    """A ceiling of 1 (the old single-slot lock's own behavior, still a
+    valid config this pool must support) must refuse a second, different
+    visitor outright, not conditioned on CPU."""
     server._MAX_CONCURRENT_CALLS = 1
     with patch.object(server.psutil, "cpu_percent", return_value=10.0):
         claim_voice_lock(VoiceLockRequest(visitorId="v1"))
@@ -125,8 +127,8 @@ def test_stale_entry_is_pruned_and_frees_the_ceiling():
 
 def test_single_caller_flow_end_to_end_matches_todays_behavior():
     """Case (e) from the plan's testing section: claim -> same visitor
-    reclaims -> release, at the production default ceiling of 1, must
-    behave identically to the old single-slot lock throughout."""
+    reclaims -> release, at a ceiling of 1, must behave identically to
+    the old single-slot lock throughout."""
     server._MAX_CONCURRENT_CALLS = 1
     with patch.object(server.psutil, "cpu_percent", return_value=20.0):
         assert claim_voice_lock(VoiceLockRequest(visitorId="v1")) == {"ok": True}

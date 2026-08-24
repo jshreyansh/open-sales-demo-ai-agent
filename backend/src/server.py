@@ -99,11 +99,17 @@ _paused_state: Dict[str, bool] = {}
 # _paused_state above) rather than a single slot, so more than one call
 # can be admitted at once.
 _active_calls: Dict[str, Dict[str, Any]] = {}
-# Kept at 1 until Phase 3's synthetic load test + staged real-call
-# verification (see the plan) validates a higher number on THIS box —
-# raising this is the actual "go live" switch for concurrent calls, not
-# the code change itself.
-_MAX_CONCURRENT_CALLS = 1
+# Raised from 1 to 5 after Phase 3's synthetic load test (2026-08-24, on
+# this exact box): K=5 showed no measurable latency/CPU degradation vs.
+# K=1 (ttfc_ms p90 ~5.0s at both), zero errors. K=10 was tested and
+# rejected — CPU approached this file's own _CPU_LOAD_THRESHOLD_PCT and
+# ttfc_ms p90 more than doubled (5.0s -> 10.7s, max 18s). 5 is the
+# measured number, not a guess — see the concurrent-calls plan for the
+# full methodology. Real multi-caller listening test and the three LLM/
+# STT/TTS providers' own account-level concurrency limits are still
+# unverified — treat this as the box's ceiling, not a guarantee every
+# provider allows 5 simultaneous streams today.
+_MAX_CONCURRENT_CALLS = 5
 # Matches LiveKit's own default load_threshold — refuse new work once the
 # box is already this loaded, tune from real Phase 3 measurements.
 _CPU_LOAD_THRESHOLD_PCT = 70.0
