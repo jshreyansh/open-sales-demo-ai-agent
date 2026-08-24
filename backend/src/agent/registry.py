@@ -300,15 +300,15 @@ compliance check, so content enters review clean instead of bouncing back and fo
 review. It covers 30 content formats across 5 Magic Engines (Video, Aid, Mail, Canvas, Doc) — everything \
 from short videos and AI digital-twin presenter avatars, to HCP detailing aids and approved emails, to \
 banners/infographics and long-form documents like payer dossiers — all generated from a single Brand Kit \
-so every asset stays on-brand automatically. It also has campaign analytics (WhatsApp/SMS/Email \
-performance, HCP reach, engagement funnels) and tracks the manhours the platform saves the team."""
+so every asset stays on-brand automatically. It also tracks the manhours the platform saves the team."""
 # The "Agentic IQ" layer used to be named in the sentence above. Dropped: the
 # only place it was ever visible was a dashboard card counting active agents
 # and actions executed, and that card is gone (see data/dashboard.py) because
 # there is no agents surface anywhere in the nav for it to point at. The
-# manhours-saved claim survives — the Dashboard's "Time Saved" card still
-# shows it. Campaign analytics stays too: the Analytics page is still real and
-# agent-navigable, it just has no sidebar entry (see registry/pages.ts).
+# manhours-saved claim survives — the Home page's "Time Saved" card still
+# shows it. Campaign analytics was dropped from this sentence too: the
+# Analytics page has been removed entirely (no page, no renderPage() case, no
+# registry entry below) — there's nothing left for the agent to point at.
 
 
 # Describes what the agent can point at and do, in terms the LLM (or the
@@ -321,8 +321,8 @@ performance, HCP reach, engagement funnels) and tracks the manhours the platform
 # instead of teaching the agent new prompts by hand.
 UI_REGISTRY: List[RegistryPage] = [
     RegistryPage(
-        id="dashboard",
-        label="Dashboard",
+        id="home",
+        label="Home",
         components=[
             RegistryComponent(
                 id="insights",
@@ -330,7 +330,7 @@ UI_REGISTRY: List[RegistryPage] = [
                 description=(
                     "The four insight cards: Content Output (assets generated, formats used of 30, avg "
                     "first-draft time), MLR Review (pending approvals, first-pass approval rate, avg time "
-                    "in review), Brand & Templates (dossiers live, templates, library assets), and Time "
+                    "in review), Brand & Library (dossiers live, library assets), and Time "
                     "Saved (manhours saved, brief-to-approved turnaround, library reuse)."
                 ),
                 actions=[RegistryAction(id="highlight", description="Draw attention to the insights panel")],
@@ -364,20 +364,140 @@ UI_REGISTRY: List[RegistryPage] = [
                 ),
                 actions=[RegistryAction(id="highlight", description="Draw attention to the approvals queue")],
             ),
+            RegistryComponent(
+                id="submission-detail",
+                label="Submission detail panel",
+                description=(
+                    "A right-side drawer with one submission's full detail — stage timeline, submitter, "
+                    "a content preview, and decorative Approve/Reject/Withdraw controls. Opens on whichever "
+                    "row still needs a decision, or the first row if every demo item is already decided."
+                ),
+                actions=[RegistryAction(id="open", description="Open the submission detail panel for a pending (or the first) row")],
+            ),
             _scroll_component(),
         ],
     ),
     RegistryPage(
-        id="analytics",
-        label="Analytics",
+        id="brand-dossiers",
+        label="Brand Dossiers",
         components=[
             RegistryComponent(
-                id="funnel",
-                label="Engagement Funnel",
-                description="Sent, Viewed, Played, Completed, Shared funnel for campaign engagement.",
-                actions=[RegistryAction(id="highlight", description="Draw attention to the engagement funnel")],
+                id="grid",
+                label="Dossier grid",
+                description=(
+                    "A grid of brand dossiers — each one a brand's master knowledge base (sections, "
+                    "claims cited, last-updated), the single source of truth every generation is built "
+                    "from. Opening a card goes to that dossier's full document view."
+                ),
+                actions=[
+                    RegistryAction(id="highlight", description="Draw attention to the brand dossiers grid"),
+                    RegistryAction(id="open", description="Open a dossier's full document view (Brand Dossier detail)"),
+                ],
             ),
             _scroll_component(),
+        ],
+    ),
+    RegistryPage(
+        id="brand-dossier-detail",
+        label="Brand Dossier detail",
+        components=[
+            RegistryComponent(
+                id="checks",
+                label="Checks / claims panel",
+                description=(
+                    "The right-side panel on a dossier's document view — a Checks tab flagging "
+                    "unverified, not-source-backed sections, and a Claims ledger tab showing every "
+                    "claim traced to its source."
+                ),
+                actions=[RegistryAction(id="highlight", description="Switch the right-side panel to the Checks tab")],
+            ),
+            RegistryComponent(
+                id="ledger",
+                label="Claims ledger tab",
+                description="The Claims ledger tab — every claim in this dossier traced to its source.",
+                actions=[RegistryAction(id="highlight", description="Switch the right-side panel to the Claims ledger tab")],
+            ),
+            RegistryComponent(
+                id="export",
+                label="Export / version controls",
+                description="The header's Export PDF, version history, rebuild, and 'Send to' controls above the document.",
+                actions=[RegistryAction(id="highlight", description="Draw attention to the export/version controls")],
+            ),
+            _scroll_component(),
+        ],
+    ),
+    RegistryPage(
+        id="content-library",
+        label="Content Library",
+        components=[
+            RegistryComponent(
+                id="grid",
+                label="Library grid",
+                description=(
+                    "Every video generated on the platform so far — today that's exactly two real "
+                    "showcase pieces (a MagicReel oncology piece, a MagicAvatar patient-adherence "
+                    "piece), not a padded-out fake library."
+                ),
+                actions=[RegistryAction(id="highlight", description="Draw attention to the content library grid")],
+            ),
+            RegistryComponent(
+                id="preview",
+                label="Preview modal",
+                description="The video preview modal — plays the piece with its script alongside it.",
+                actions=[RegistryAction(id="open", description="Open the preview modal for the first library item")],
+            ),
+            _scroll_component(),
+        ],
+    ),
+    RegistryPage(
+        id="settings-account",
+        label="Settings — Account",
+        components=[
+            RegistryComponent(
+                id="account",
+                label="Account tab",
+                description="Workspace account details — account name, company, therapy areas.",
+                actions=[RegistryAction(id="highlight", description="Switch Settings to the Account tab")],
+            ),
+        ],
+    ),
+    RegistryPage(
+        id="settings-integrations",
+        label="Settings — Integrations",
+        components=[
+            RegistryComponent(
+                id="integrations",
+                label="Integrations tab",
+                description=(
+                    "Connected systems — Veeva Vault PromoMats (MLR routing) and Indegene Cortex "
+                    "(content supply chain / medical writing) — with decorative connect/disconnect toggles."
+                ),
+                actions=[RegistryAction(id="highlight", description="Switch Settings to the Integrations tab")],
+            ),
+        ],
+    ),
+    RegistryPage(
+        id="settings-billing",
+        label="Settings — Billing & Credits",
+        components=[
+            RegistryComponent(
+                id="billing",
+                label="Billing tab",
+                description="Credit usage (available/used/total) and top-up credit packs with pricing.",
+                actions=[RegistryAction(id="highlight", description="Switch Settings to the Billing & credits tab")],
+            ),
+        ],
+    ),
+    RegistryPage(
+        id="settings-plans",
+        label="Settings — Plans",
+        components=[
+            RegistryComponent(
+                id="plans",
+                label="Plans tab",
+                description="The three plan tiers — Pay-as-you-go, Growth, Enterprise — with features and pricing.",
+                actions=[RegistryAction(id="highlight", description="Switch Settings to the Plans tab")],
+            ),
         ],
     ),
     RegistryPage(

@@ -81,10 +81,10 @@ class SubBeat:
 # explicit go-ahead gate at each hop, a different and already-proven pattern
 # left untouched here.
 #
-# Beat 1 fires no action: the prospect is already on the dashboard (session's
+# Beat 1 fires no action: the prospect is already on Home (session's
 # default current_page) when the call starts, so the overview just talks —
-# it's not a deliberate visit. The dashboard only gets one deliberate,
-# explicit visit, as the final wrap-up (beat 10), not bookending the tour.
+# it's not a deliberate visit. Home only gets one deliberate,
+# explicit visit, as the final wrap-up (beat 13), not bookending the tour.
 #
 # Every action below already exists in registry.py's UI_REGISTRY — this
 # feature needed no new registry actions and no frontend changes.
@@ -96,15 +96,46 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
         guidance=(
             "Give a short, own-words 2-3 sentence overview of what SwishX does — pull from "
             "the product overview above, don't recite it verbatim. No navigation needed for "
-            "this step, you're already on the dashboard — but don't frame that as a deliberate "
-            "stop either (no \"let's start on the dashboard\" or \"I'll walk you through the "
-            "dashboard first\") since nothing here actually gets toured or explained beyond this "
-            "overview; the dashboard's own explicit, deliberate visit is step 10's wrap-up, not "
+            "this step, you're already on Home — but don't frame that as a deliberate "
+            "stop either (no \"let's start on the home page\" or \"I'll walk you through the "
+            "home page first\") since nothing here actually gets toured or explained beyond this "
+            "overview; Home's own explicit, deliberate visit is step 13's wrap-up, not "
             "this one. Just give the overview and move straight into the tour."
         ),
     ),
     WalkthroughStep(
         index=2,
+        title="Brand Dossiers",
+        action={"page": "brand-dossiers", "component": "grid", "method": "highlight"},
+        guidance=(
+            "A quick beat only — land on the Brand Dossiers grid and say this is the brand's "
+            "master knowledge base, the single source of truth every generation pulls from. Do "
+            "NOT catalogue individual dossier cards, categories, or how many exist — that's not "
+            "the point of this beat. Move straight into opening one; the real payoff is next step."
+        ),
+        max_words=24,
+    ),
+    WalkthroughStep(
+        index=3,
+        title="Brand Dossier detail",
+        action={"page": "brand-dossier-detail", "component": "checks", "method": "highlight"},
+        guidance=(
+            "This is the MLR moat made concrete — spend real time here, this is one of the two or "
+            "three beats in the whole tour that actually earns its length. Open the dossier's "
+            "actual document. Mention where it stands briefly (percent complete, how many sections "
+            "are fully sourced vs. still needing data) — that's scene-setting, not the point. The "
+            "point is the MLR Reviewer banner and the Checks panel: every claim in this document "
+            "gets checked against an approved source AT GENERATION TIME, not fixed up afterward in "
+            "review — most pass automatically, but here a handful didn't and are flagged right on "
+            "the document as 'unverified — not source-backed,' waiting for a human to accept or "
+            "keep unverified before export. Tie this explicitly back to the core claim: MLR-ready "
+            "in minutes, not weeks, because the checking already happened, so review starts from an "
+            "already-vetted document instead of a blank one."
+        ),
+        max_words=70,
+    ),
+    WalkthroughStep(
+        index=4,
         title="Content Studio",
         action={"page": "content-studio", "component": "video-tab", "method": "click"},
         guidance=(
@@ -114,25 +145,25 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
         ),
     ),
     WalkthroughStep(
-        index=3,
+        index=5,
         title="MagicReel pop-up",
         action={"page": "content-studio", "component": "magicreel", "method": "open"},
         guidance=(
             "Open a quick pop-up preview of MagicReel (short-form video) with a short beat of "
-            "narration — don't linger, this is a glance, not the deep dive (that's beat 6)."
+            "narration — don't linger, this is a glance, not the deep dive (that's beat 8)."
         ),
     ),
     WalkthroughStep(
-        index=4,
+        index=6,
         title="MagicAvatar pop-up",
         action={"page": "content-studio", "component": "magicavatar", "method": "open"},
         guidance=(
             "Open a quick pop-up preview of MagicAvatar (the digital-twin presenter video) with "
-            "a short beat of narration — again, a glance, not the deep dive (that's beat 7)."
+            "a short beat of narration — again, a glance, not the deep dive (that's beat 9)."
         ),
     ),
     WalkthroughStep(
-        index=5,
+        index=7,
         title="Infographic pop-up",
         action={"page": "content-studio", "component": "magicchart", "method": "open"},
         guidance=(
@@ -141,7 +172,7 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
         ),
     ),
     WalkthroughStep(
-        index=6,
+        index=8,
         title="MagicReel flow",
         action={"page": "magicreel-studio", "component": "wizard", "method": "step-source"},
         guidance=(
@@ -173,22 +204,22 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
             "wrapping up — when you get there, actually fire component \"wizard\" action "
             "\"start-generation\" as this turn's action (after \"step-generate\" got you onto that "
             "stage), and let your reply narrate what's about to render, e.g. \"let's generate this\" "
-            "— don't just talk about generating and jump straight to step 7 in the same breath, "
+            "— don't just talk about generating and jump straight to step 9 in the same breath, "
             "that skips the step entirely and the prospect never sees it render. The render itself "
             "takes several seconds — a short beat of narration bridging that wait is fine, or use "
             "the next turn once it's ready. Only once the result has actually been shown (the "
-            "rendered reel, not just the button press) is this outer step done — move into step 7 "
+            "rendered reel, not just the button press) is this outer step done — move into step 9 "
             "on the turn AFTER that, not the same one."
         ),
     ),
     WalkthroughStep(
-        index=7,
+        index=9,
         title="MagicAvatar flow",
         action={"page": "magicavatar-studio", "component": "launchpad", "method": "open"},
         guidance=(
             "Open the MagicAvatar Launchpad, then start the Master wizard (create-master) and "
             "walk it end-to-end the same way as MagicReel — Brief, Scenes, Options, Generate — "
-            "one stage at a time, same continuous active-walkthrough pacing as step 6. Brief has "
+            "one stage at a time, same continuous active-walkthrough pacing as step 8. Brief has "
             "its own required button press before Scenes, same reasoning as Generate below: once "
             "you land on \"step-brief\" here, the very next turn must actually fire "
             "\"generate-breakdown\" as its own dedicated action — narrate that you're turning the "
@@ -197,36 +228,52 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
             "a real, separate stage here too — when you get there, actually fire component "
             "\"wizard\" action \"start-generation\" as this turn's action (after \"step-generate\"), "
             "narrating what's about to render — don't just mention generating and jump straight to "
-            "step 8 in the same breath. The render takes several seconds; bridge it with a beat of "
+            "step 10 in the same breath. The render takes several seconds; bridge it with a beat of "
             "narration or use the next turn. Only once the result has actually been shown is this "
-            "outer step done — move into step 8 on the turn AFTER that, not the same one."
+            "outer step done — move into step 10 on the turn AFTER that, not the same one."
         ),
     ),
     WalkthroughStep(
-        index=8,
+        index=10,
         title="MLR tab",
         action={"page": "mlr-review", "component": "queue", "method": "highlight"},
         guidance=(
             "Show the MLR approvals queue and connect it back to what they just saw: content "
             "built in Content Studio arrives here already MLR-ready, so it moves through Brand, "
-            "Medical, Legal, and Compliance review faster and with fewer bounce-backs."
+            "Medical, Legal, and Compliance review faster and with fewer bounce-backs. Just the "
+            "queue — don't open a specific submission's detail panel here, that's an ask-only "
+            "action, not part of this beat."
         ),
     ),
     WalkthroughStep(
-        index=9,
-        title="Analytics tab",
-        action={"page": "analytics", "component": "funnel", "method": "highlight"},
+        index=11,
+        title="Content Library",
+        action={"page": "content-library", "component": "grid", "method": "highlight"},
         guidance=(
-            "Show the engagement funnel — Sent, Viewed, Played, Completed, Shared — how they'd "
-            "track performance once content is live."
+            "A quick beat — land on the Content Library and say this is every video generated on "
+            "the platform so far. Just the grid — don't open the preview modal on an item here, "
+            "that's an ask-only action ('want to see one play?'), not part of this beat."
         ),
+        max_words=24,
     ),
     WalkthroughStep(
-        index=10,
-        title="Dashboard wrap-up",
-        action={"page": "dashboard", "component": "insights", "method": "highlight"},
+        index=12,
+        title="Settings — Integrations",
+        action={"page": "settings-integrations", "component": "integrations", "method": "highlight"},
         guidance=(
-            "This is the only dashboard stop in the tour — cover both the insight cards and the "
+            "A quick beat — land on Settings > Integrations and mention it connects into what "
+            "they're already running (Veeva Vault PromoMats for MLR routing, Indegene Cortex for "
+            "content supply chain). Just this one tab — don't tour Account, Billing, or Plans here; "
+            "if pricing comes up they can ask and you'll pull up Plans separately."
+        ),
+        max_words=28,
+    ),
+    WalkthroughStep(
+        index=13,
+        title="Home wrap-up",
+        action={"page": "home", "component": "insights", "method": "highlight"},
+        guidance=(
+            "This is the only Home stop in the tour — cover both the insight cards and the "
             "brand dossiers list here as the closing 'this is home base' moment. Wrap up the "
             "tour, ask if they have any other questions, and if question 5 (connecting with a "
             "rep for next steps) still hasn't come up, this is a natural moment to ask it. Set "
@@ -237,7 +284,7 @@ WALKTHROUGH_STEPS: List[WalkthroughStep] = [
 
 WALKTHROUGH_STEPS_BY_INDEX = {s.index: s for s in WALKTHROUGH_STEPS}
 
-# The canonical, ordered sub-action sequence for step 6/7's own internal
+# The canonical, ordered sub-action sequence for step 8/9's own internal
 # wizard sub-navigation — mirrors the prose in each step's guidance above,
 # but as real structured data runtime.py's _walkthrough_note can walk
 # through to tell the model the exact next sub-action, rather than just
@@ -250,7 +297,7 @@ WALKTHROUGH_STEPS_BY_INDEX = {s.index: s for s in WALKTHROUGH_STEPS}
 # value directly removes that inference step entirely — same "give ground
 # truth, don't make it infer" fix as everywhere else in this file.
 STEP_SUB_ACTIONS = {
-    6: [
+    8: [
         "step-source",
         "select-source-dossier",
         "select-source-news",
@@ -265,7 +312,7 @@ STEP_SUB_ACTIONS = {
         "step-generate",
         "start-generation",
     ],
-    7: [
+    9: [
         "step-brief",
         "generate-breakdown",
         "step-scenes",
@@ -277,7 +324,7 @@ STEP_SUB_ACTIONS = {
 
 
 # Per-sub-beat narration for the two studio flows, replacing the single
-# all-at-once block that used to live in steps 6 and 7's `guidance`.
+# all-at-once block that used to live in steps 8 and 9's `guidance`.
 #
 # Keyed by the sub-action name already tracked in STEP_SUB_ACTIONS and
 # already resolved to "the next one" by _walkthrough_note, so this needs no
@@ -291,7 +338,7 @@ STEP_SUB_ACTIONS = {
 #   - "generate-script" and "start-generation" keep their own dedicated turn,
 #     so the prospect actually sees the button press and the render
 SUB_BEATS: dict[str, SubBeat] = {
-    # ---- MagicReel (step 6) ----
+    # ---- MagicReel (step 8) ----
     "step-source": SubBeat(
         "Landing on Source. One sentence only: name the stage and say it has a few options. "
         "Do NOT list or describe them — each gets its own turn next.",
@@ -344,7 +391,7 @@ SUB_BEATS: dict[str, SubBeat] = {
         "Only once the finished result is actually on screen is this step done.",
         max_words=26,
     ),
-    # ---- MagicAvatar (step 7) ----
+    # ---- MagicAvatar (step 9) ----
     "generate-breakdown": SubBeat(
         "Fire the breakdown generation as this turn's own action and narrate it briefly. "
         "This turn exists so the press is actually seen.",

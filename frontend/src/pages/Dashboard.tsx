@@ -35,7 +35,7 @@ export default function Dashboard() {
   return (
     <div className="page">
       <div className="page__header">
-        <h1 className="page__title">Dashboard</h1>
+        <h1 className="page__title">Home</h1>
         <div>
           <div className="page__header-label">Date Range</div>
           <div className="pill-toggle-group">

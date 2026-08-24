@@ -79,7 +79,10 @@ export default function Sidebar({ activePageId, onNavigate }: SidebarProps) {
             </span>
           )}
         </button>
-        <button className="sidebar__item">
+        <button
+          className={`sidebar__item ${activePageId.startsWith("settings-") ? "sidebar__item--active" : ""}`}
+          onClick={() => onNavigate("settings-account")}
+        >
           <Icon name="settings" size={15} />
           {!collapsed && <span className="sidebar__item-label">Settings</span>}
         </button>

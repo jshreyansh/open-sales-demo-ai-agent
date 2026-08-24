@@ -163,7 +163,7 @@ def _keyword_match(message: str) -> Optional[FlatAction]:
 def _fallback_reply(action: Optional[FlatAction]) -> AgentResult:
     if not action:
         return {
-            "reply": "Ask me to show you something — the dashboard, content studio, or brand kit — and I'll walk you through it."
+            "reply": "Ask me to show you something — the home page, content studio, or brand kit — and I'll walk you through it."
         }
     return {
         "reply": f"This is the {action.component_label}.",
@@ -340,7 +340,7 @@ def _tool_schema() -> dict:
                         "MagicReel/MagicAvatar deep-dive (Source/Brief/Script/Scenes/Generate, or "
                         "Brief/Scenes/Options/Generate) — it just starts there directly and ends there, "
                         "without ever touching the rest of the platform (Content Studio overview, MLR, "
-                        "analytics, dashboard). Do NOT use this for a quick one-off glance at a stage "
+                        "home). Do NOT use this for a quick one-off glance at a stage "
                         "('let's make one', with no request for the WHOLE flow, no urgency about seeing "
                         "it end to end) — that's instruction 2c's plain browsing, no field needed. Omit "
                         "on every other turn, including once the module walkthrough is already under way."
@@ -538,7 +538,7 @@ def _tool_schema() -> dict:
                     "type": "boolean",
                     "description": (
                         "Set true the turn the prospect declines to continue the walkthrough, once "
-                        "you've wrapped up step 10, OR the prospect indicates they're leaving or ending "
+                        "you've wrapped up step 13, OR the prospect indicates they're leaving or ending "
                         "the call soon — 'I have to go', 'I have to drop', 'I'm out of time', 'gotta "
                         "run', etc. This last case is easy to miss because your own \"reply\" that turn "
                         "is a normal, warm goodbye rather than something that sounds like ending a tour "
@@ -747,9 +747,9 @@ Once you have what you're getting, transition into the demo: "Right — do you w
 
 Never stack these. Three questions at the top is already the ceiling for one call; these are for when a thread opens on its own.
 
-0a. Any time the prospect expresses wanting the platform tour — in ANY phrasing, not just a fixed template, including a correction like "no, give me a WHOLE walkthrough" — set "start_walkthrough" true (see that field's own description for real example phrasings) and start it right there in this same reply: give a short, own-words 2-3 sentence overview of what SwishX does (pull from the product overview above, don't recite it verbatim), and set NO action this turn (you're already on the dashboard, nothing to click or highlight yet — but don't frame that as a deliberate stop either, no "let's start on the dashboard" or "I'll walk you through the dashboard first," since nothing here actually gets toured or explained beyond this overview; the dashboard's own explicit, deliberate visit is the tour's wrap-up step, not this one). From your NEXT reply onward, follow the walkthrough note below (which will now be populated) instead of freelancing your own navigation — it already covers what step 1 asked for, so don't repeat the overview, move straight into step 2. If they instead ask about something specific, answer that first per the instructions below — the walkthrough is opt-in, not the default path through the call.
+0a. Any time the prospect expresses wanting the platform tour — in ANY phrasing, not just a fixed template, including a correction like "no, give me a WHOLE walkthrough" — set "start_walkthrough" true (see that field's own description for real example phrasings) and start it right there in this same reply: give a short, own-words 2-3 sentence overview of what SwishX does (pull from the product overview above, don't recite it verbatim), and set NO action this turn (you're already on Home, nothing to click or highlight yet — but don't frame that as a deliberate stop either, no "let's start on the home page" or "I'll walk you through the home page first," since nothing here actually gets toured or explained beyond this overview; Home's own explicit, deliberate visit is the tour's wrap-up step, not this one). From your NEXT reply onward, follow the walkthrough note below (which will now be populated) instead of freelancing your own navigation — it already covers what step 1 asked for, so don't repeat the overview, move straight into step 2. If they instead ask about something specific, answer that first per the instructions below — the walkthrough is opt-in, not the default path through the call.
 
-0b. If the prospect asks to "continue"/"keep going with" the walkthrough and your own conversation history below already shows you delivering the full tour (something like "that wraps up the full tour" or reaching the dashboard as the final stop) — there's nothing left to continue TO. Don't just repeat the last step you showed again (confirmed live: this produced a near-duplicate of the exact same dashboard/Content-Studio paragraph you'd already just said). Instead say plainly that you've already covered the full platform, and ask what specifically they'd like to revisit or dig into. This does NOT apply when they explicitly ask to restart/redo the tour from the beginning ("give me the walkthrough from the start," "start over") — that's a genuine fresh pass, set "start_walkthrough" true and actually deliver it same as always; the distinction is a vague "continue" with nowhere left to go versus an explicit request for a new full pass.
+0b. If the prospect asks to "continue"/"keep going with" the walkthrough and your own conversation history below already shows you delivering the full tour (something like "that wraps up the full tour" or reaching Home as the final stop) — there's nothing left to continue TO. Don't just repeat the last step you showed again (confirmed live: this produced a near-duplicate of the exact same home/Content-Studio paragraph you'd already just said). Instead say plainly that you've already covered the full platform, and ask what specifically they'd like to revisit or dig into. This does NOT apply when they explicitly ask to restart/redo the tour from the beginning ("give me the walkthrough from the start," "start over") — that's a genuine fresh pass, set "start_walkthrough" true and actually deliver it same as always; the distinction is a vague "continue" with nowhere left to go versus an explicit request for a new full pass.
 
 0c. If the prospect asks for a continuous, guided, end-to-end build of ONE SPECIFIC format — "show me the whole MagicReel flow," "walk me through MagicAvatar start to finish," "how do I make a MagicReel" — and it's genuinely unclear whether they also want the broader platform tour, ask a quick clarifying question first: "Want the whole platform walkthrough, or just [format] end-to-end?" — set no action and no walkthrough field this turn, just ask and wait. If they answer with the module ("just MagicReel," "the MagicReel one," "not the whole platform"), set "start_module_walkthrough" on that next turn. If their ORIGINAL ask was already unambiguous about wanting just the one format — your exact scenario: "just show me MagicReel, not the whole platform" — skip the clarifying question entirely and set "start_module_walkthrough" right away. Once running, it uses the exact same continuous, self-driving pacing as the full tour's own MagicReel/MagicAvatar deep-dive (see the walkthrough note below) — the only difference is it ends when that one format is done instead of continuing into the rest of the platform. This is different from a quick one-off "let's make one" with no request to see the WHOLE thing end-to-end — that's ordinary browsing (instruction 2c), no field needed.
 
@@ -765,7 +765,7 @@ This is not weakness or stalling — it is how good reps actually sell. Guessing
 2b. Each Content Studio format's description ends with its real status. If it says "not yet built in this workspace", say so plainly and naturally (e.g. "that one's on the roadmap, not live yet") before or alongside describing it — don't imply something already exists when it's still coming soon.
 2c. Only MagicReel and MagicAvatar have a real, walkable studio behind their format modal — the "magicreel-studio" and "magicavatar-studio" pages. Once the prospect wants to actually move past looking at the format's spec into building one ("let's make one", "walk me through it", "show me the actual flow"), use those pages' step actions instead of re-opening the format modal. Go one step at a time, in order (Source → Brief → Script → Scenes → Generate for MagicReel; Launchpad → Brief → Scenes → Options → Generate for MagicAvatar) — narrate what you're about to show before each jump, the same way a person walks someone through a tool rather than teleporting through it. Don't skip steps just to get to the end faster. Every other format has no studio to enter yet — for those, the modal is as far as it goes. This plain, one-step-at-a-time browsing is for a quick "let's make one" with no urgency about seeing the WHOLE thing — if instead the prospect wants the continuous, guided, end-to-end build with nothing stopping in between, that's instruction 0c's "start_module_walkthrough" instead, which self-drives through these same steps automatically.
 
-This has two different pacing rules depending on how you got here. Standalone (the prospect asked to build one outside any scripted walkthrough): end each stage's explanation with a short, natural prompt inviting them to continue — "Does that sound good? Should I keep going?", "Want me to move to the next part?", "Ready to continue?" — then wait: only advance to the next stage once they actually give a go-ahead ("yeah", "let's go", "next", "sounds good"). If their reply is a question or comment about the stage you just showed instead, answer that and stay put — don't advance just because they said something. During an active scripted walkthrough (the walkthrough note below shows you on step 6 or 7), use that same continuous auto-advancing pacing instead — keep moving stage to stage on your own without waiting for a go-ahead, exactly like the rest of the tour, and only actually pause for a genuine question (see the walkthrough note's interruption rule, including setting "walkthrough_awaiting_answer"). Once that pause starts, it holds through however many follow-up questions the prospect asks — you don't need to keep re-setting the field on every turn of the tangent, just answer naturally; only set "resume_walkthrough" once they actually say something that means "let's continue," which is what starts the tour moving again. Either way, don't name or preview the NEXT stage inside the CURRENT stage's "reply" (no "let's move on to the brief next" tacked onto the end of the Source stage's explanation) — that announcement belongs solely to "lead_in" on the turn you actually jump there. Saying it in both places back to back is the one thing to avoid; wrap up this stage's own content and stop.
+This has two different pacing rules depending on how you got here. Standalone (the prospect asked to build one outside any scripted walkthrough): end each stage's explanation with a short, natural prompt inviting them to continue — "Does that sound good? Should I keep going?", "Want me to move to the next part?", "Ready to continue?" — then wait: only advance to the next stage once they actually give a go-ahead ("yeah", "let's go", "next", "sounds good"). If their reply is a question or comment about the stage you just showed instead, answer that and stay put — don't advance just because they said something. During an active scripted walkthrough (the walkthrough note below shows you on step 8 or 9), use that same continuous auto-advancing pacing instead — keep moving stage to stage on your own without waiting for a go-ahead, exactly like the rest of the tour, and only actually pause for a genuine question (see the walkthrough note's interruption rule, including setting "walkthrough_awaiting_answer"). Once that pause starts, it holds through however many follow-up questions the prospect asks — you don't need to keep re-setting the field on every turn of the tangent, just answer naturally; only set "resume_walkthrough" once they actually say something that means "let's continue," which is what starts the tour moving again. Either way, don't name or preview the NEXT stage inside the CURRENT stage's "reply" (no "let's move on to the brief next" tacked onto the end of the Source stage's explanation) — that announcement belongs solely to "lead_in" on the turn you actually jump there. Saying it in both places back to back is the one thing to avoid; wrap up this stage's own content and stop.
 2d. Every page has a "scroll" component ("down"/"up") for the page currently on screen. If the prospect asks you to scroll, or to see more of a long page (or less of it), use it — don't just describe what's further down instead of actually moving there.
 2e. Whenever you set "action", also set "lead_in" — a short (5-10 word) spoken transition, e.g. "Let me pull that up," "Let's take a look," "One sec, pulling that up." Say it, THEN the screen changes, THEN "reply" — which can now talk about what's actually on screen ("So this is..."), not what you're about to go look at. Never put any actual content or explanation inside lead_in, and never describe the destination inside it either (no "let me show you the co-pay card format" — just "let me pull that up") — that's what tips this into feeling scripted instead of like someone genuinely reaching for the next screen. When there's no action, skip lead_in entirely.
 3. Never repeat the exact same action back-to-back. Check the conversation history below — if you already highlighted or navigated to something and the prospect is still on the same topic, respond conversationally instead of re-triggering it. Scrolling is the one exception — repeated "scroll down" requests are expected and each should fire again. This also applies to firing several *different* actions back-to-back with no real go-ahead in between — e.g. clicking through every engine tab one after another just because the prospect said something. A short or ambiguous fragment ("on", "and", ".", "that") is not a go-ahead — it's very likely a stray STT fragment of something they were still saying, not a real instruction. When you're not sure whether they actually asked for the next thing, say so briefly and let them confirm, rather than guessing and moving the screen again.
@@ -1084,7 +1084,7 @@ def _walkthrough_note(session: SessionState) -> str:
     # at walkthrough_scope_end — once reached, there IS no "next step" as
     # far as this run is concerned, even though a numerically higher step
     # genuinely exists in the full platform list. Without this check the
-    # model would be told "next step is MLR/analytics/etc", which is
+    # model would be told "next step is MLR/etc", which is
     # exactly the platform-wide continuation a scoped "just MagicReel"
     # request was meant to avoid.
     at_scope_end = session.walkthrough_scope_end is not None and step.index >= session.walkthrough_scope_end
@@ -1104,7 +1104,7 @@ def _walkthrough_note(session: SessionState) -> str:
         # Sub-actions still pending, so this step is demonstrably NOT
         # delivered and the wrap-up line below must not be shown yet.
         #
-        # Session 79b6817e: a scoped MagicReel run ended after 4 of step 6's
+        # Session 79b6817e: a scoped MagicReel run ended after 4 of step 8's
         # 13 sub-actions — Source and the opening of Brief — never reaching
         # voice & language, brand & product, script, scenes or generate. The
         # prospect noticed immediately ("You didn't even go to voice and
@@ -1129,7 +1129,7 @@ def _walkthrough_note(session: SessionState) -> str:
             "This is a module-scoped walkthrough (just this one format, not the whole platform) — "
             "once this step is fully delivered, that's the whole thing done. Wrap up and set "
             "\"end_walkthrough\" — don't advance into any other platform section (Content Studio "
-            "overview, other formats, MLR, analytics, dashboard) unless the prospect explicitly asks "
+            "overview, other formats, MLR, home) unless the prospect explicitly asks "
             "for more after this."
         )
     else:
@@ -1170,7 +1170,7 @@ def _walkthrough_note(session: SessionState) -> str:
         if session.walkthrough_scope_end is not None
         else f"You're currently giving the scripted platform walkthrough — step {step.index} of 10: "
     )
-    # Ground truth for step 6/7's own internal "have I already fired
+    # Ground truth for step 8/9's own internal "have I already fired
     # start-generation" state — see SessionState.walkthrough_generate_fired.
     # Without this, the model has no explicit signal that it already kicked
     # off the render and reliably keeps re-narrating/re-firing it under
@@ -1192,10 +1192,10 @@ def _walkthrough_note(session: SessionState) -> str:
             )
             + "\n"
         )
-        if step.index in (6, 7) and session.walkthrough_generate_fired
+        if step.index in (8, 9) and session.walkthrough_generate_fired
         else ""
     )
-    # Ground truth for step 6/7's own internal sub-navigation (step-source,
+    # Ground truth for step 8/9's own internal sub-navigation (step-source,
     # select-source-*, step-brief, brief-*, step-script, ...) — see
     # SessionState.walkthrough_fired_actions and walkthrough.py's
     # STEP_SUB_ACTIONS. Same reasoning as generate_fired_line above,
@@ -1239,7 +1239,7 @@ def _walkthrough_note(session: SessionState) -> str:
                 else ""
             )
         )
-        if step.index in (6, 7) and sub_actions
+        if step.index in (8, 9) and sub_actions
         else ""
     )
     # Only the beat actually being performed is shown, not the whole flow.
@@ -1247,7 +1247,7 @@ def _walkthrough_note(session: SessionState) -> str:
     # turn is what produced the monologues: the model narrated everything it
     # could see, which was everything. See walkthrough.py's SubBeat docstring
     # for the measured before/after.
-    beat = sub_beat_for(next_sub_action) if step.index in (6, 7) else None
+    beat = sub_beat_for(next_sub_action) if step.index in (8, 9) else None
     if beat is not None:
         guidance_text = beat.guidance
         budget = beat.max_words
@@ -1686,7 +1686,7 @@ def _sub_actions_remaining(session: SessionState, step) -> list:
 
 
 def _enforce_step_order(session: SessionState, action: Optional[dict]) -> tuple[Optional[dict], bool]:
-    """The hard invariant: a step 6/7 wizard sub-action may only fire if it
+    """The hard invariant: a step 8/9 wizard sub-action may only fire if it
     is the deterministic next legal one, or a revisit of something already
     fired.
 
@@ -1713,7 +1713,7 @@ def _enforce_step_order(session: SessionState, action: Optional[dict]) -> tuple[
     reply for exactly this reason; see _stream_with_claude's docstring),
     but for the non-streaming path nothing has been spoken yet either way.
     """
-    if not action or session.walkthrough_step not in (6, 7):
+    if not action or session.walkthrough_step not in (8, 9):
         return action, False
     step_idx = session.walkthrough_step
     sub_actions = STEP_SUB_ACTIONS.get(step_idx, [])
@@ -1865,9 +1865,9 @@ def _finalize_turn(
     action_method = (result.get("action") or {}).get("method")
 
     # Ground truth guard: start-generation firing for the FIRST time this
-    # step 6/7 run must never ALSO end or advance the walkthrough in the
+    # step 8/9 run must never ALSO end or advance the walkthrough in the
     # SAME turn — the rendered result needs its own beat first (see the
-    # guidance's own "move into step 7 on the turn AFTER that, not the same
+    # guidance's own "move into step 9 on the turn AFTER that, not the same
     # one"). Confirmed live TWICE, two different ways the model expressed
     # "done" in the same breath as firing the render: once via
     # walkthrough_step advancing past 6/7 (full platform tour), once via
@@ -1880,7 +1880,7 @@ def _finalize_turn(
     # this same-turn combination would never reach the new_step-only guard
     # a narrower, earlier version of this fix used to have.
     if (
-        prev_walkthrough_step in (6, 7)
+        prev_walkthrough_step in (8, 9)
         and action_method == "start-generation"
         and not session.walkthrough_generate_fired
         and (end_walkthrough or (new_step is not None and new_step > prev_walkthrough_step))
@@ -1922,7 +1922,7 @@ def _finalize_turn(
         auto_continue
         and new_step is None
         and prev_walkthrough_step is not None
-        and prev_walkthrough_step not in (6, 7)
+        and prev_walkthrough_step not in (8, 9)
         and not end_walkthrough
         and not start_walkthrough
         and not start_module_walkthrough
@@ -1956,7 +1956,7 @@ def _finalize_turn(
     # to leave would be far worse than the bug this prevents.
     #
     # Session 79b6817e is the case: an auto-continue beat set
-    # end_walkthrough after 4 of step 6's 13 sub-actions, killing a scoped
+    # end_walkthrough after 4 of step 8's 13 sub-actions, killing a scoped
     # MagicReel run before voice & language, brand & product, script,
     # scenes or generate were ever shown. Everything after that read as the
     # agent going mute for no reason — including her own confabulated
@@ -1987,12 +1987,12 @@ def _finalize_turn(
         activation_source = "model_field:start_walkthrough"
     elif start_module_walkthrough:
         # "magicreel"/"magicavatar" map onto their existing deep-dive
-        # step indices in walkthrough.py (6, 7) — this is the SAME
+        # step indices in walkthrough.py (8, 9) — this is the SAME
         # auto-advancing machinery the full tour already uses for these
         # two steps, just entered directly and capped there instead of
         # continuing into the rest of the platform. See _walkthrough_note
         # for how walkthrough_scope_end changes what "the next step" means.
-        module_entry_step = {"magicreel": 6, "magicavatar": 7}.get(start_module_walkthrough)
+        module_entry_step = {"magicreel": 8, "magicavatar": 9}.get(start_module_walkthrough)
         if module_entry_step is not None:
             session.walkthrough_step = module_entry_step
             session.walkthrough_scope_end = module_entry_step
@@ -2002,10 +2002,10 @@ def _finalize_turn(
             if session.walkthrough_scope_end is not None and new_step > session.walkthrough_scope_end:
                 # The model tried to advance past a module-scoped
                 # walkthrough's own boundary (e.g. MagicReel done, trying
-                # to roll into MagicAvatar/MLR/analytics) — that's exactly
+                # to roll into MagicAvatar/MLR) — that's exactly
                 # what scoping this walkthrough was for preventing. Treat
                 # reaching the boundary as the walkthrough ending, the same
-                # way step 10 ends a full tour, rather than silently
+                # way step 13 ends a full tour, rather than silently
                 # letting it wander into the rest of the platform.
                 logger.warning(
                     f"[{session.visitor_id}] walkthrough_step={new_step!r} would advance past "
@@ -2081,7 +2081,7 @@ def _finalize_turn(
             session.walkthrough_step = 1
             session.walkthrough_scope_end = None
         else:
-            entry = {"magicreel": 6, "magicavatar": 7}[requested]
+            entry = {"magicreel": 8, "magicavatar": 9}[requested]
             session.walkthrough_step = entry
             session.walkthrough_scope_end = entry
         session.walkthrough_awaiting_answer = False
@@ -2103,8 +2103,8 @@ def _finalize_turn(
     # walkthrough_awaiting_answer was model-elected, and prod session
     # 92a7ddaf shows what that costs. Consecutive turns logged:
     #
-    #   step 7 -> 7  awaiting_answer=True     ...she asks, tour holds
-    #   step 7 -> 7  awaiting_answer=False    ...she asks, tour rolls on
+    #   step 9 -> 9  awaiting_answer=True     ...she asks, tour holds
+    #   step 9 -> 9  awaiting_answer=False    ...she asks, tour rolls on
     #
     # Same behaviour from the prospect's side, opposite behaviour from the
     # system, decided turn by turn by the model. They named it exactly:
@@ -2248,13 +2248,13 @@ def _finalize_turn(
             )
 
     # Ground truth for "has start-generation already fired for the CURRENT
-    # step 6/7 wizard run" — see SessionState.walkthrough_generate_fired.
+    # step 8/9 wizard run" — see SessionState.walkthrough_generate_fired.
     # Any real step change (advancing off 6/7, ending the tour, a fresh
     # module/full walkthrough start) means whatever "already generated"
     # state applied to the PREVIOUS run no longer applies — each wizard run
     # needs its own fresh signal, which is why this is checked against
-    # prev_walkthrough_step rather than just "not in (6, 7)" (that alone
-    # would wrongly carry step 6's flag over onto a freshly-entered step 7).
+    # prev_walkthrough_step rather than just "not in (8, 9)" (that alone
+    # would wrongly carry step 8's flag over onto a freshly-entered step 9).
     already_fired = session.walkthrough_generate_fired
     if session.walkthrough_step != prev_walkthrough_step:
         session.walkthrough_generate_fired = False
@@ -2262,12 +2262,12 @@ def _finalize_turn(
         # A fresh run through 6/7 (or leaving it) starts with a clean slate —
         # see SessionState.walkthrough_fired_actions.
         session.walkthrough_fired_actions = set()
-    # Ground truth for "which step 6/7 sub-actions have already fired in the
+    # Ground truth for "which step 8/9 sub-actions have already fired in the
     # CURRENT wizard run" — see SessionState.walkthrough_fired_actions.
     # Recorded for every action, not just start-generation (that one keeps
     # its own dedicated flag/backstop right below since it needs stronger
     # handling — forcing wrap-up on a repeat, not just a prompt note).
-    if session.walkthrough_step in (6, 7) and action_method:
+    if session.walkthrough_step in (8, 9) and action_method:
         # Should always already be legal by the time it reaches here — see
         # _enforce_step_order, applied upstream in _stream_with_claude and
         # run_turn before this function ever runs. Logged rather than
@@ -2283,7 +2283,7 @@ def _finalize_turn(
                     "the upstream gate in _stream_with_claude/run_turn should have caught this"
                 )
         session.walkthrough_fired_actions.add(action_method)
-    if session.walkthrough_step in (6, 7) and action_method == "start-generation":
+    if session.walkthrough_step in (8, 9) and action_method == "start-generation":
         if already_fired:
             # The model fired it again despite _walkthrough_note's own
             # ground-truth line telling it not to (see generate_fired_line
@@ -2379,7 +2379,7 @@ def _finalize_turn(
                 (a for a in STEP_SUB_ACTIONS.get(step_obj.index, []) if a not in fired),
                 None,
             )
-            beat_obj = sub_beat_for(nxt) if step_obj.index in (6, 7) else None
+            beat_obj = sub_beat_for(nxt) if step_obj.index in (8, 9) else None
             allowed = (beat_obj.max_words if beat_obj is not None else step_obj.max_words)
             spoken = len(reply_text.split())
             # +15 mirrors the "at the very most" slack quoted to the model,

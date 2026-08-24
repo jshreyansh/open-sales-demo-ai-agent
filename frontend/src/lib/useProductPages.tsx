@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import Dashboard from "../pages/Dashboard";
-import Analytics from "../pages/Analytics";
 import ContentStudio from "../pages/ContentStudio";
 import BrandKit from "../pages/BrandKit";
 import Approvals from "../pages/Approvals";
+import BrandDossiers from "../pages/BrandDossiers";
+import BrandDossierDetail from "../pages/BrandDossierDetail";
+import ContentLibrary from "../pages/ContentLibrary";
+import Settings from "../pages/Settings";
 import StubPage from "../pages/StubPage";
 import MagicReelStudio from "../pages/studio/MagicReelStudio";
 import MagicAvatarStudio from "../pages/studio/MagicAvatarStudio";
@@ -35,7 +38,7 @@ const CONTENT_STUDIO_TABS: Record<string, string> = {
 // requirement to carry "which page was open" across what are now two
 // distinct visitor-facing surfaces reached from the landing chooser.
 export function useProductPages() {
-  const [activePageId, setActivePageId] = useState("dashboard");
+  const [activePageId, setActivePageId] = useState("home");
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Scroll is a real, non-simulated action (scrollBy on the actual page
@@ -85,14 +88,17 @@ export function useProductPages() {
   }
 
   function renderPage() {
-    if (activePageId === "dashboard") return <Dashboard />;
-    // Analytics has no sidebar entry any more (see pages.ts), but it's still
-    // a real page the agent can navigate to — the backend registry lists it
-    // and the scripted walkthrough highlights its funnel. Agent-reachable,
-    // just not visitor-clickable.
-    if (activePageId === "analytics") return <Analytics />;
+    if (activePageId === "home") return <Dashboard />;
     if (activePageId === "brand-kit") return <BrandKit />;
     if (activePageId === "mlr-review") return <Approvals />;
+    if (activePageId === "brand-dossiers") return <BrandDossiers onOpen={() => setActivePageId("brand-dossier-detail")} />;
+    if (activePageId === "brand-dossier-detail")
+      return <BrandDossierDetail onBack={() => setActivePageId("brand-dossiers")} />;
+    if (activePageId === "content-library") return <ContentLibrary />;
+    if (activePageId.startsWith("settings-")) {
+      const settingsTab = activePageId.replace("settings-", "") as "account" | "integrations" | "billing" | "plans";
+      return <Settings initialTab={settingsTab} />;
+    }
     if (activePageId === "magicreel-studio") return <MagicReelStudio onNavigate={setActivePageId} />;
     if (activePageId === "magicavatar-studio")
       return <MagicAvatarStudio onExit={() => setActivePageId("content-studio")} onNavigate={setActivePageId} />;

@@ -1,9 +1,9 @@
-# Seeded demo data for the landing Dashboard.
+# Seeded demo data for the landing Home page.
 #
 # Hard rule for this file: every metric has to point at something the visitor
 # can actually reach in the nav (frontend/src/registry/pages.ts) — Content
-# Studio, MLR Review, Brand Dossiers, Brand Kit, Content Library, Templates.
-# The nav was narrowed to Dashboard / Create / Library, which left this file
+# Studio, MLR Review, Brand Dossiers, Brand Kit, Content Library.
+# The nav was narrowed to Home / Create / Library, which left this file
 # leading with "Active Campaigns: 5", "Total HCPs Reached", "MR Submissions"
 # and an "Active Agents" count on a product with no Campaigns, Audience,
 # Field Rep or Agents section anywhere. That's the same "claims something
@@ -61,13 +61,12 @@ dashboard_data = {
         },
         {
             "id": "brand",
-            "label": "Brand & Templates",
-            "description": "Dossiers, brand kit and templates in play.",
+            "label": "Brand & Library",
+            "description": "Dossiers and library assets in play.",
             "accent": "#10B981",
             "icon": "palette",
             "metrics": [
                 {"label": "Brand Dossiers Live", "value": "6", "sub": "▲ 2 this quarter"},
-                {"label": "Templates", "value": "34"},
                 {"label": "Library Assets", "value": "412"},
             ],
             "sparkline": [2, 3, 3, 4, 5, 5, 6],

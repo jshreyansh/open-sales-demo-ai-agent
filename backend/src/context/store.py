@@ -48,7 +48,7 @@ class HistoryEntry:
 @dataclass
 class SessionState:
     history: List[HistoryEntry] = field(default_factory=list)
-    current_page: str = "dashboard"
+    current_page: str = "home"
     # Set by the voice pipeline when the visitor started talking while the
     # agent was actually still speaking (tracked via pipecat's own
     # BotStartedSpeakingFrame/BotStoppedSpeakingFrame) — read once by the
@@ -166,7 +166,7 @@ class SessionState:
     # field and _walkthrough_note): auto-continue should stop once THIS
     # step is fully delivered, instead of advancing into the rest of the
     # platform tour, so "just show me MagicReel end-to-end" doesn't
-    # silently roll on into MagicAvatar/MLR/analytics/dashboard. Cleared
+    # silently roll on into MagicAvatar/MLR/home. Cleared
     # back to None by a fresh "start_walkthrough" (a genuine full-tour
     # request always means "no scoping"), set to the entry step by
     # "start_module_walkthrough" (see _finalize_turn's precedence chain).

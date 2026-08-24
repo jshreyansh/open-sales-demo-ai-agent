@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getApprovals } from "../lib/api";
-import type { ApprovalsData, ApprovalEntityKind, ApprovalState } from "../lib/types";
+import { useRegisterComponent } from "../lib/uiRegistry";
+import type { ApprovalsData, ApprovalEntityKind, ApprovalRow, ApprovalState } from "../lib/types";
 
 type Tab = "pending" | "approved" | "rejected" | "withdrawn" | "all";
 
@@ -40,10 +41,31 @@ export default function Approvals() {
   const [search, setSearch] = useState("");
   const [entityFilter, setEntityFilter] = useState<"all" | ApprovalEntityKind>("all");
   const [stageFilter, setStageFilter] = useState("all");
+  // The detail panel this page was missing — a real, stored submission id
+  // rather than an index, so a direct agent action ("open this submission")
+  // survives the list re-filtering out from under it.
+  const [openRowId, setOpenRowId] = useState<string | null>(null);
 
   useEffect(() => {
     getApprovals().then(setData).catch(() => setData(null));
   }, []);
+
+  // Opens the first pending row still awaiting a decision — the one a
+  // prospect asking "what does a review actually look like" means, not an
+  // arbitrary row. Falls back to the first row overall so the action still
+  // does something sensible once every demo item happens to be decided.
+  useRegisterComponent("mlr-review", "submission-detail", {
+    open: () =>
+      setData((current) => {
+        if (current) {
+          const target = current.rows.find((r) => r.canDecide) ?? current.rows[0];
+          if (target) setOpenRowId(target.id);
+        }
+        return current;
+      }),
+  });
+
+  const openRow = data?.rows.find((r) => r.id === openRowId) ?? null;
 
   const tabCounts = useMemo(() => {
     const counts: Record<Tab, number> = { pending: 0, approved: 0, rejected: 0, withdrawn: 0, all: data?.rows.length ?? 0 };
@@ -128,7 +150,7 @@ export default function Approvals() {
             {filteredRows.map((r) => {
               const s = STATE_STYLES[r.state];
               return (
-                <tr key={r.id}>
+                <tr key={r.id} className="approvals-row--clickable" onClick={() => setOpenRowId(r.id)}>
                   <td>
                     <div className="approvals-table__primary">{r.entity.name}</div>
                     <div className="approvals-table__meta">
@@ -170,6 +192,107 @@ export default function Approvals() {
           </div>
         )}
       </div>
+
+      {openRow && data && (
+        <SubmissionDetailPanel row={openRow} stages={data.stages} onClose={() => setOpenRowId(null)} />
+      )}
     </div>
+  );
+}
+
+// Decorative — matches the confirmed scope: the timeline reads real
+// progress off the row's own stageIndex/currentStage, but Approve/Reject/
+// Withdraw don't mutate anything. This is a live product's review gate
+// shown for narration, not a real one.
+function SubmissionDetailPanel({
+  row,
+  stages,
+  onClose,
+}: {
+  row: ApprovalRow;
+  stages: string[];
+  onClose: () => void;
+}) {
+  const s = STATE_STYLES[row.state];
+  // Alternates by entity kind purely for visual variety across rows — both
+  // are real, already-uploaded showcase videos, not per-row assets (this
+  // demo has no per-submission media of its own).
+  const previewSrc = row.entityKind === "asset" ? "/videos/tecentriq-reel.mp4" : "/videos/avatar-showcase.mp4";
+
+  return (
+    <>
+      <div className="modal-overlay submission-panel__overlay" onClick={onClose} />
+      <div className="submission-panel" data-hl="submission-detail:panel">
+        <div className="submission-panel__header">
+          <div>
+            <p className="page__subtitle" style={{ margin: 0 }}>
+              {row.entityKind === "asset" ? "Asset" : "Campaign"} · {row.entity.therapy} · Submission #{row.submissionNumber}
+            </p>
+            <h2 style={{ margin: "2px 0 0", fontSize: 20 }}>{row.entity.name}</h2>
+          </div>
+          <button className="btn" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        </div>
+
+        <div className="submission-panel__submitter">
+          <span className="approvals-avatar">{initials(row.submittedBy.name)}</span>
+          <div>
+            <p style={{ margin: 0, fontWeight: 600 }}>Submitted by {row.submittedBy.name}</p>
+            <p className="stub-page__note" style={{ margin: 0 }}>{relativeTime(row.submittedAt)}</p>
+          </div>
+          <span className="approvals-state-badge" style={{ background: s.bg, color: s.color, marginLeft: "auto" }}>
+            {s.label}
+          </span>
+        </div>
+
+        {row.canDecide && (
+          <div className="submission-panel__awaiting">
+            Awaiting decision from <strong>Any Approver</strong>
+          </div>
+        )}
+
+        <div className="submission-panel__section-label">Content preview</div>
+        <video
+          key={previewSrc}
+          className="submission-panel__preview"
+          src={previewSrc}
+          controls
+          playsInline
+        />
+
+        <div className="submission-panel__section-label">Approval timeline</div>
+        <div className="submission-panel__timeline">
+          {stages.map((stage, i) => {
+            const stepState = i < row.stageIndex - 1 ? "done" : i === row.stageIndex - 1 ? "current" : "pending";
+            return (
+              <div key={stage} className={`submission-timeline-step submission-timeline-step--${stepState}`}>
+                <span className="submission-timeline-step__dot" />
+                <div>
+                  <p style={{ margin: 0, fontWeight: 600 }}>{stage}</p>
+                  <p className="stub-page__note" style={{ margin: 0 }}>
+                    {stepState === "done" ? "Approved" : stepState === "current" ? "Awaiting decision" : "Not yet started"}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="submission-panel__actions">
+          <button className="btn btn--primary" style={{ width: "100%" }} onClick={onClose}>
+            Approve {row.currentStage}
+          </button>
+          <div className="submission-panel__actions-row">
+            <button className="btn" onClick={onClose}>
+              Reject
+            </button>
+            <button className="btn" onClick={onClose}>
+              Withdraw
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
