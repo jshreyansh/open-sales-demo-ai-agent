@@ -178,6 +178,22 @@ MEETING_CHAT_POLL_INTERVAL_SECS = 0.3
 # settled turn waited an extra 0-1s at random, which reads as her being
 # slow and inconsistent. The body is a handful of attribute reads.
 PENDING_FRAGMENT_WATCHDOG_INTERVAL_SECS = 0.25
+# A minimum breath after the bot's OWN reply actually finishes before the
+# watchdog is allowed to drain an already-settled pending fragment/deferred
+# interruption into a new reply.
+#
+# Without this, a fragment stashed early in a long reply can sit past its
+# own commit window while the bot is still mid-sentence — so the instant
+# _bot_speaking flips false, the very next 0.25s poll tick fires the next
+# reply immediately, with no gap at all for the prospect to actually talk.
+# Confirmed live (session 66da2724): the prospect's "for us to look for,
+# like, a new line" settled while a ~30-second reply about brand dossiers
+# was still being spoken, then fired the instant that reply ended — two
+# full bot turns back to back with nothing in between, which read as the
+# agent "not letting me talk" rather than a normal conversation. Matches
+# SETTLE_MIN_SECS (0.7) — the shortest gap already treated as a real pause
+# elsewhere in this file.
+REPLY_HANDOFF_GRACE_SECS = 0.7
 # How long a pending fragment sits genuinely untouched (bot not speaking, no
 # turn running, VAD not mid-utterance) before the watchdog gives up waiting
 # for Smart Turn to ever call it COMPLETE and just answers what's been said
@@ -775,6 +791,36 @@ def _split_sentences(text: str) -> list[str]:
     return parts or [text]
 
 
+# Natural pause punctuation WITHIN a sentence — commas, semicolons, colons,
+# em/en dashes — each followed by whitespace (so "1,284" or a hyphenated
+# word never splits; real prose punctuation is always followed by a space).
+_CLAUSE_SPLIT_RE = re.compile(r"(?<=[,;:—–])\s+")
+
+
+def _split_speech_chunks(sentence: str) -> list[str]:
+    """Splits ONE sentence (already produced by _split_sentences) into
+    smaller clause-level pieces for TTS dispatch — each becomes its own
+    _speak() call/Cartesia context, so a barge-in can land within a
+    sentence instead of only between sentences.
+
+    Deliberately separate from _split_sentences: _spoken_parts/_cut_off_part
+    still track whole sentences as the unit of record (see
+    _amend_interrupted_turn's "repeat it whole rather than guess where
+    inside it the cut landed") — this only shrinks how much audio can be
+    synthesized and in flight before the next interruption check runs,
+    it does not change what gets recorded as heard.
+
+    Confirmed live (session 66da2724): a barge-in only ever landed at a
+    complete sentence boundary, never mid-word — e.g. a full 13-word
+    sentence played out before the cut registered. Cancelling an
+    in-flight TTS request needs a round trip to Cartesia's own server;
+    for a short sentence, Cartesia can finish generating and streaming
+    the whole thing before that cancel has a chance to land. Handing over
+    smaller pieces bounds the worst case to one clause, not one sentence."""
+    parts = [p.strip() for p in _CLAUSE_SPLIT_RE.split(sentence.strip()) if p.strip()]
+    return parts or [sentence]
+
+
 _QUESTION_STARTERS = frozenset(
     [
         "what", "why", "how", "when", "where", "who", "which", "whose",
@@ -1006,6 +1052,13 @@ class AgentRuntimeProcessor(FrameProcessor):
         # whole explanation. Starts set (idle = "nothing playing").
         self._speech_finished = asyncio.Event()
         self._speech_finished.set()
+        # When the bot's own speech last actually ended (BotStoppedSpeakingFrame)
+        # — None until it has spoken at least once this call. Read by
+        # _watch_pending_fragment_stall (see REPLY_HANDOFF_GRACE_SECS) so a
+        # settled pending fragment gets a minimum breath after the floor
+        # actually clears, instead of firing the instant _bot_speaking flips
+        # false regardless of how long ago the fragment itself settled.
+        self._last_bot_speech_ended_at: Optional[float] = None
         # True only while a TranscriptionFrame's filler/run_turn/speak
         # sequence is actively running. Lets _poll_hand_raise tell "raised
         # while I'm mid-turn, defer to its natural end" from "raised while
@@ -1341,6 +1394,7 @@ class AgentRuntimeProcessor(FrameProcessor):
         if isinstance(frame, BotStoppedSpeakingFrame):
             self._bot_speaking = False
             self._speech_finished.set()
+            self._last_bot_speech_ended_at = time.monotonic()
             # Bump the idle clock on speech ENDING, not just on it starting.
             # Confirmed live (2026-08-20 05:20:45): a 13-second sentence
             # started at :30.3 and ended at :43.4, but the clock had been set
@@ -1667,6 +1721,7 @@ class AgentRuntimeProcessor(FrameProcessor):
                         and not self._turn_in_progress
                         and not self._bot_speaking
                         and not self._user_speaking
+                        and self._reply_handoff_grace_elapsed()
                         # Every signal this pipeline has, all pointing at "they
                         # are genuinely finished", before a single word is said
                         # back. Free VAD alone can't tell a breath from a turn
@@ -1785,6 +1840,8 @@ class AgentRuntimeProcessor(FrameProcessor):
                     if not self._pending_fragment_text:
                         continue
                     if self._turn_in_progress or self._bot_speaking or self._user_speaking:
+                        continue
+                    if not self._reply_handoff_grace_elapsed():
                         continue
                     # Settled: Smart Turn called it a complete thought AND the
                     # room has been quiet long enough that nothing more is
@@ -2384,6 +2441,18 @@ class AgentRuntimeProcessor(FrameProcessor):
             f"protection now {self._fragmentation_protection():.1f}s"
         )
 
+    def _reply_handoff_grace_elapsed(self) -> bool:
+        """Has it been at least REPLY_HANDOFF_GRACE_SECS since the bot's own
+        reply actually finished speaking?
+
+        True before the bot has ever spoken this call (nothing to hand off
+        from). Exists so a pending fragment/deferred interruption whose OWN
+        settle window elapsed while the bot was still mid-reply doesn't fire
+        the instant the floor clears — see REPLY_HANDOFF_GRACE_SECS."""
+        if self._last_bot_speech_ended_at is None:
+            return True
+        return time.monotonic() - self._last_bot_speech_ended_at >= REPLY_HANDOFF_GRACE_SECS
+
     def _fragmentation_protection(self) -> float:
         """Extra quiet this speaker has earned, in seconds.
 
@@ -2549,12 +2618,15 @@ class AgentRuntimeProcessor(FrameProcessor):
             )
 
     async def _speak_reply(self, text: str, direction: FrameDirection) -> None:
-        """Like _speak, but one sentence at a time — waiting for each
-        sentence's real playback to finish (via _speech_finished, set/cleared
-        off BotStartedSpeakingFrame/BotStoppedSpeakingFrame) before starting
-        the next. This is what lets a hand-raise mid-reply interrupt at the
-        sentence boundary it happened in, instead of only ever being noticed
-        after the entire explanation has already been spoken."""
+        """Like _speak, but one CLAUSE at a time within each sentence —
+        waiting for each piece's real playback to finish (via
+        _speech_finished, set/cleared off BotStartedSpeakingFrame/
+        BotStoppedSpeakingFrame) before starting the next. This is what lets
+        a hand-raise or a barge-in land within a sentence instead of only
+        ever being noticed after the whole thing has already been spoken —
+        see _split_speech_chunks for why sentence-level wasn't fine enough.
+        _spoken_parts/_cut_off_part still record whole sentences either
+        way."""
         # Marks everything spoken from here as the ANSWER, so telemetry can
         # tell time-to-first-sound (the bridge word) from time-to-reply. The
         # two were one number until the first baseline came back negative.
@@ -2563,13 +2635,21 @@ class AgentRuntimeProcessor(FrameProcessor):
             for sentence in _split_sentences(text):
                 if self._interrupted_this_turn:
                     return
-                self._speech_finished.clear()
-                await self._speak(sentence, direction)
-                await self._speech_finished.wait()
-                if self._interrupted_this_turn:
-                    # Playback of THIS sentence was cut mid-way (the interruption
-                    # is what ended the wait above) — partially heard, so it's
-                    # recorded as truncated rather than as fully delivered.
+                cut_mid_sentence = False
+                for chunk in _split_speech_chunks(sentence):
+                    if self._interrupted_this_turn:
+                        cut_mid_sentence = True
+                        break
+                    self._speech_finished.clear()
+                    await self._speak(chunk, direction)
+                    await self._speech_finished.wait()
+                    if self._interrupted_this_turn:
+                        cut_mid_sentence = True
+                        break
+                if cut_mid_sentence:
+                    # Whichever clause was cut, the whole sentence is still
+                    # the unit of record — repeat it whole rather than guess
+                    # exactly where inside it the cut landed.
                     self._cut_off_part = sentence
                     return
                 self._spoken_parts.append(sentence)
@@ -2722,21 +2802,40 @@ class AgentRuntimeProcessor(FrameProcessor):
                 if _superseded_by_fresher_stash():
                     abandoned_before_speech = True
                     return True
-                self._speech_finished.clear()
                 # This — not _speak_reply — is the path a real streaming turn
                 # takes, so the flag has to be set here too. It wasn't, which
                 # is why time_to_reply_enqueue_ms came back as "never measured"
                 # across an entire call: the only two callers that set it are
                 # the non-streaming fallbacks, which almost never run.
                 self._speaking_reply = True
+                cut_mid_sentence = False
                 try:
-                    await self._speak(sentence, direction)
+                    # One clause at a time, not the whole sentence in one
+                    # _speak() call — see _split_speech_chunks for why
+                    # sentence-level granularity let a barge-in play out an
+                    # entire sentence before the cancel had a chance to land.
+                    for unit in _split_speech_chunks(sentence):
+                        if self._paused:
+                            self._paused_remainder = " ".join(
+                                [sentence] + [c for c in chunks[chunks.index(sentence) + 1:] if c.strip()]
+                            ).strip() or None
+                            return True
+                        if self._interrupted_this_turn:
+                            cut_mid_sentence = True
+                            break
+                        self._speech_finished.clear()
+                        await self._speak(unit, direction)
+                        spoken_anything_yet = True
+                        await self._speech_finished.wait()
+                        if self._interrupted_this_turn:
+                            cut_mid_sentence = True
+                            break
                 finally:
                     self._speaking_reply = False
-                spoken_anything_yet = True
-                await self._speech_finished.wait()
-                if self._interrupted_this_turn:
+                if cut_mid_sentence:
                     # Cut mid-sentence — see the same branch in _speak_reply.
+                    # Whichever clause was cut, the whole sentence stays the
+                    # unit of record.
                     self._cut_off_part = sentence
                     return True
                 self._spoken_parts.append(sentence)
