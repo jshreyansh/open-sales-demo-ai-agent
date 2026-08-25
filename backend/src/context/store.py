@@ -159,6 +159,21 @@ class SessionState:
     # backstop for the model failing to set start_walkthrough itself. Never
     # persisted — it describes one turn, not the session.
     pending_walkthrough_request: Optional[str] = None
+    # A DIFFERENT gap than pending_walkthrough_request above: that one only
+    # covers the turn the request phrase is actually heard. Instruction 0c's
+    # own documented pattern has the model ask a clarifying/confirming
+    # question first ("Want to walk through it?") rather than deciding
+    # outright — pending_walkthrough_request is gone by the time the
+    # prospect answers "yeah" (it's re-derived fresh from THAT turn's raw
+    # text every turn, via _begin_turn, and "yeah" matches no module name).
+    # Set by _finalize_turn when it sees the model defer this way; consumed,
+    # unconditionally, by the very next turn's _finalize_turn — confirmed
+    # live (call 631341bd, 2026-08-25): the model asked to walk through
+    # MagicAvatar, the prospect said "yeah," and the model narrated straight
+    # into the Brief step without ever setting start_module_walkthrough —
+    # so the walkthrough state machine never activated, nothing scheduled
+    # the next beat, and the tour went silent until the prospect hung up.
+    walkthrough_module_awaiting_confirmation: Optional[str] = None
     # Same "backstop, cleared every turn" shape as pending_walkthrough_request
     # above, for a different gap: a prospect's own words plainly asking about
     # pricing/cost/commercials/subscription/money don't reliably get the

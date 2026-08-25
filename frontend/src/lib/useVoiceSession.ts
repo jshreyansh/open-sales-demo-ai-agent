@@ -12,6 +12,14 @@ const visitorId = getVisitorId();
 // not the normal path (see isAgentNavigating's own comment below).
 const NAVIGATING_HOLD_MS = 2500;
 
+// How long a VAD "user stopped speaking" event must hold before it's
+// trusted as a real end-of-turn rather than an ordinary mid-sentence pause
+// (see isAgentThinking's own comment below) — VAD's own stop_secs (bot.py)
+// is tuned to ~0.3s, well inside how long a normal breath or "let me think"
+// pause lasts, so treating every VAD stop as "she's thinking now" made the
+// Listening state nearly invisible during real, non-continuous speech.
+const THINKING_DEBOUNCE_MS = 600;
+
 /**
  * The one place that drives the shared PipecatClient — used independently by
  * ChatWidget (Product Mode's on-demand Talk toggle) and MeetingShell
@@ -38,11 +46,21 @@ export function useVoiceSession(
   // True for the gap between the visitor finishing and the agent's own
   // audio starting — turn commit + LLM generation + TTS enqueue, all the
   // real work that happens with nothing audible yet. Derived entirely from
-  // events already received here, no backend signal needed: starts the
-  // instant the visitor stops, ends the instant the agent actually starts
-  // (or immediately if the visitor starts talking again first, since
-  // there's nothing left to "think about" once they've moved on).
+  // events already received here, no backend signal needed: ends the
+  // instant the agent actually starts (or immediately if the visitor starts
+  // talking again first, since there's nothing left to "think about" once
+  // they've moved on) — but does NOT start the instant VAD reports the
+  // visitor stopped. VAD's own stop_secs (bot.py) fires on an ordinary
+  // mid-sentence pause, not just a real end of turn (the backend's own
+  // settle-window/fragmentation logic exists specifically because a VAD
+  // stop isn't a reliable "they're done" signal) — flipping to Thinking
+  // immediately made Listening nearly invisible during real, non-continuous
+  // speech (confirmed live: a real call where the agent tile just looked
+  // empty the whole time the prospect was actually talking). See
+  // THINKING_DEBOUNCE_MS: only commits to Thinking once a stop has held
+  // long enough to plausibly be real, cancelable by a resume in that window.
   const [isAgentThinking, setIsAgentThinking] = useState(false);
+  const thinkingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // True right when a UI action (a page navigation/highlight) arrives from
   // the poll below, until she actually starts speaking about it (or, as a
   // safety net, NAVIGATING_HOLD_MS passes with no speech at all — an action
@@ -58,14 +76,17 @@ export function useVoiceSession(
   useRTVIClientEvent(RTVIEvent.UserStartedSpeaking, useCallback(() => {
     setIsUserSpeaking(true);
     setIsAgentThinking(false);
+    if (thinkingTimeoutRef.current) clearTimeout(thinkingTimeoutRef.current);
   }, []));
   useRTVIClientEvent(RTVIEvent.UserStoppedSpeaking, useCallback(() => {
     setIsUserSpeaking(false);
-    setIsAgentThinking(true);
+    if (thinkingTimeoutRef.current) clearTimeout(thinkingTimeoutRef.current);
+    thinkingTimeoutRef.current = setTimeout(() => setIsAgentThinking(true), THINKING_DEBOUNCE_MS);
   }, []));
   useRTVIClientEvent(RTVIEvent.BotStartedSpeaking, useCallback(() => {
     setIsAgentSpeaking(true);
     setIsAgentThinking(false);
+    if (thinkingTimeoutRef.current) clearTimeout(thinkingTimeoutRef.current);
     setIsAgentNavigating(false);
   }, []));
   useRTVIClientEvent(RTVIEvent.BotStoppedSpeaking, useCallback(() => setIsAgentSpeaking(false), []));
@@ -73,6 +94,7 @@ export function useVoiceSession(
   useEffect(() => {
     return () => {
       if (navigatingTimeoutRef.current) clearTimeout(navigatingTimeoutRef.current);
+      if (thinkingTimeoutRef.current) clearTimeout(thinkingTimeoutRef.current);
     };
   }, []);
 

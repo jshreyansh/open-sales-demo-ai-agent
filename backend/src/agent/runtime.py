@@ -1603,6 +1603,12 @@ _MODULE_MENTIONS = (
     ("magicavatar", re.compile(r"\bmagic\s?avatars?\b", re.IGNORECASE)),
 )
 
+# Which studio page each module's walkthrough actually lives on — used by
+# the module-confirmation backstop (see walkthrough_module_awaiting_confirmation)
+# to corroborate that the model's own action this turn is genuinely
+# continuing into the requested module, not something else entirely.
+_MODULE_STUDIO_PAGE = {"magicreel": "magicreel-studio", "magicavatar": "magicavatar-studio"}
+
 
 # An unambiguous request from the PROSPECT for a guided tour.
 #
@@ -2137,6 +2143,39 @@ async def _finalize_turn(
                 "walkthrough and start_walkthrough wasn't set this turn, likely ad hoc wizard narration"
             )
 
+    # Resolve any confirmation armed by the PREVIOUS turn (see
+    # walkthrough_module_awaiting_confirmation) before the fresh
+    # pending_walkthrough_request check below — this one applies regardless
+    # of whether the model also acted THIS turn, deliberately unlike that
+    # one: the model already made its considered decision back on the turn
+    # it asked permission ("Want to walk through it?"), so this turn's own
+    # action (typically already narrating into the module — see call
+    # 631341bd) just needs the internal state to catch up and match, not to
+    # be re-litigated. Guarded on the model's own action actually targeting
+    # the SAME module's studio page, so a genuine decline (the model
+    # redirecting elsewhere, or no matching action at all) doesn't get
+    # force-started underneath it.
+    awaiting_confirmation = session.walkthrough_module_awaiting_confirmation
+    session.walkthrough_module_awaiting_confirmation = None
+    if awaiting_confirmation and session.walkthrough_step is None and not end_walkthrough:
+        confirmed_page = (result.get("action") or {}).get("page")
+        if confirmed_page == _MODULE_STUDIO_PAGE.get(awaiting_confirmation):
+            entry = {"magicreel": 8, "magicavatar": 9}[awaiting_confirmation]
+            session.walkthrough_step = entry
+            session.walkthrough_scope_end = entry
+            session.walkthrough_awaiting_answer = False
+            activation_source = "deterministic_backstop:module_confirmation"
+            logger.warning(
+                f"[{session.visitor_id}] prospect answered the {awaiting_confirmation} walkthrough "
+                f"offer — starting at step {session.walkthrough_step} (model never set "
+                "start_module_walkthrough itself)"
+            )
+        else:
+            logger.info(
+                f"[{session.visitor_id}] {awaiting_confirmation} walkthrough offer was pending, "
+                f"but this turn's action (page={confirmed_page!r}) doesn't match — treating as declined"
+            )
+
     # Apply the deterministic request backstop (recorded by _begin_turn)
     # only if nothing else already started a walkthrough this turn. Cleared
     # unconditionally — it describes this one turn.
@@ -2194,12 +2233,25 @@ async def _finalize_turn(
             f"the model never started one — starting at step {session.walkthrough_step}"
         )
     elif requested and session.walkthrough_step is None and not end_walkthrough:
-        # Same shape as the CONSISTENCY GUARD below: logged so the decision
-        # is debuggable without re-reading the transcript, never silent.
-        logger.info(
-            f"[{session.visitor_id}] explicit {requested} walkthrough request heard, but the "
-            f"model already acted this turn (action={action_method!r}) — not overriding it"
-        )
+        if requested in _MODULE_STUDIO_PAGE and _reply_hands_over_the_floor(result.get("reply") or ""):
+            # Model deferred with its own clarifying/confirming question
+            # instead of deciding outright (instruction 0c's documented
+            # "ask a quick clarifying question first" pattern) — arm the
+            # NEXT turn's confirmation backstop above, in case the model
+            # forgets to set start_module_walkthrough once the prospect
+            # actually answers.
+            session.walkthrough_module_awaiting_confirmation = requested
+            logger.info(
+                f"[{session.visitor_id}] explicit {requested} walkthrough request heard, model "
+                "deferred with its own question — arming next-turn confirmation backstop"
+            )
+        else:
+            # Same shape as the CONSISTENCY GUARD below: logged so the decision
+            # is debuggable without re-reading the transcript, never silent.
+            logger.info(
+                f"[{session.visitor_id}] explicit {requested} walkthrough request heard, but the "
+                f"model already acted this turn (action={action_method!r}) — not overriding it"
+            )
 
     # LATCH RELEASE ON PROVEN PROGRESS — an ordinary reply ending in "?"
     # (any question at all, not just the auto-continue cap's own "should I
