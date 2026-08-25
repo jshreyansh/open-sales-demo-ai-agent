@@ -2061,6 +2061,25 @@ async def _finalize_turn(
     if end_walkthrough:
         session.walkthrough_step = None
         session.walkthrough_scope_end = None
+        # Deterministic backstop for question 5 ("connect with a rep for next
+        # steps") — instruction 8 and the Home wrap-up step's own guidance
+        # (walkthrough.py) already tell the model to ask this at the tour's
+        # close if it hasn't come up, but a real call (631341bd, 2026-08-25)
+        # showed the model can just skip it: it said its closing line and
+        # went silent, and the prospect hung up 27s later reading that
+        # silence as the call being over. Same pattern as
+        # _pricing_backstop_action/_enforce_step_order elsewhere in this
+        # file — once a call-critical behavior is observed to fail on
+        # prompt-following alone, it gets a deterministic backstop instead
+        # of a second chance to remember. Plain string append, not a second
+        # LLM call: cannot hallucinate, fires at most once (walkthrough_step
+        # only transitions to None here, once, per call).
+        if not session.qual_next_step_response and result.get("reply"):
+            result["reply"] = (
+                result["reply"].rstrip()
+                + " Before we wrap up — would it help to connect you with someone "
+                "from the team for next steps?"
+            )
     elif start_walkthrough:
         # A genuine full-tour request always means "no scoping" — even if
         # a module-scoped walkthrough was already active, this supersedes
@@ -2465,7 +2484,23 @@ async def _finalize_turn(
     elif resume_walkthrough:
         session.walkthrough_awaiting_answer = False
     elif new_awaiting:
-        session.walkthrough_awaiting_answer = True
+        # Corroborate the model's own claim against its actual reply text
+        # before trusting it — a real incident (call 631341bd, 2026-08-25)
+        # showed the model set this true on a flat, non-question reply
+        # ("Here's the Script stage again...", answering "can you go back")
+        # with nothing left for the prospect to answer, so nothing but the
+        # 45s stall watchdog could ever clear it. _reply_hands_over_the_floor
+        # is the same deterministic signal already used a few lines below to
+        # SET this flag when the model forgets to — using it here too closes
+        # the gap where the model's own field could disagree with its own
+        # text instead of introducing a second, conflicting source of truth.
+        if _reply_hands_over_the_floor(result.get("reply") or ""):
+            session.walkthrough_awaiting_answer = True
+        else:
+            logger.info(
+                f"[{session.visitor_id}] model set walkthrough_awaiting_answer on a "
+                "non-question reply — ignoring rather than latching on nothing to answer"
+            )
     # else: leave session.walkthrough_awaiting_answer exactly as it was
 
     # An explicit human stop. Deliberately a SEPARATE field from

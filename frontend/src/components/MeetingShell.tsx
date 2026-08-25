@@ -522,15 +522,20 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
                 open from zero width when she arrives, and a mount would snap
                 instead. aria-hidden while she isn't in the room yet. */}
             <div className="meet__tile meet__tile--agent" data-flip-id="agent" aria-hidden={!agentJoined}>
-                {/* Four mutually-exclusive states, icon plus a word — "is it
-                    hearing me right now, or doing something else?" is the
-                    question people actually ask of a voice agent, and the
-                    icon alone never answered it as plainly as a label next
-                    to it does. Priority order is deliberate: Speaking is the
-                    most certain signal, so it always wins even if an action
-                    just fired in the same beat (Navigating would otherwise
-                    flash and immediately get replaced, reading as a glitch).
-                    Navigating (a page/highlight action just arrived — see
+                {/* Four mutually-exclusive states. Speaking/Navigating/Thinking
+                    keep an icon plus a word — "is it hearing me right now, or
+                    doing something else?" is the question people actually ask
+                    of a voice agent, and the icon alone never answered it as
+                    plainly as a label next to it does. Listening is
+                    deliberately icon-only: unlike the other three, it's a
+                    passive/receiving state rather than an active one, and the
+                    ear icon alone already reads clearly without needing a
+                    label — the tooltip still says so for anyone hovering.
+                    Priority order is deliberate: Speaking is the most certain
+                    signal, so it always wins even if an action just fired in
+                    the same beat (Navigating would otherwise flash and
+                    immediately get replaced, reading as a glitch). Navigating
+                    (a page/highlight action just arrived — see
                     isAgentNavigating) outranks Thinking because it's a more
                     specific, more useful answer to "why isn't she talking"
                     for that exact beat. Listening requires real detected
@@ -550,8 +555,8 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
                     <MeetIcon name="dots" size={13} /> Thinking
                   </span>
                 ) : isUserSpeaking ? (
-                  <span className="meet__status-badge meet__status-badge--listening" title={`${AGENT_NAME} is listening`}>
-                    <MeetIcon name="ear" size={13} /> Listening
+                  <span className="meet__status-badge meet__status-badge--listening meet__status-badge--icon-only" title={`${AGENT_NAME} is listening`}>
+                    <MeetIcon name="ear" size={13} />
                   </span>
                 ) : null}
                 <TileAvatar ringRef={agentRingRef} photo={AGENT_PHOTO} letter={AGENT_INITIAL} avatarClassName="meet__avatar--tile meet__avatar--agent" />

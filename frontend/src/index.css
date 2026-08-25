@@ -2789,6 +2789,14 @@ body {
   animation: meet-ear-listen 2s ease-in-out infinite;
 }
 
+/* Listening drops the text label (see MeetingShell.tsx) — the base badge's
+   padding/gap are tuned for icon+text, so an icon-only badge needs its own
+   symmetric padding and no gap, or the pill reads as clipped/off-center. */
+.meet__status-badge--icon-only {
+  gap: 0;
+  padding: 5px;
+}
+
 /* Thinking gets its own, calmer color (amber, not green) — it isn't audio
    getting through in either direction, so borrowing the listening/speaking
    green would misleadingly suggest one of those is still true. */

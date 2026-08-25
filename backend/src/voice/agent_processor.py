@@ -524,6 +524,16 @@ EARLY_FOLLOWUP_WINDOW_SECS = 2.0
 # the fast path back rather than being punished for the rest of the call.
 FRAGMENTATION_DECAY_TURNS = 6
 
+# Same shape as the fragmentation protection above, for repeated genuine
+# barge-ins in short succession (see _interruption_protection()). Kept as
+# its own constants rather than reusing the fragmentation ones so the two
+# can be tuned independently — they're evidence of different things (still
+# mid-thought vs. actively cutting in), even though the earned-patience
+# mechanics are identical.
+INTERRUPTION_PROTECTION_STEP_SECS = 0.5
+INTERRUPTION_PROTECTION_MAX_SECS = 2.0
+INTERRUPTION_DECAY_TURNS = 6
+
 # How long a gap must be before a new fragment counts as a genuine PAUSE
 # rather than a breath inside one sentence.
 #
@@ -911,6 +921,15 @@ class AgentRuntimeProcessor(FrameProcessor):
     # decided they had. Session-scoped only: nothing is learned across calls.
     _fragmentation_events: int = 0
     _turns_since_fragmentation: int = 0
+    # Same shape as the fragmentation profile above, for a different signal:
+    # genuine repeated barge-ins in short succession (call 631341bd,
+    # 2026-08-25 — 4 real interruptions in ~25s while the prospect answered
+    # the opening questions in a halting, self-correcting way). start_secs
+    # stays as fast/snappy as ever for the FIRST interruption; only repeated
+    # ones earn the agent extra patience before it re-engages — see
+    # _interruption_protection().
+    _interruption_events: int = 0
+    _turns_since_interruption: int = 0
     # VAD noise accounting. Every VAD start is the agent deciding someone is
     # talking; the ones that never produce a transcript were something else —
     # a fan, a keyboard, a door, mic bleed. That matters beyond cosmetics: while
@@ -1991,7 +2010,17 @@ class AgentRuntimeProcessor(FrameProcessor):
         self._cancel_pending_auto_continue()
         self._cancel_prefetch()
         self._turn_in_progress = True
+        # Captured before the reset just below — this turn's own confirmed-
+        # interruption status is the evidence _interruption_protection()
+        # needs, and a real transcript landing here (rather than the false-
+        # interruption resume path elsewhere) is exactly what makes it a
+        # genuine barge-in rather than a VAD noise blip.
+        was_interrupted_this_turn = self._interrupted_this_turn
         self._interrupted_this_turn = False
+        if was_interrupted_this_turn:
+            self._note_interruption_event()
+        else:
+            self._turns_since_interruption += 1
         # Answered — the burst is over, so the next one starts impatient
         # again rather than inheriting a stretched window.
         self._burst_fragments = 0
@@ -2459,6 +2488,42 @@ class AgentRuntimeProcessor(FrameProcessor):
             f"protection now {self._fragmentation_protection():.1f}s"
         )
 
+    def _note_interruption_event(self) -> None:
+        """Records a genuine, confirmed barge-in — real transcribed speech
+        cut the bot off mid-reply, not a false-VAD blip (those resolve via
+        the false-interruption resume path instead and never reach here).
+        Same shape as _note_fragmentation_event: this is evidence for
+        _interruption_protection(), not a value read directly."""
+        self._interruption_events += 1
+        self._turns_since_interruption = 0
+        logger.info(
+            f"[{self._visitor_id}] interruption signal — "
+            f"{self._interruption_events} this session, "
+            f"protection now {self._interruption_protection():.1f}s"
+        )
+
+    def _interruption_protection(self) -> float:
+        """Extra quiet the agent gives itself before re-engaging, earned by
+        repeated genuine interruptions in short succession (call 631341bd,
+        2026-08-25: 4 real barge-ins in ~25s while the prospect answered
+        haltingly, self-correcting mid-thought — each one a genuine
+        interruption on its own, but the rapid string of them is what read
+        as the agent being jumpy).
+
+        Deliberately does NOT touch VADParams.start_secs (bot.py) — that
+        stays exactly as fast/snappy as today for the FIRST interruption,
+        which is the case it was tuned for (see bot.py's own comment on a
+        previously reported "barge-in feels laggy" complaint). Only the
+        SECOND and later rapid ones earn the agent extra patience, via the
+        same decaying earned-patience shape _fragmentation_protection()
+        already uses for a structurally identical problem."""
+        decayed = self._turns_since_interruption // INTERRUPTION_DECAY_TURNS
+        active = max(0, self._interruption_events - decayed)
+        return min(
+            active * INTERRUPTION_PROTECTION_STEP_SECS,
+            INTERRUPTION_PROTECTION_MAX_SECS,
+        )
+
     def _reply_handoff_grace_elapsed(self) -> bool:
         """Has it been at least REPLY_HANDOFF_GRACE_SECS since the bot's own
         reply actually finished speaking?
@@ -2503,7 +2568,7 @@ class AgentRuntimeProcessor(FrameProcessor):
         conservative = self._settle_window()
         if not FAST_COMMIT_ENABLED:
             return conservative
-        protection = self._fragmentation_protection()
+        protection = self._fragmentation_protection() + self._interruption_protection()
         # Any fragmentation in THIS turn disqualifies the fast path outright,
         # regardless of session history — the evidence is right in front of us.
         if self._burst_fragments > 1 or protection > 0:
@@ -2528,13 +2593,19 @@ class AgentRuntimeProcessor(FrameProcessor):
             SETTLE_MIN_SECS, SETTLE_MAX_SECS - (SETTLE_MAX_SECS - SETTLE_MIN_SECS) * prob
         )
         if self._burst_fragments <= 1:
-            return interpolated
-        stepped = min(
-            CONSOLIDATION_SETTLE_BASE_SECS
-            + CONSOLIDATION_SETTLE_STEP_SECS * max(0, self._burst_fragments - 1),
-            CONSOLIDATION_SETTLE_MAX_SECS,
-        )
-        return max(stepped, interpolated)
+            base = interpolated
+        else:
+            stepped = min(
+                CONSOLIDATION_SETTLE_BASE_SECS
+                + CONSOLIDATION_SETTLE_STEP_SECS * max(0, self._burst_fragments - 1),
+                CONSOLIDATION_SETTLE_MAX_SECS,
+            )
+            base = max(stepped, interpolated)
+        # Independent floor, on top of whatever fragmentation already earned —
+        # repeated genuine interruptions are a different signal (actively
+        # cutting in) from mid-thought fragmentation, so this can only ever
+        # add patience, never override the fragmentation-driven value below it.
+        return max(base, self._interruption_protection())
 
     def _stall_backstop_grace(self) -> float:
         """How long a stalled fragment must sit silent before the pure
