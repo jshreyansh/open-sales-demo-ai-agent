@@ -12,6 +12,7 @@ views are just queries over this one log, so there's nothing to keep
 consistent across two writes.
 """
 
+import json
 import os
 import sqlite3
 import time
@@ -170,6 +171,42 @@ def init_db() -> None:
             )
             """
         )
+        # Post-call feedback screen (see server.py's /api/call-rating). One
+        # row per session, upsert like call_summaries — there's only ever
+        # one current rating worth keeping per call. tags is a JSON-encoded
+        # list rather than its own table: a handful of short tag ids, same
+        # "flexible shape, no migration for a new tag later" reasoning as
+        # qualification_fields' field_name/field_value pair.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS call_ratings (
+                visitor_id TEXT PRIMARY KEY,
+                sentiment TEXT,
+                reason TEXT,
+                tags TEXT,
+                call_duration_secs INTEGER,
+                disconnect_reason TEXT,
+                skipped INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        # Lifecycle events for the same feedback screen ("shown", "submitted",
+        # "skipped") — append-only like transcript_turns, since funnel
+        # drop-off (how many actually saw the prompt vs. acted on it) is
+        # only answerable if every stage leaves its own row rather than
+        # only the final outcome.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS call_rating_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                visitor_id TEXT NOT NULL,
+                event TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_call_rating_events_visitor ON call_rating_events(visitor_id)")
 
 
 class VisitorLookup(TypedDict):
@@ -397,6 +434,102 @@ def get_call_summary(visitor_id: str) -> Optional[str]:
             (visitor_id,),
         ).fetchone()
     return row["summary"] if row else None
+
+
+def _save_call_rating_once(
+    visitor_id: str,
+    sentiment: Optional[str],
+    reason: Optional[str],
+    tags: Optional[List[str]],
+    call_duration_secs: Optional[int],
+    disconnect_reason: Optional[str],
+    skipped: bool,
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO call_ratings
+                (visitor_id, sentiment, reason, tags, call_duration_secs, disconnect_reason, skipped, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(visitor_id) DO UPDATE SET
+                sentiment = excluded.sentiment,
+                reason = excluded.reason,
+                tags = excluded.tags,
+                call_duration_secs = excluded.call_duration_secs,
+                disconnect_reason = excluded.disconnect_reason,
+                skipped = excluded.skipped,
+                created_at = excluded.created_at
+            """,
+            (
+                visitor_id,
+                sentiment,
+                reason,
+                json.dumps(tags) if tags else None,
+                call_duration_secs,
+                disconnect_reason,
+                1 if skipped else 0,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def save_call_rating(
+    visitor_id: str,
+    sentiment: Optional[str],
+    reason: Optional[str],
+    tags: Optional[List[str]],
+    call_duration_secs: Optional[int],
+    disconnect_reason: Optional[str],
+    skipped: bool,
+) -> None:
+    _write_with_retry(
+        _save_call_rating_once,
+        visitor_id,
+        sentiment,
+        reason,
+        tags,
+        call_duration_secs,
+        disconnect_reason,
+        skipped,
+    )
+
+
+def get_call_rating(visitor_id: str) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT sentiment, reason, tags, call_duration_secs, disconnect_reason, skipped, created_at
+            FROM call_ratings WHERE visitor_id = ?
+            """,
+            (visitor_id,),
+        ).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    result["tags"] = json.loads(result["tags"]) if result["tags"] else []
+    result["skipped"] = bool(result["skipped"])
+    return result
+
+
+def _log_call_rating_event_once(visitor_id: str, event: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO call_rating_events (visitor_id, event, created_at) VALUES (?, ?, ?)",
+            (visitor_id, event, datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def log_call_rating_event(visitor_id: str, event: str) -> None:
+    _write_with_retry(_log_call_rating_event_once, visitor_id, event)
+
+
+def list_call_rating_events(visitor_id: str) -> List[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT event, created_at FROM call_rating_events WHERE visitor_id = ? ORDER BY created_at ASC",
+            (visitor_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_visitor_identity(visitor_id: str) -> Optional[VisitorIdentity]:

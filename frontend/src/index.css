@@ -6863,7 +6863,8 @@ body {
 }
 
 .admin-qualification__title,
-.admin-call-summary__title {
+.admin-call-summary__title,
+.admin-call-rating__title {
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
@@ -6921,6 +6922,12 @@ body {
   line-height: 1.6;
   color: inherit;
   margin: 0;
+}
+
+.admin-call-rating {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .admin__error,
@@ -9160,4 +9167,187 @@ body {
   .dossier-grid { grid-template-columns: minmax(0, 1fr); }
   .dossier-row:nth-last-child(-n + 2) { border-bottom: 1px solid var(--border); }
   .dossier-row:last-child { border-bottom: none; }
+}
+
+/* Post-call feedback screen (see PostCallRatingScreen.tsx) — shown in
+   place of the call UI the instant a call ends, before MeetingShell
+   actually reverts to PreJoinScreen. Same full-page dark-card shape as
+   .prejoin__busy, deliberately calmer/lighter: no hero art, no gradient
+   title, this is a quick low-friction ask, not a landing moment. */
+.postcall {
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #0c0c0e;
+  color: #e8eaed;
+  font-family: var(--font);
+}
+
+.postcall__card {
+  width: 100%;
+  max-width: 440px;
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  padding: clamp(28px, 4vh, 40px) clamp(24px, 3vw, 36px);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.postcall__title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: #fff;
+}
+
+.postcall__choices {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+
+.postcall__choice {
+  flex: 1;
+  padding: 14px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.postcall__choice:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.09);
+  border-color: var(--accent, #ff4f00);
+}
+
+.postcall__skip {
+  background: none;
+  border: none;
+  color: rgba(232, 234, 237, 0.55);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  padding: 0;
+}
+
+.postcall__skip:hover {
+  color: rgba(232, 234, 237, 0.85);
+}
+
+.postcall__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.postcall__tag {
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(232, 234, 237, 0.85);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.postcall__tag:hover {
+  border-color: rgba(255, 255, 255, 0.32);
+}
+
+.postcall__tag--selected {
+  background: var(--accent, #ff4f00);
+  border-color: var(--accent, #ff4f00);
+  color: #fff;
+}
+
+.postcall__textarea {
+  width: 100%;
+  min-height: 70px;
+  resize: vertical;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+  color: #e8eaed;
+  font-family: var(--font);
+  font-size: 13.5px;
+  padding: 10px 12px;
+}
+
+.postcall__textarea:focus {
+  outline: none;
+  border-color: var(--accent, #ff4f00);
+}
+
+.postcall__actions {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+
+.postcall__back {
+  padding: 11px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: transparent;
+  color: rgba(232, 234, 237, 0.75);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.postcall__submit {
+  flex: 1;
+  padding: 11px 16px;
+  border-radius: 12px;
+  border: none;
+  background: var(--accent, #ff4f00);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.postcall__submit:hover {
+  filter: brightness(1.08);
+}
+
+.postcall__thankyou {
+  font-size: 15px;
+  line-height: 1.5;
+  color: rgba(232, 234, 237, 0.9);
+  margin: 0;
+}
+
+.postcall__link {
+  color: var(--accent, #ff4f00);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.postcall__done {
+  padding: 10px 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: transparent;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
 }

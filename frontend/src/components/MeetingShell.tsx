@@ -12,6 +12,7 @@ import MeetIcon from "./MeetIcons";
 import Icon from "./Icon";
 import ShowcaseMedal from "./ShowcaseMedal";
 import PreJoinScreen from "./PreJoinScreen";
+import PostCallRatingScreen from "./PostCallRatingScreen";
 import MeetingChatPanel, { type MeetingChatMessage } from "./MeetingChatPanel";
 import ExampleGalleryPanel from "./ExampleGalleryPanel";
 import { AGENT_NAME, AGENT_INITIAL, AGENT_PHOTO } from "../lib/persona";
@@ -125,6 +126,13 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
   // below) behind PreJoinScreen — the visitor picks a rep and gives their
   // name there first, a real call doesn't auto-connect before that.
   const [joined, setJoined] = useState(false);
+  // Set the instant either end-of-call path fires (hangup button, or the
+  // passive-disconnect effect below) instead of leaving immediately — the
+  // real setJoined(false)/onLeave() is deferred to PostCallRatingScreen's
+  // onDone, once the visitor has actually submitted or skipped. null means
+  // "no call has just ended", not "no call is active" — during a live call
+  // this stays null the whole time.
+  const [postCallInfo, setPostCallInfo] = useState<{ callDurationSecs: number; disconnectReason: string } | null>(null);
   // Captured from PreJoinScreen — threaded into connect() below so the
   // voice pipeline's own process (see the connect-effect's comment) gets it
   // directly, rather than relying on a side channel it can't see.
@@ -331,22 +339,33 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
   // than an intentional end. Once the call has genuinely connected, a drop
   // back to disconnected is treated the same as clicking hangup.
   const wasConnected = useRef(false);
+  // Wall-clock connect time, for the post-call screen's call-duration field
+  // — set the first moment voiceConnected goes true, cleared once that
+  // duration's been read out at disconnect, so a following call gets a
+  // fresh start time rather than accumulating across calls.
+  const connectedAtRef = useRef<number | null>(null);
   useEffect(() => {
     if (voiceConnected) {
       wasConnected.current = true;
+      if (connectedAtRef.current === null) connectedAtRef.current = Date.now();
       return;
     }
     if (wasConnected.current) {
       wasConnected.current = false;
-      // Back to the pre-join screen explicitly.
-      //
-      // This used to happen by accident: onLeave() navigated /demo/meet ->
-      // /, the route changed, this component unmounted, and `joined` went
-      // with it. Since / became this very route, that navigation is a
-      // no-op and nothing remounts — so without resetting here, hanging up
-      // left the visitor staring at a dead call they couldn't leave.
-      setJoined(false);
+      const callDurationSecs = connectedAtRef.current ? Math.round((Date.now() - connectedAtRef.current) / 1000) : 0;
+      connectedAtRef.current = null;
+      // onLeave() fires here, immediately — same timing as before the
+      // feedback screen existed. It's what actually tears down the voice
+      // connection (disconnectVoice()) and frees the server-side call slot
+      // (releaseVoiceLock()); deferring it to the feedback screen's onDone
+      // left a real connection alive underneath the rating UI (confirmed
+      // live: hanging up before the agent even joined, then hearing her
+      // join and greet anyway a few seconds into the rating screen — the
+      // in-flight connection just kept going in the background). Only the
+      // VISIBLE transition back to PreJoinScreen (setJoined(false)) waits
+      // for the feedback screen's onDone now, not the real teardown.
       onLeave();
+      setPostCallInfo({ callDurationSecs, disconnectReason: "connection_lost" });
     }
   }, [voiceConnected, onLeave]);
 
@@ -446,6 +465,23 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
     setVisitorEmail(email);
     setJoined(true);
     return true;
+  }
+
+  if (postCallInfo) {
+    return (
+      <PostCallRatingScreen
+        visitorId={visitorId}
+        callDurationSecs={postCallInfo.callDurationSecs}
+        disconnectReason={postCallInfo.disconnectReason}
+        onDone={() => {
+          // onLeave() already fired the moment the call actually ended (see
+          // the hangup handler / disconnect effect above) — this only
+          // resets the local UI state that controls what renders next.
+          setPostCallInfo(null);
+          setJoined(false);
+        }}
+      />
+    );
   }
 
   if (!joined) {
@@ -738,10 +774,19 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
         <button
           className="meet__ctrl meet__ctrl--hangup"
           onClick={() => {
-            // Same reasoning as the disconnect effect above — the route no
-            // longer changes underneath us, so the reset has to be explicit.
-            setJoined(false);
+            // onLeave() fires immediately, same timing as before the
+            // feedback screen existed — see the disconnect effect above for
+            // why this can't be deferred to onDone (a real connection kept
+            // running in the background underneath the rating screen
+            // otherwise, confirmed live: hanging up before the agent even
+            // joined still let her connect and greet a few seconds later).
+            // Only setJoined(false) (the visible transition) waits.
+            const callDurationSecs = connectedAtRef.current
+              ? Math.round((Date.now() - connectedAtRef.current) / 1000)
+              : 0;
+            connectedAtRef.current = null;
             onLeave();
+            setPostCallInfo({ callDurationSecs, disconnectReason: "visitor_hangup" });
           }}
         >
           <MeetIcon name="hangup" />

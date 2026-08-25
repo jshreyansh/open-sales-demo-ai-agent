@@ -109,6 +109,34 @@ export async function setHandRaiseState(visitorId: string, raised: boolean): Pro
   });
 }
 
+export type CallRatingSentiment = "great" | "okay" | "needs_work";
+
+export async function submitCallRating(
+  visitorId: string,
+  params: {
+    sentiment?: CallRatingSentiment;
+    reason?: string;
+    tags?: string[];
+    callDurationSecs?: number;
+    disconnectReason?: string;
+    skipped?: boolean;
+  }
+): Promise<void> {
+  await fetch(`${API_URL}/api/call-rating`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visitorId, skipped: false, ...params }),
+  });
+}
+
+export async function logCallRatingShown(visitorId: string): Promise<void> {
+  await fetch(`${API_URL}/api/call-rating/event`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visitorId, event: "shown" }),
+  });
+}
+
 /**
  * Every failure from the two OTP endpoints answers in the same shape (see
  * server.py's _otp_error): `code` is what the form switches on, `message` is
@@ -256,6 +284,16 @@ export function getAdminStats() {
   return getJson<AdminStats>("/api/admin/stats");
 }
 
+export interface AdminCallRating {
+  sentiment: CallRatingSentiment | null;
+  reason: string | null;
+  tags: string[];
+  call_duration_secs: number | null;
+  disconnect_reason: string | null;
+  skipped: boolean;
+  created_at: string;
+}
+
 export interface AdminSession {
   id: number;
   visitor_id: string;
@@ -267,6 +305,9 @@ export interface AdminSession {
   // _MEDDIC_LABELS) — only present for fields actually captured this
   // session, absent otherwise.
   qualification: Record<string, string>;
+  // Post-call feedback screen's result for this session, null if the
+  // visitor never reached/submitted it (see PostCallRatingScreen.tsx).
+  rating: AdminCallRating | null;
 }
 
 export interface AdminVisitorDetail {

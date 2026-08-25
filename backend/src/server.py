@@ -167,6 +167,56 @@ def start_session_endpoint(body: StartSessionRequest):
     return {"ok": True}
 
 
+_CALL_RATING_SENTIMENTS = {"great", "okay", "needs_work"}
+
+
+class CallRatingRequest(BaseModel):
+    visitorId: str
+    sentiment: Optional[str] = None
+    reason: Optional[str] = None
+    tags: Optional[List[str]] = None
+    callDurationSecs: Optional[int] = None
+    disconnectReason: Optional[str] = None
+    skipped: bool = False
+
+
+@app.post("/api/call-rating")
+def submit_call_rating(body: CallRatingRequest):
+    """Called once by the post-call feedback screen (MeetingShell), right
+    after a call ends — either with a real sentiment pick, or skipped=True
+    if the visitor dismissed it without rating. Both outcomes are stored
+    (see gate_log.save_call_rating): a skip is itself a real signal, not a
+    no-op."""
+    if not body.skipped and body.sentiment not in _CALL_RATING_SENTIMENTS:
+        raise HTTPException(status_code=400, detail="sentiment required unless skipped")
+    gate_log.save_call_rating(
+        body.visitorId,
+        body.sentiment,
+        body.reason,
+        body.tags,
+        body.callDurationSecs,
+        body.disconnectReason,
+        body.skipped,
+    )
+    gate_log.log_call_rating_event(body.visitorId, "skipped" if body.skipped else "submitted")
+    return {"ok": True}
+
+
+class CallRatingEventRequest(BaseModel):
+    visitorId: str
+    event: str
+
+
+@app.post("/api/call-rating/event")
+def log_call_rating_event(body: CallRatingEventRequest):
+    """Separate from submit_call_rating above so the "shown" event (fired
+    the instant the feedback screen mounts) is captured even if the visitor
+    never acts on it at all — submit/skip log their own event as a side
+    effect of the endpoint above, this one covers the step before either."""
+    gate_log.log_call_rating_event(body.visitorId, body.event)
+    return {"ok": True}
+
+
 # --- Gate email verification -----------------------------------------------
 #
 # Sits in FRONT of the existing lookup/known/new steps, which are unchanged:
@@ -372,6 +422,7 @@ def admin_visitor_detail(email: str):
     # per session.
     for session in detail["sessions"]:
         session["qualification"] = gate_log.get_qualification_fields(session["visitor_id"])
+        session["rating"] = gate_log.get_call_rating(session["visitor_id"])
     return detail
 
 

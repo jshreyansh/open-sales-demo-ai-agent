@@ -4,9 +4,16 @@ import {
   getAdminCallSummary,
   getAdminTranscript,
   getAdminVisitorDetail,
+  type AdminCallRating,
   type AdminVisitorDetail as Detail,
   type TranscriptTurn,
 } from "../../lib/api";
+
+const SENTIMENT_LABELS: Record<string, string> = {
+  great: "Great",
+  okay: "Okay",
+  needs_work: "Needs work",
+};
 
 function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
@@ -80,6 +87,51 @@ function CallSummary({ visitorId }: { visitorId: string }) {
     <div className="admin-call-summary">
       <h3 className="admin-call-summary__title">AI Call Summary</h3>
       <p>{summary}</p>
+    </div>
+  );
+}
+
+// Already attached inline on the session object (server.py's
+// admin_visitor_detail), same as `qualification` above — no separate
+// fetch needed, it's cheap data with no LLM cost behind it.
+function CallRating({ rating }: { rating: AdminCallRating | null }) {
+  if (!rating) return <div className="admin__empty">No feedback screen result for this session.</div>;
+  if (rating.skipped) {
+    return (
+      <div className="admin-call-rating">
+        <h3 className="admin-call-rating__title">Post-call feedback</h3>
+        <p className="admin__empty">Visitor skipped the feedback screen.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="admin-call-rating">
+      <h3 className="admin-call-rating__title">Post-call feedback</h3>
+      <dl className="admin-qualification__list">
+        <div className="admin-qualification__row">
+          <dt>Sentiment</dt>
+          <dd>{rating.sentiment ? SENTIMENT_LABELS[rating.sentiment] ?? rating.sentiment : "—"}</dd>
+        </div>
+        <div className="admin-qualification__row">
+          <dt>Reason given</dt>
+          <dd className={rating.reason ? "" : "admin-qualification__missing"}>{rating.reason || "Not given"}</dd>
+        </div>
+        <div className="admin-qualification__row">
+          <dt>Tags</dt>
+          <dd className={rating.tags.length ? "" : "admin-qualification__missing"}>
+            {rating.tags.length ? rating.tags.join(", ") : "None selected"}
+          </dd>
+        </div>
+        <div className="admin-qualification__row">
+          <dt>Call duration</dt>
+          <dd>{rating.call_duration_secs != null ? `${rating.call_duration_secs}s` : "—"}</dd>
+        </div>
+        <div className="admin-qualification__row">
+          <dt>Ended via</dt>
+          <dd>{rating.disconnect_reason || "—"}</dd>
+        </div>
+      </dl>
     </div>
   );
 }
@@ -168,6 +220,7 @@ export default function AdminVisitorDetail() {
                   {s.status === "allowed" ? (
                     <>
                       <QualificationProfile qualification={s.qualification} />
+                      <CallRating rating={s.rating} />
                       <CallSummary visitorId={s.visitor_id} />
                       <SessionTranscript visitorId={s.visitor_id} />
                     </>
