@@ -74,18 +74,34 @@ export function useVoiceSession(
   const navigatingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useRTVIClientEvent(RTVIEvent.UserStartedSpeaking, useCallback(() => {
+    if (thinkingTimeoutRef.current) clearTimeout(thinkingTimeoutRef.current);
     setIsUserSpeaking(true);
     setIsAgentThinking(false);
-    if (thinkingTimeoutRef.current) clearTimeout(thinkingTimeoutRef.current);
   }, []));
   useRTVIClientEvent(RTVIEvent.UserStoppedSpeaking, useCallback(() => {
-    setIsUserSpeaking(false);
+    // isUserSpeaking deliberately stays true through the whole debounce
+    // window (not flipped false here) — flipping it immediately, with
+    // Thinking only arriving THINKING_DEBOUNCE_MS later, left a guaranteed
+    // gap where neither was true and the tile showed nothing at all, which
+    // is worse than the flicker this was meant to fix, especially for the
+    // short single-word turns ("Continue.", "Okay.") this call mostly
+    // consists of. Both flip together, atomically, once the debounce
+    // actually elapses — canceled and restarted from scratch if they
+    // resume speaking first (see UserStartedSpeaking above).
     if (thinkingTimeoutRef.current) clearTimeout(thinkingTimeoutRef.current);
-    thinkingTimeoutRef.current = setTimeout(() => setIsAgentThinking(true), THINKING_DEBOUNCE_MS);
+    thinkingTimeoutRef.current = setTimeout(() => {
+      setIsUserSpeaking(false);
+      setIsAgentThinking(true);
+    }, THINKING_DEBOUNCE_MS);
   }, []));
   useRTVIClientEvent(RTVIEvent.BotStartedSpeaking, useCallback(() => {
     setIsAgentSpeaking(true);
     setIsAgentThinking(false);
+    // Resolves the debounce outright rather than just canceling it — if the
+    // agent is already talking, isUserSpeaking held true through the
+    // debounce window (see UserStoppedSpeaking above) would otherwise stay
+    // stale-true with nothing left to ever flip it back to false.
+    setIsUserSpeaking(false);
     if (thinkingTimeoutRef.current) clearTimeout(thinkingTimeoutRef.current);
     setIsAgentNavigating(false);
   }, []));
