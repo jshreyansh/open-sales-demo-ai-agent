@@ -25,6 +25,8 @@ from pipecat.frames.frames import (
     TextFrame,
     TranscriptionFrame,
     TTSAudioRawFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
@@ -1484,6 +1486,22 @@ class AgentRuntimeProcessor(FrameProcessor):
                 self._interruption_speech_started_at = time.monotonic()
                 self._interruption_quiet_since = None
                 await self.broadcast_interruption()
+            # RTVIObserver (attached by default via PipelineWorker's
+            # enable_rtvi=True) only converts UserStartedSpeakingFrame into
+            # the "user-started-speaking" RTVI message the frontend actually
+            # understands — its vad_user_speaking_enabled path (which WOULD
+            # react to the raw VADUserStartedSpeakingFrame above) defaults to
+            # off, and the installed @pipecat-ai/client-js doesn't even
+            # handle that message type. Nothing in this pipeline otherwise
+            # produces UserStartedSpeakingFrame (no UserTurnProcessor here —
+            # this app's turn-taking is fully custom), so without this push
+            # the client's isUserSpeaking/RTVIEvent.UserStartedSpeaking never
+            # fires at all, ever — confirmed live: the Listening badge (and
+            # the visitor's own mic-live indicator, same signal) never once
+            # appeared in a real call. Pushed as an ADDITIONAL frame, not a
+            # replacement — nothing else in this codebase reacts to this
+            # frame type, only pipecat's own RTVIObserver.
+            await self.push_frame(UserStartedSpeakingFrame(), direction)
             await self.push_frame(frame, direction)
             return
 
@@ -1580,6 +1598,9 @@ class AgentRuntimeProcessor(FrameProcessor):
             # TranscriptionFrame reads the verdict this sets a moment later,
             # once STT actually finishes transcribing.
             await self._analyze_smart_turn()
+            # See the matching comment on VADUserStartedSpeakingFrame above —
+            # same reasoning, the stop side of the same missing signal.
+            await self.push_frame(UserStoppedSpeakingFrame(), direction)
             await self.push_frame(frame, direction)
             return
 
