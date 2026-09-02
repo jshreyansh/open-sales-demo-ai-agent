@@ -345,11 +345,22 @@ export function getAdminCallSummary(visitorId: string) {
  * from the first word, and company/email are already on hand as the first
  * real MEDDIC data point instead of the agent having to go ask for them.
  */
-export async function startSession(visitorId: string, name: string, company: string, email: string): Promise<void> {
+// "fast" | "self_directed" | undefined (either "walk me through everything"
+// or skipped) — see PreCallCalibrationScreen.tsx and backend context/
+// store.py's start_session for exactly what each value seeds.
+export type PacePrior = "fast" | "self_directed";
+
+export async function startSession(
+  visitorId: string,
+  name: string,
+  company: string,
+  email: string,
+  pacePrior?: PacePrior
+): Promise<void> {
   await fetch(`${API_URL}/api/session/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ visitorId, name, company, email }),
+    body: JSON.stringify({ visitorId, name, company, email, pacePrior }),
   });
 }
 

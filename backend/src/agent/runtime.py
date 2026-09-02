@@ -11,7 +11,12 @@ from zoneinfo import ZoneInfo
 import anthropic
 from loguru import logger
 
-from ..context.store import SessionState, HistoryEntry
+from ..context.store import (
+    ACTION_BIAS_EVIDENCE_THRESHOLD,
+    PACE_EVIDENCE_THRESHOLD,
+    SessionState,
+    HistoryEntry,
+)
 from ..data import gate_log
 from ..persona import AGENT_LOCATION, AGENT_NAME, AGENT_TIMEZONE
 from .registry import PRODUCT_OVERVIEW, UI_REGISTRY, flatten_registry, FlatAction
@@ -794,7 +799,9 @@ Question 5 in particular must genuinely be asked before the call ends — unlike
 13a. They ask to SEE existing work: "do you have any example videos?", "show me a showcase", "can I see something you've made", "any samples?", "what does the output actually look like?". This is the gallery's main purpose — real finished output they can click through themselves. Just open it and say so. Do NOT answer this by advancing a wizard to its Generate step: a wizard's rendered result is a flow demonstration, not an example of real work, and offering it instead reads as dodging the question. This was confirmed live — a prospect asked "is there any example video or showcase video I can see?" and got walked to step-generate instead, because this rule used to cover only 13b. Same rule even while you're already sitting on the Content Library page and they ask to play/watch one of the videos there — that page's grid has no play action of its own to fire (see registry.py's content-library/grid description); the gallery is the only place a video actually plays, on that page or anywhere else.
 13b. They push for real, live generation from scratch — actually asking you to make one right now, not walk a flow. Here, additionally: don't pretend to generate it and don't run a wizard to a fake result. Explain plainly that this meeting is for evaluating and exploring the product's flows, that you can't generate directly here, but you can show them numerous real examples to browse. Mention that for a real platform showcase with actual generation, they can book time with a human-led session, and that you're sending the link in the chat now.
 
-14. When the prospect asks to be connected with the team, to book a meeting, or to talk to a human: ASK FIRST, then act. Say something like "want me to open the booking portal so you can pick a time?" and set no action on that turn — you're asking, not doing. Only if they actually say yes on the NEXT turn, fire component "booking-portal" action "open" (page "meeting"), which opens the scheduling page in a separate browser tab so this call keeps running. If they say no, or want to just leave it with you, don't fire it — take their email and say the team will reach out. Never open the tab without that explicit yes: a tab opening unasked mid-call is startling, and it's the one action here that leaves the meeting screen."""
+14. When the prospect asks to be connected with the team, to book a meeting, or to talk to a human: ASK FIRST, then act. Say something like "want me to open the booking portal so you can pick a time?" and set no action on that turn — you're asking, not doing. Only if they actually say yes on the NEXT turn, fire component "booking-portal" action "open" (page "meeting"), which opens the scheduling page in a separate browser tab so this call keeps running. If they say no, or want to just leave it with you, don't fire it — take their email and say the team will reach out. Never open the tab without that explicit yes: a tab opening unasked mid-call is startling, and it's the one action here that leaves the meeting screen.
+
+15. You control whether the shared screen is open or closed, the same way a real presenter decides when to put a slide down. Once you've navigated somewhere and shown something, the screen stays open and shared as long as the conversation is still genuinely ABOUT what's currently on screen — a follow-up question about it, digging into how it works, comparing it to something else they mentioned, all of that keeps it open, you're just still talking. Close it — component "screen" action "close" (page "meeting") — once the conversation has actually moved past it: they ask about something unrelated to what's shown, the topic shifts to pricing/next-steps/a tangent, or you've both clearly wrapped up looking at that specific thing. Closing puts you back face-to-face for whatever comes next, exactly like actually stopping a screen-share in a real meeting. Two things NOT to do: don't close it the instant you finish a sentence just because you're pausing for their reaction — only close once the TOPIC itself has moved, not on every breath; and don't ask permission first ("should I close this now?") — a real presenter doesn't narrate putting the slides away, they just do it and keep talking. This does not apply during an active scripted walkthrough — the screen stays open for the whole tour; only close between ad-hoc topics outside of one. If something else worth showing comes up later, navigating there opens the screen again automatically — that's the same ordinary action you'd already fire, nothing extra to think about for reopening."""
 
 # Rendered ONCE at import time into a plain string constant — never
 # reformatted per-request — so the exact same bytes go out on every call,
@@ -812,10 +819,10 @@ STATIC_SYSTEM_PROMPT: str = STATIC_ROLE_INTRO.format(
 )
 
 # Only the parts that genuinely change turn to turn: current page/time, the
-# six per-turn notes, and conversation history. Everything else lives in
+# per-turn notes, and conversation history. Everything else lives in
 # STATIC_ROLE_INTRO above.
 _DYNAMIC_SYSTEM_TEMPLATE = """The prospect is currently on the "{current_page}" page. Right now, where you are, it's {current_time}. Use this if asked the time, date, or day — don't say you don't know, and don't guess somewhere else.
-{interruption_note}{continuation_note}{name_note}{company_note}{qualification_note}{walkthrough_note}{farewell_note}{pacing_note}
+{interruption_note}{continuation_note}{name_note}{company_note}{qualification_note}{walkthrough_note}{farewell_note}{pacing_note}{interaction_note}
 Full conversation so far:
 {history}"""
 
@@ -838,6 +845,7 @@ def _build_system(session: SessionState) -> "str | list[dict]":
         walkthrough_note=_walkthrough_note(session),
         farewell_note=_farewell_note(session),
         pacing_note=_pacing_note(session),
+        interaction_note=_interaction_note(session),
         history="\n".join(f"{h.role}: {h.text}" for h in session.history) or "(nothing yet — this is the first message)",
     )
     if _provider == "anthropic":
@@ -1550,6 +1558,12 @@ async def _begin_turn(session: SessionState, message: str) -> None:
     # and _pricing_backstop_action).
     session.pending_pricing_request = bool(_PRICING_INTENT.search(message or ""))
 
+    # Adaptive interaction policy — see _update_interaction_evidence's own
+    # docstring. Runs here specifically because _begin_turn only ever fires
+    # for a genuine prospect turn, never for auto-continue's own scripted
+    # narration.
+    _update_interaction_evidence(session, message)
+
     # Deterministic escape from a user-requested stop.
     #
     # Done HERE rather than in _finalize_turn on purpose: this function runs
@@ -1681,6 +1695,111 @@ _PRICING_INTENT = re.compile(
     r"|\bplans?\b(?!\s+(?:to|for|on)\b)",
     re.IGNORECASE,
 )
+
+# Impatience-flavored demand to skip ahead and see something, as opposed to
+# _TOUR_REQUEST above (which detects wanting a walkthrough, not urgency
+# about the current pace). Confirmed live (Jai call, 2026-08-25): "Let's do
+# the demo. I don't have time for all this [expletive]" — the model
+# recognized this as a request but didn't reliably transition into actually
+# showing something. Deliberately narrow to phrasings that carry real
+# urgency/frustration, not an ordinary "show me X" about a specific format
+# (that's already handled by the model's own normal action selection).
+_ACTION_DEMAND_RE = re.compile(
+    r"\b(?:let'?s (?:just )?(?:do|get to|see) (?:it|the demo|this)|just show me|"
+    r"skip (?:the|these|those) questions|get to the point|move on|"
+    r"i don'?t have time|can we speed (?:this|it) up|enough (?:talking|questions))\b",
+    re.IGNORECASE,
+)
+
+# Adaptive interaction policy (see SessionState.pace_evidence/
+# action_bias_evidence, _update_interaction_evidence, _interaction_note).
+# A reply at or under this many words counts as weak evidence of wanting a
+# faster, less-detailed pace — one alone doesn't cross either threshold,
+# several in a row does (see _update_interaction_evidence's decay math,
+# same shape as agent_processor.py's _fragmentation_protection).
+SHORT_REPLY_WORD_THRESHOLD = 5
+EVIDENCE_DECAY_TURNS = 4
+
+
+def _pace_state(session: SessionState) -> str:
+    """"fast" or "normal", always derived fresh from pace_evidence/
+    turns_since_pace_evidence — never cached, so there is exactly one
+    source of truth per dimension (same reasoning as agent_processor.py's
+    _fragmentation_protection deriving from _fragmentation_events rather
+    than a separately-stored flag)."""
+    decayed = session.turns_since_pace_evidence // EVIDENCE_DECAY_TURNS
+    active = max(0, session.pace_evidence - decayed)
+    return "fast" if active >= PACE_EVIDENCE_THRESHOLD else "normal"
+
+
+def _action_bias_state(session: SessionState) -> str:
+    """"high" or "normal" — see _pace_state, same derivation shape."""
+    decayed = session.turns_since_action_bias_evidence // EVIDENCE_DECAY_TURNS
+    active = max(0, session.action_bias_evidence - decayed)
+    return "high" if active >= ACTION_BIAS_EVIDENCE_THRESHOLD else "normal"
+
+
+def _update_interaction_evidence(session: SessionState, message: str) -> None:
+    """Called once per real turn, from _begin_turn (never for an
+    auto-continue beat, since those have no incoming message) — updates the
+    two adaptive-interaction evidence counters from this turn's own text.
+
+    A short reply is weak evidence on its own (+1, well under either
+    threshold); an explicit demand match (_ACTION_DEMAND_RE) is strong
+    evidence on its own (+ full threshold on both counters, since wanting to
+    skip ahead implies wanting both a faster pace and more proactive
+    action) — matches "one short reply is weak, three in a row (or one
+    explicit demand) is strong" from the real incident this was built for
+    (the Jai call). Turns with neither bump the decay counters instead, so
+    evidence fades out after a few quiet turns rather than staying stuck."""
+    word_count = len((message or "").split())
+    is_short = 0 < word_count <= SHORT_REPLY_WORD_THRESHOLD
+    is_demand = bool(_ACTION_DEMAND_RE.search(message or ""))
+    session.pending_action_demand = is_demand
+
+    if is_demand:
+        session.pace_evidence += PACE_EVIDENCE_THRESHOLD
+        session.turns_since_pace_evidence = 0
+        session.action_bias_evidence += ACTION_BIAS_EVIDENCE_THRESHOLD
+        session.turns_since_action_bias_evidence = 0
+    elif is_short:
+        session.pace_evidence += 1
+        session.turns_since_pace_evidence = 0
+        session.action_bias_evidence += 1
+        session.turns_since_action_bias_evidence = 0
+    else:
+        session.turns_since_pace_evidence += 1
+        session.turns_since_action_bias_evidence += 1
+
+
+def _interaction_note(session: SessionState) -> str:
+    """Surfaces the CONCLUSION (fast/normal, high/normal), never the raw
+    evidence counters — same "hand the model a fact, not homework" pattern
+    as _qualification_note/_walkthrough_note. Empty string when both
+    dimensions are at their normal/default state, so this costs nothing on
+    the common case (same as _farewell_note)."""
+    pace = _pace_state(session)
+    action_bias = _action_bias_state(session)
+    lines = []
+    if pace == "fast":
+        lines.append(
+            "This prospect wants a fast, low-detail pace. Keep replies to one short sentence — "
+            "no preamble, no unrequested context. Elaborate only if they explicitly ask for more."
+        )
+    if action_bias == "high":
+        lines.append(
+            "This prospect wants action over more talk. Skip further qualification questions — "
+            "show or do the next useful thing instead of asking permission first."
+        )
+    if session.pending_action_demand:
+        lines.append(
+            "The prospect just explicitly asked to move to the demo / see something. This is a "
+            "directive, not a preference — your reply THIS TURN must include a real navigation "
+            "action, not another question and not more talking."
+        )
+    if not lines:
+        return ""
+    return "\n" + " ".join(lines) + "\n"
 
 
 def _pricing_backstop_action(session: SessionState) -> Optional[dict]:
@@ -2621,6 +2740,29 @@ async def _finalize_turn(
     session.history.append(HistoryEntry(role="agent", text=result["reply"]))
     if persist and session.visitor_id:
         await asyncio.to_thread(gate_log.append_transcript_turn, session.visitor_id, "agent", result["reply"])
+
+    # Adaptive interaction policy instrumentation — one line per turn,
+    # cheap enough to leave on always. This is what makes the system
+    # debuggable per the design's own requirement: "action_fired_this_turn":
+    # false next to "explicit_action_demand": true is the exact signal that
+    # tells us, from real call data, whether the directive note in
+    # _interaction_note is actually being followed — not something visible
+    # from the transcript alone.
+    if session.visitor_id:
+        logger.info(
+            "INTERACTION_STATE "
+            + json.dumps(
+                {
+                    "visitor_id": session.visitor_id,
+                    "pace_evidence": session.pace_evidence,
+                    "action_bias_evidence": session.action_bias_evidence,
+                    "pace": _pace_state(session),
+                    "action_bias": _action_bias_state(session),
+                    "explicit_action_demand": session.pending_action_demand,
+                    "action_fired_this_turn": bool(result.get("action")),
+                }
+            )
+        )
     return result
 
 

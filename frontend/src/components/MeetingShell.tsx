@@ -5,7 +5,7 @@ import { useAudioLevelRing } from "../lib/useAudioLevelRing";
 import { useReportedAudioLevelRing } from "../lib/useReportedAudioLevelRing";
 import { useFlipTiles } from "../lib/useFlipTiles";
 import { useLocalCamera } from "../lib/useLocalCamera";
-import { claimVoiceLock, sendMeetingChatMessage, setHandRaiseState, startSession, type AgentAction, setPausedState } from "../lib/api";
+import { claimVoiceLock, sendMeetingChatMessage, setHandRaiseState, startSession, type AgentAction, type PacePrior, setPausedState } from "../lib/api";
 import { getVisitorId } from "../lib/session";
 import { useRegisterComponent } from "../lib/uiRegistry";
 import MeetIcon from "./MeetIcons";
@@ -58,12 +58,6 @@ const JOIN_COUNTDOWN_SECS = 5;
 // itself for what looked like one click. This is purely a debounce against
 // that accidental double-toggle, not a rate limit on genuine re-raises.
 const HAND_RAISE_DEBOUNCE_MS = 800;
-// Fiona starts presenting shortly after she arrives — she's mid-greeting by
-// then, which is exactly when a real rep would say "let me share my screen".
-// Not tied to her first UI action any more: that could be many seconds later
-// (or never, if the prospect just wants to talk), leaving the call sitting on
-// two idle tiles.
-const SHARE_START_AFTER_JOIN_MS = 2500;
 // How long the "starting to present" loader holds before the app is revealed.
 // Mirrors the real handshake delay every conferencing tool shows, which is
 // what makes the share read as something happening rather than a page swap.
@@ -209,12 +203,14 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
   const handleAgentAction = useCallback(
     (action: AgentAction) => {
       // Only real product navigation starts the share. The "meeting" page is
-      // a pseudo-page for call chrome (the example gallery, the booking tab)
-      // — firing one of those must not put a dashboard on screen that the
+      // a pseudo-page for call chrome (the example gallery, the booking tab,
+      // and closing the share itself — see the "screen"/"close" component
+      // below) — firing one of those must not put a dashboard on screen the
       // agent never actually walked anyone to. Caught in testing: opening the
-      // booking portal was starting the screen share by itself.
-      // An early real navigation still starts the share immediately rather
-      // than waiting out the timer below — whichever comes first.
+      // booking portal was starting the screen share by itself. This is now
+      // the ONLY thing that opens the share (no auto-open timer any more) —
+      // it opens the instant she has something real to show, whenever that
+      // genuinely is.
       if (action.page !== "meeting") setScreenShareActive(true);
       onAction(action);
     },
@@ -233,6 +229,14 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
       const w = window.open(BOOKING_LINK_URL, "_blank", "noopener,noreferrer");
       if (!w) setBookingPrompt(true);
     },
+  });
+  // The reverse of an ordinary navigation action: the agent's own judgment
+  // call that the conversation has moved past whatever's on screen (see
+  // runtime.py instruction 15) — screen-share as a presenter's tool, not a
+  // one-way door. Reopening later is just an ordinary action again, handled
+  // by handleAgentAction above; this is the only new wiring closing needs.
+  useRegisterComponent("meeting", "screen", {
+    close: () => setScreenShareActive(false),
   });
   const chatOpenRef = useRef(false);
   chatOpenRef.current = chatOpen;
@@ -290,14 +294,6 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
     setAgentJoined(true);
     playJoinSound();
   }, [voiceConnected, agentJoined]);
-
-  // She joins, greets, and starts presenting a couple of seconds later — the
-  // share is driven off her arrival, not off whatever she happens to click.
-  useEffect(() => {
-    if (!agentJoined || screenShareActive) return;
-    const id = setTimeout(() => setScreenShareActive(true), SHARE_START_AFTER_JOIN_MS);
-    return () => clearTimeout(id);
-  }, [agentJoined, screenShareActive]);
 
   // Two beats to the share: the layout reflows and the loader shows
   // ("connecting"), then the app is revealed ("live").
@@ -453,13 +449,13 @@ export default function MeetingShell({ children, onLeave, onAction }: MeetingShe
   // seeds the REST API process's own session store with the same name, in
   // case anything reads it from that side later — which now includes the
   // in-call chat panel's messages, routed through the REST API's mailbox.
-  async function handleJoin(name: string, company: string, email: string): Promise<boolean> {
+  async function handleJoin(name: string, company: string, email: string, pacePrior?: PacePrior): Promise<boolean> {
     // Runs inside the click handler — the one guaranteed user gesture — so
     // the audio elements are unlocked before any chime needs to play.
     primeSounds();
     const claimed = await claimVoiceLock(visitorId);
     if (!claimed) return false;
-    void startSession(visitorId, name, company, email);
+    void startSession(visitorId, name, company, email, pacePrior);
     setVisitorName(name);
     setVisitorCompany(company);
     setVisitorEmail(email);

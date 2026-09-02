@@ -26,6 +26,16 @@ OPENING_GREETING = (
     f"Hi, I'm {AGENT_NAME}, sales rep at SwishX. How's your day going so far?"
 )
 
+# Adaptive interaction policy thresholds (see SessionState's
+# pace_evidence/action_bias_evidence and runtime.py's _interaction_note).
+# Defined here rather than in runtime.py so start_session below can seed
+# evidence straight to/above threshold from the pre-call calibration answer
+# without runtime.py importing back into this module. A single short reply
+# is weak evidence (bumps evidence by 1, well under threshold); an explicit
+# demand match is strong evidence on its own (bumps by the full threshold).
+PACE_EVIDENCE_THRESHOLD = 3
+ACTION_BIAS_EVIDENCE_THRESHOLD = 3
+
 
 def build_greeting(prospect_name: Optional[str] = None) -> str:
     """Personalized variant of OPENING_GREETING when a name is already known
@@ -230,6 +240,32 @@ class SessionState:
     # if for the first time. Cleared the instant walkthrough_step actually
     # changes value, same as walkthrough_generate_fired.
     walkthrough_fired_actions: set = field(default_factory=set)
+    # Adaptive interaction policy (see runtime.py's _interaction_note) — two
+    # small, decaying evidence counters, NOT a stored "state" value. The
+    # actual pace/action_bias state is always derived fresh from these on
+    # read (see _pace_state/_action_bias_state), same "one source of truth"
+    # reasoning as agent_processor.py's _fragmentation_protection() deriving
+    # from _fragmentation_events rather than caching a separate flag.
+    # Bumped by runtime.py's _begin_turn on a short reply or a match on
+    # _ACTION_DEMAND_RE, decayed by turns without new evidence — a single
+    # short reply is weak evidence, several in a row (or an explicit "let's
+    # do the demo") is strong evidence, and it takes several quiet turns to
+    # decay back down, not one. Seeded above zero at session creation by the
+    # optional pre-call calibration answer (see start_session's pace_prior)
+    # rather than tracked as a separate "prior" — one running number per
+    # dimension, not two things to reconcile.
+    pace_evidence: int = 0
+    turns_since_pace_evidence: int = 0
+    action_bias_evidence: int = 0
+    turns_since_action_bias_evidence: int = 0
+    # Single-turn backstop, same shape as pending_pricing_request/
+    # pending_walkthrough_request above: set by _begin_turn when this turn's
+    # raw message matches _ACTION_DEMAND_RE, consumed and cleared by
+    # _finalize_turn. Confirmed live (the Jai call) that the model can
+    # recognize an explicit "let's do the demo" and still not reliably act
+    # on it — this turns that recognition into a directive note instead of
+    # hoping the model's own read of the conversation catches it.
+    pending_action_demand: bool = False
     # The same id this session is keyed by in _sessions below — kept on the
     # object itself (not just as the dict key) so run_turn() can persist each
     # turn to the durable transcript log (see data/gate_log.py) without
@@ -253,6 +289,7 @@ def start_session(
     prospect_name: Optional[str] = None,
     company: Optional[str] = None,
     work_email: Optional[str] = None,
+    pace_prior: Optional[str] = None,
 ) -> SessionState:
     """Explicitly (re)starts a session for visitor_id — called once, right
     when the visitor picks a name on Meeting Mode's pre-join screen, before
@@ -261,7 +298,16 @@ def start_session(
     on first-ever contact: visitor_id persists in the browser's sessionStorage
     across visits, so without this a repeat visitor (or a dev re-testing the
     same browser tab) would silently resume a stale conversation instead of
-    starting the new call they just asked for."""
+    starting the new call they just asked for.
+
+    pace_prior is the pre-call calibration screen's answer (see
+    PreCallCalibrationScreen.tsx) — "fast", "self_directed", or None (either
+    "walk me through everything" or skipped). Seeds the adaptive-interaction
+    evidence counters straight to/above threshold rather than starting cold,
+    so turn one is already calibrated instead of learned the hard way several
+    turns in — but it's still just a starting value on the same counter
+    mid-call evidence keeps updating, not a locked-in mode (see runtime.py's
+    _interaction_note)."""
     session = SessionState(
         history=[HistoryEntry(role="agent", text=build_greeting(prospect_name))],
         prospect_name=prospect_name,
@@ -269,5 +315,10 @@ def start_session(
         work_email=work_email,
         visitor_id=visitor_id,
     )
+    if pace_prior == "fast":
+        session.pace_evidence = PACE_EVIDENCE_THRESHOLD
+        session.action_bias_evidence = ACTION_BIAS_EVIDENCE_THRESHOLD
+    elif pace_prior == "self_directed":
+        session.action_bias_evidence = ACTION_BIAS_EVIDENCE_THRESHOLD
     _sessions[visitor_id] = session
     return session

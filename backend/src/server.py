@@ -149,6 +149,11 @@ class StartSessionRequest(BaseModel):
     name: Optional[str] = None
     company: Optional[str] = None
     email: Optional[str] = None
+    # Pre-call calibration screen's answer (see PreCallCalibrationScreen.tsx)
+    # — "fast", "self_directed", or None. Seeds the adaptive-interaction
+    # evidence counters; see context/store.py's start_session for exactly
+    # what each value does.
+    pacePrior: Optional[str] = None
 
 
 @app.post("/api/session/start")
@@ -163,7 +168,7 @@ def start_session_endpoint(body: StartSessionRequest):
     name = body.name.strip() if body.name else None
     company = body.company.strip() if body.company else None
     email = body.email.strip() if body.email else None
-    start_session(body.visitorId, name, company, email)
+    start_session(body.visitorId, name, company, email, body.pacePrior)
     return {"ok": True}
 
 
@@ -536,6 +541,19 @@ def get_approvals():
 class VoiceActionReport(BaseModel):
     visitorId: str
     action: Dict[str, Any]
+    # Monotonic per-visitor counter set by agent_processor.py's
+    # _report_action at the moment a turn decides on this action — see its
+    # own comment. Optional/defaults to 0 only so an old voice process
+    # mid-deploy doesn't 422; a 0 never wins the max-seq check below, so it
+    # degrades to "always accepted", the pre-existing behavior.
+    seq: int = 0
+
+
+# Highest seq accepted per visitor so far — see report_voice_action. A
+# separate dict from _pending_voice_actions because the ordering guarantee
+# has to survive past an action being popped off the queue, not just while
+# it's sitting in it.
+_last_action_seq: Dict[str, int] = {}
 
 
 @app.post("/internal/voice-action")
@@ -547,7 +565,26 @@ def report_voice_action(body: VoiceActionReport):
     window (see useVoiceSession.ts), and a single slot silently lost
     whichever action hadn't been polled yet, which is exactly why the
     walkthrough's on-screen highlighting kept going dark mid-tour. Mirrors
-    _pending_voice_replies' already-correct queue below."""
+    _pending_voice_replies' already-correct queue below.
+
+    Rejects a stale report before it ever reaches the queue: each turn's
+    own aiohttp POST is an independent connection, so two turns' reports
+    aren't guaranteed to arrive in the order those turns actually happened
+    in — confirmed live on visitor 80d20cb9, where a straggling product-
+    navigation action from an already-superseded turn landed right after
+    an explicit "close the screen" action and silently reopened the share.
+    seq (assigned when the turn decided on the action, not when its POST
+    happens to resolve) is what lets this tell "genuinely next" apart from
+    "arrived late" — a seq that doesn't beat the highest one already
+    accepted for this visitor is dropped rather than queued."""
+    if body.seq and body.seq <= _last_action_seq.get(body.visitorId, 0):
+        logger.warning(
+            f"[{body.visitorId}] dropping stale voice action (seq={body.seq}, "
+            f"already accepted {_last_action_seq.get(body.visitorId, 0)}): {body.action}"
+        )
+        return {"ok": True, "dropped": True}
+    if body.seq:
+        _last_action_seq[body.visitorId] = body.seq
     _pending_voice_actions.setdefault(body.visitorId, []).append(body.action)
     return {"ok": True}
 

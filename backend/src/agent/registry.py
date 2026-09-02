@@ -697,6 +697,16 @@ UI_REGISTRY: List[RegistryPage] = [
                 ),
                 actions=[RegistryAction(id="open", description="Open the booking portal in a new tab")],
             ),
+            RegistryComponent(
+                id="screen",
+                label="Shared screen",
+                description=(
+                    "Closes the shared screen and returns to a plain face-to-face view — the "
+                    "reverse of any ordinary navigation action, which reopens it. See instruction "
+                    "15 for exactly when to use this."
+                ),
+                actions=[RegistryAction(id="close", description="Stop sharing, return to face-to-face")],
+            ),
         ],
     ),
 ]

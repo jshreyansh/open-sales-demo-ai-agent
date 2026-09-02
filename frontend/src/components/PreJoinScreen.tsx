@@ -2,17 +2,19 @@ import { useState } from "react";
 import { PERSONAS } from "../lib/personas";
 import { getVisitorId, getVisitorProfile } from "../lib/session";
 import type { VisitorProfile } from "../lib/session";
+import type { PacePrior } from "../lib/api";
 import MeetIcon from "./MeetIcons";
 import ShowcaseMedal from "./ShowcaseMedal";
 import ExampleGalleryPanel from "./ExampleGalleryPanel";
 import VisitorGateForm from "./VisitorGateForm";
+import PreCallCalibrationScreen from "./PreCallCalibrationScreen";
 import swishxLightLogo from "../assets/swishx-lockup-light.svg";
 
 interface PreJoinScreenProps {
   // Returns false when someone else is already on the call (see
   // server.py's _active_call) — this screen shows the busy message instead
   // of assuming the join succeeded.
-  onJoin: (name: string, company: string, email: string) => Promise<boolean>;
+  onJoin: (name: string, company: string, email: string, pacePrior?: PacePrior) => Promise<boolean>;
 }
 
 // Only personas with a real agent behind them render here — right now
@@ -48,16 +50,32 @@ const AVAILABLE_PERSONAS = PERSONAS.filter((p) => p.available);
 export default function PreJoinScreen({ onJoin }: PreJoinScreenProps) {
   const persona = AVAILABLE_PERSONAS[0];
   const [busy, setBusy] = useState(false);
+  // Held between the visitor gating successfully and them answering the
+  // calibration question below — non-null means "show the calibration
+  // screen instead of anything else." onJoin itself doesn't fire until
+  // that answer comes back, so a real connection never starts one beat
+  // ahead of the question it's supposed to be calibrated by.
+  const [pendingProfile, setPendingProfile] = useState<VisitorProfile | null>(null);
   // The same showcase the agent opens mid-call. Someone weighing up whether
   // to start a live call is exactly the person who wants to see output first,
   // and until now that proof only existed on the far side of the thing they
   // were hesitating about.
   const [galleryOpen, setGalleryOpen] = useState(false);
 
-  async function handleGated(profile: VisitorProfile) {
-    const ok = await onJoin(profile.name, profile.company, profile.email);
+  function handleGated(profile: VisitorProfile) {
+    setPendingProfile(profile);
+  }
+
+  async function handleCalibrationChoice(pacePrior: PacePrior | undefined) {
+    if (!pendingProfile) return;
+    const ok = await onJoin(pendingProfile.name, pendingProfile.company, pendingProfile.email, pacePrior);
+    setPendingProfile(null);
     if (!ok) setBusy(true);
     // On success the parent unmounts this screen, nothing left to reset here.
+  }
+
+  if (pendingProfile) {
+    return <PreCallCalibrationScreen onChoose={handleCalibrationChoice} />;
   }
 
   // The voicebot handles one real call at a time (see server.py's

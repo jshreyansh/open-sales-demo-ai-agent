@@ -962,6 +962,10 @@ class AgentRuntimeProcessor(FrameProcessor):
     def __init__(self, visitor_id: str):
         super().__init__()
         self._visitor_id = visitor_id
+        # Monotonic counter tagging every _report_action call for this
+        # visitor — see _report_action's own comment for why. Never reset
+        # mid-call; only the ordering between calls matters.
+        self._action_seq = 0
         # Judges whether a VAD-stop-driven STT segment is an actually
         # complete thought or just a mid-utterance pause — see
         # _analyze_smart_turn/_maybe_handle_transcript. Silero VAD's
@@ -3584,11 +3588,26 @@ class AgentRuntimeProcessor(FrameProcessor):
             self._telemetry_close()
 
     async def _report_action(self, action: dict) -> None:
+        # Every call site fires this via asyncio.create_task, decoupled from
+        # whether the turn's own speech goes on to get interrupted — on
+        # purpose, so a highlight lands even if the narration explaining it
+        # gets cut short. But that also means two turns' own POSTs (each its
+        # own aiohttp.ClientSession, no shared connection) can resolve out
+        # of the order they were decided in. Confirmed live on visitor
+        # 80d20cb9: a still-in-flight product-navigation action from an
+        # already-superseded turn landed on the frontend right after an
+        # explicit "close the screen" action, silently reopening the share
+        # the visitor had just asked to close. seq is what lets the server
+        # (see report_voice_action) reject a straggler like that instead of
+        # queueing it — assigned here, at the moment this turn actually
+        # decided on the action, not at POST-resolution time.
+        self._action_seq += 1
+        seq = self._action_seq
         try:
             async with aiohttp.ClientSession() as http:
                 await http.post(
                     f"{REST_API_URL}/internal/voice-action",
-                    json={"visitorId": self._visitor_id, "action": action},
+                    json={"visitorId": self._visitor_id, "action": action, "seq": seq},
                     timeout=aiohttp.ClientTimeout(total=3),
                 )
         except Exception:

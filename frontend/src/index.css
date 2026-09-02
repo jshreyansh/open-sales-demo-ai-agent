@@ -9209,10 +9209,23 @@ body {
   color: #fff;
 }
 
+.postcall__subtitle {
+  font-size: 14px;
+  color: rgba(232, 234, 237, 0.65);
+  margin: -12px 0 0;
+}
+
 .postcall__choices {
   display: flex;
   gap: 10px;
   width: 100%;
+}
+
+/* Longer-text choices (PreCallCalibrationScreen) read better stacked than
+   crammed into equal-width columns the way the short single-word rating
+   choices are. */
+.postcall__choices--stacked {
+  flex-direction: column;
 }
 
 .postcall__choice {
